@@ -356,6 +356,13 @@ and runs allowed commands, all gated + tested.*
 
 **M6 — Release acceptance.** unit+golden tests throughout; auth/TLS; error surfacing;
 context-truncation edges; binary/reconnect smoke test; docs; release acceptance.
+**Owner decision (2026-09-06): the reconnect smoke runs LIVE over the owner's actual
+Moshi/iPhone 16 Pro client** (the measured 72×30 device) — not only the local pty
+harness — with evidence recorded in `docs/` like M0a. The M6 session must first resolve
+what "reconnect" means on the transport (mosh session reattach vs SSH re-connect vs a
+fresh client after a drop) and extend the M0a instrument pattern
+(`cmd/size-probe` + probe record at `$XDG_STATE_HOME/selftui/probe.txt`) to verify
+geometry, scroll state, and in-flight cancellation recovery after a reconnect.
 *(Hardening was pushed inline into each tool's milestone, so M6 is acceptance, not the
 first safety gate.)*
 

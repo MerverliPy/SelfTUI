@@ -619,3 +619,13 @@ Charm set pinned (v2 line), tests green.
 
 **Blockers / next action**
 - None. M5 is committed; per the session rule, stop. Next fresh session: **M6 — Release acceptance** (unit+golden tests throughout; auth/TLS; error surfacing; context-truncation edges; binary/reconnect smoke test; docs; release acceptance).
+
+### 2026-09-06 — Owner decision for M6 (recorded between sessions)
+- **M6's reconnect smoke runs LIVE over the owner's actual Moshi/iPhone 16 Pro client**
+  (the measured 72×30 device), not only the local pty harness. Evidence recorded in
+  `docs/` following the M0a pattern (`cmd/size-probe` + probe record at
+  `$XDG_STATE_HOME/selftui/probe.txt`).
+- Open point for the M6 session to resolve first: what "reconnect" means on the
+  transport (mosh reattach vs SSH re-connect vs fresh client after a drop) — then
+  verify geometry, scroll state, and in-flight cancellation recovery after reconnect.
+- Recorded in `PLAN.md` §10 under M6 so the roadmap carries it.
