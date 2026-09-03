@@ -157,6 +157,14 @@ Thin typed wrapper over the REST API:
 - `DELETE /api/delete` → remove a model
 - `POST /api/chat` → supports `tools`, `stream` for the agent tool loop
 
+**Confirmed stream behaviors (M1b, live-verified 2026-09-04):**
+- Pull **errors arrive in-band as `{"error": …}` lines with HTTP 200** — stream
+  clients must check the `error` field, not just the status code.
+- Ollama **registers a model in `/api/tags` at ~50% of the download** — tag
+  presence is NOT a pull-completion signal; trust the stream's `success` line.
+- Pulls can run minutes: they use a client **without the 30s request timeout**
+  (caller context = deadline); list/show/delete stay on the 30s client.
+
 ### Model list item
 ```go
 type Model struct {
