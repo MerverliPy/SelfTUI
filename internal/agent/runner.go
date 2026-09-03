@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"selftui/internal/ollama"
 )
@@ -26,6 +27,32 @@ type ToolResultMsg struct {
 	OK      bool
 	Summary string
 }
+
+// ToolConfirmMsg pauses a mutation until the user explicitly responds. The
+// reply channel is deliberately private so only Respond can release it.
+type ToolConfirmMsg struct {
+	Name      string
+	Input     string
+	Workspace string
+	Timeout   time.Duration
+	reply     chan bool
+}
+
+func (m ToolConfirmMsg) Respond(approved bool) {
+	select {
+	case m.reply <- approved:
+	default:
+	}
+}
+
+// ToolOutputMsg streams bounded command output to the UI while the command is
+// still running; the final ToolResultMsg carries the complete bounded result.
+type ToolOutputMsg struct {
+	Name   string
+	Stream string
+	Text   string
+}
+
 type FallbackMsg struct{ Reason string }
 type AgentDoneMsg struct{ Err string }
 
@@ -94,7 +121,7 @@ func (r *Runner) run(ctx context.Context, req Request, emit func(Msg)) error {
 	}
 	messages = append(messages, req.Messages...)
 	options := &ollama.ChatOptions{Temperature: req.Temperature, TopP: req.TopP, NumCtx: req.NumCtx}
-	tools := ReadOnlyTools()
+	tools := AgentTools()
 
 	for iteration := 0; iteration < r.maxIterations; iteration++ {
 		if err := ctx.Err(); err != nil {
@@ -104,7 +131,7 @@ func (r *Runner) run(ctx context.Context, req Request, emit func(Msg)) error {
 		var calls []ollama.ToolCall
 		streamedLen := 0
 		err := r.client.ChatStream(ctx, ollama.ChatRequest{
-			Model: req.Model, Messages: messages, Stream: true, Tools: tools, Options: options,
+			Model: req.Model, Messages: BudgetMessages(messages, req.NumCtx), Stream: true, Tools: tools, Options: options,
 		}, func(ev ollama.ChatEvent) {
 			// Thinking is intentionally consumed and discarded. It is neither
 			// user-visible output nor a valid tool-call transport.
@@ -154,7 +181,7 @@ func (r *Runner) run(ctx context.Context, req Request, emit func(Msg)) error {
 			name := call.Function.Name
 			input := string(call.Function.Arguments)
 			emit(ToolStartMsg{Name: name, Input: input})
-			result, toolErr := executeTool(r.workspaceRoot, call)
+			result, toolErr := r.executeTool(ctx, call, emit)
 			if toolErr != nil {
 				emit(ToolResultMsg{Name: name, OK: false, Summary: toolErr.Error()})
 				messages = append(messages, ollama.ChatMessage{
@@ -182,7 +209,8 @@ func (r *Runner) runPlainChat(ctx context.Context, req Request, messages []ollam
 	})
 }
 
-func executeTool(root string, call ollama.ToolCall) (string, error) {
+func (r *Runner) executeTool(ctx context.Context, call ollama.ToolCall, emit func(Msg)) (string, error) {
+	root := r.workspaceRoot
 	switch call.Function.Name {
 	case "read_file":
 		var args struct {
@@ -218,8 +246,84 @@ func executeTool(root string, call ollama.ToolCall) (string, error) {
 			return "", errors.New("grep: pattern and path are required")
 		}
 		return Grep(root, args.Pattern, args.Path)
+	case "write_file":
+		var args struct {
+			Path      string `json:"path"`
+			Content   string `json:"content"`
+			Overwrite bool   `json:"overwrite"`
+		}
+		if err := decodeArgs(call.Function.Arguments, &args); err != nil {
+			return "", fmt.Errorf("write_file: %w", err)
+		}
+		if args.Path == "" {
+			return "", errors.New("write_file: path is required")
+		}
+		if err := r.confirm(ctx, call, 0, emit); err != nil {
+			return "", err
+		}
+		if err := WriteFile(root, args.Path, args.Content, args.Overwrite); err != nil {
+			return "", err
+		}
+		return "wrote " + args.Path, nil
+	case "edit_file":
+		var args struct {
+			Path string `json:"path"`
+			Old  string `json:"old"`
+			New  string `json:"new"`
+		}
+		if err := decodeArgs(call.Function.Arguments, &args); err != nil {
+			return "", fmt.Errorf("edit_file: %w", err)
+		}
+		if args.Path == "" || args.Old == "" {
+			return "", errors.New("edit_file: path and old are required")
+		}
+		if err := r.confirm(ctx, call, 0, emit); err != nil {
+			return "", err
+		}
+		if err := EditFile(root, args.Path, args.Old, args.New); err != nil {
+			return "", err
+		}
+		return "edited " + args.Path, nil
+	case "run_command":
+		var args struct {
+			Argv    []string `json:"argv"`
+			Timeout int      `json:"timeout"`
+		}
+		if err := decodeArgs(call.Function.Arguments, &args); err != nil {
+			return "", fmt.Errorf("run_command: %w", err)
+		}
+		if err := validateCommand(args.Argv); err != nil {
+			return "", err
+		}
+		if err := r.confirm(ctx, call, args.Timeout, emit); err != nil {
+			return "", err
+		}
+		return RunCommand(ctx, root, args.Argv, args.Timeout, func(stream, text string) {
+			emit(ToolOutputMsg{Name: "run_command", Stream: stream, Text: text})
+		})
 	default:
-		return "", fmt.Errorf("tool %q is not allowed in read-only agent", call.Function.Name)
+		return "", fmt.Errorf("tool %q is not allowed", call.Function.Name)
+	}
+}
+
+func (r *Runner) confirm(ctx context.Context, call ollama.ToolCall, seconds int, emit func(Msg)) error {
+	timeout := defaultCommandTimeout
+	if seconds > 0 {
+		timeout = time.Duration(seconds) * time.Second
+	}
+	if timeout > maxCommandTimeout {
+		return fmt.Errorf("%s: timeout exceeds %s", call.Function.Name, maxCommandTimeout)
+	}
+	msg := ToolConfirmMsg{Name: call.Function.Name, Input: string(call.Function.Arguments), Workspace: r.workspaceRoot, Timeout: timeout, reply: make(chan bool, 1)}
+	emit(msg)
+	select {
+	case approved := <-msg.reply:
+		if !approved {
+			return fmt.Errorf("%s: not approved", call.Function.Name)
+		}
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 

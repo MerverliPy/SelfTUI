@@ -42,12 +42,13 @@ type AgentView struct {
 	turnModel []string
 	render    []string
 
-	streaming   bool         // generation in flight
-	streamText  string       // in-flight assistant content (deltas appended)
-	stopRequest bool         // esc asked to stop; treat stream end as a stop
-	stopCancel  func()       // cancels the in-flight chat context
-	chatCh      chan tea.Msg // activity channel (PLAN §8), one stream owner
-	toolStatus  string       // latest read-only tool activity for the hint row
+	streaming    bool                  // generation in flight
+	streamText   string                // in-flight assistant content (deltas appended)
+	stopRequest  bool                  // esc asked to stop; treat stream end as a stop
+	stopCancel   func()                // cancels the in-flight chat context
+	chatCh       chan tea.Msg          // activity channel (PLAN §8), one stream owner
+	toolStatus   string                // latest agent-tool activity for the hint row
+	confirmation *agent.ToolConfirmMsg // pending mutation approval; blocks input/tab jumps
 
 	// Chat parameters (from config until M4).
 	temperature float64
@@ -142,7 +143,7 @@ func (v AgentView) loadModelsCmd() tea.Cmd {
 }
 
 // startChat begins a streaming agent turn in a background goroutine. The
-// activity channel carries read-only tool events, token deltas, and one final
+// activity channel carries tool events, token deltas, and one final
 // agentDoneMsg.
 func (v AgentView) startChat() (AgentView, tea.Cmd) {
 	ch := make(chan tea.Msg, 64)
@@ -185,8 +186,8 @@ func (v AgentView) waitChatCmd() tea.Cmd {
 }
 
 // ModalOpen reports whether the Agent tab is showing a modal. The root App
-// uses it so the 1/2/3 tab-jump keys cannot steal from the selector.
-func (v AgentView) ModalOpen() bool { return v.selectorOpen }
+// uses it so the 1/2/3 tab-jump keys cannot steal from an approval dialog.
+func (v AgentView) ModalOpen() bool { return v.selectorOpen || v.confirmation != nil }
 
 // --- update ---------------------------------------------------------------
 
@@ -239,6 +240,16 @@ func (v AgentView) Update(msg tea.Msg) (AgentView, tea.Cmd) {
 			}
 			v.toolStatus = prefix + msg.Name + ": " + firstLine(msg.Summary)
 		}
+		return v, v.waitChatCmd()
+
+	case agent.ToolOutputMsg:
+		if v.streaming {
+			v.toolStatus = "⚙ " + msg.Name + " " + msg.Stream + ": " + firstLine(msg.Text)
+		}
+		return v, v.waitChatCmd()
+
+	case agent.ToolConfirmMsg:
+		v.confirmation = &msg
 		return v, v.waitChatCmd()
 
 	case agent.FallbackMsg:
@@ -310,6 +321,7 @@ func (v AgentView) onChatDone(m agentDoneMsg) (AgentView, tea.Cmd) {
 	v.stopCancel = nil
 	v.chatCh = nil
 	v.toolStatus = ""
+	v.confirmation = nil
 
 	if v.streamText != "" {
 		v.history = append(v.history, ollama.ChatMessage{Role: ollama.RoleAssistant, Content: v.streamText})
@@ -339,6 +351,19 @@ func (v AgentView) handleKey(msg tea.KeyMsg) (AgentView, tea.Cmd) {
 	}
 	k := msg.Key()
 
+	if v.confirmation != nil {
+		switch {
+		case k.Text == "y" || k.Code == tea.KeyEnter:
+			v.confirmation.Respond(true)
+			v.notice = "approved " + v.confirmation.Name
+			v.confirmation = nil
+		case k.Text == "n" || k.Code == tea.KeyEsc:
+			v.confirmation.Respond(false)
+			v.notice = "declined " + v.confirmation.Name
+			v.confirmation = nil
+		}
+		return v, nil
+	}
 	if v.selectorOpen {
 		return v.selectorKey(k)
 	}
@@ -562,6 +587,9 @@ func (v AgentView) chatLines() []string {
 func (v AgentView) View() string {
 	bodyH := maxInt(v.h-2, 1)
 
+	if v.confirmation != nil {
+		return v.renderConfirmationOverlay(bodyH)
+	}
 	if v.selectorOpen {
 		return v.renderSelectorOverlay(bodyH)
 	}
@@ -659,6 +687,25 @@ func (v AgentView) fullSizePane(bodyH int) string {
 			v.styles.Placeholder.Render("pull one from the Models tab (p), then press r")
 	}
 	return pane.Render(content)
+}
+
+// renderConfirmationOverlay asks for the one explicit approval required for
+// every write, edit, and constrained command. It intentionally has no default
+// affirmative key; only y or enter approves, and esc declines.
+func (v AgentView) renderConfirmationOverlay(bodyH int) string {
+	c := v.confirmation
+	if c == nil {
+		return ""
+	}
+	lines := []string{
+		"Allow " + c.Name + "?",
+		"workspace: " + c.Workspace,
+		"timeout: " + c.Timeout.String(),
+		"input: " + c.Input,
+		"",
+		"y / enter approve · n / esc decline",
+	}
+	return v.renderOverlayTitle(bodyH, "Confirm mutation", lines)
 }
 
 // renderSelectorOverlay centers the model picker over the body. The list is

@@ -1,6 +1,5 @@
-// Package agent contains SelfTUI's bounded, read-only coding-agent loop.
-// Mutation tools are intentionally absent from this package; they land with
-// the jailed M3b executor and its confirmation tests.
+// Package agent contains SelfTUI's bounded coding-agent loop and its jailed
+// filesystem tools.
 package agent
 
 import (
@@ -24,10 +23,9 @@ const (
 	maxResultBytes = 64 << 10
 )
 
-// ReadOnlyTools is the only tool schema exposed by the M3a agent. Keep this
-// list explicit: an unknown model-generated name must never become a write or
-// command execution primitive by accident.
-func ReadOnlyTools() []ollama.ToolDefinition {
+// AgentTools is the explicit schema exposed to models. Keep this list closed:
+// an unknown model-generated name can never become an execution primitive.
+func AgentTools() []ollama.ToolDefinition {
 	stringArg := func(name, description string) ollama.ToolFunction {
 		return ollama.ToolFunction{
 			Name: name, Description: description,
@@ -46,15 +44,38 @@ func ReadOnlyTools() []ollama.ToolDefinition {
 		{Type: "function", Function: ollama.ToolFunction{
 			Name: "grep", Description: "Search text with a regular expression inside the workspace.",
 			Parameters: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"pattern": map[string]any{"type": "string"},
-					"path":    map[string]any{"type": "string"},
-				},
+				"type": "object", "properties": map[string]any{"pattern": map[string]any{"type": "string"}, "path": map[string]any{"type": "string"}},
 				"required": []string{"pattern", "path"},
 			},
 		}},
+		{Type: "function", Function: ollama.ToolFunction{
+			Name: "write_file", Description: "Atomically write a file inside the workspace. Requires user approval.",
+			Parameters: map[string]any{
+				"type": "object", "properties": map[string]any{"path": map[string]any{"type": "string"}, "content": map[string]any{"type": "string"}, "overwrite": map[string]any{"type": "boolean"}},
+				"required": []string{"path", "content"},
+			},
+		}},
+		{Type: "function", Function: ollama.ToolFunction{
+			Name: "edit_file", Description: "Replace one exact string in a workspace file. Requires user approval.",
+			Parameters: map[string]any{
+				"type": "object", "properties": map[string]any{"path": map[string]any{"type": "string"}, "old": map[string]any{"type": "string"}, "new": map[string]any{"type": "string"}},
+				"required": []string{"path", "old", "new"},
+			},
+		}},
+		{Type: "function", Function: ollama.ToolFunction{
+			Name: "run_command", Description: "Run an approved allowlisted argv in the workspace. Requires user approval.",
+			Parameters: map[string]any{
+				"type": "object", "properties": map[string]any{"argv": map[string]any{"type": "array", "items": map[string]any{"type": "string"}}, "timeout": map[string]any{"type": "integer"}},
+				"required": []string{"argv"},
+			},
+		}},
 	}
+}
+
+// ReadOnlyTools remains available for focused M3a compatibility tests and
+// callers. It deliberately excludes every mutation primitive.
+func ReadOnlyTools() []ollama.ToolDefinition {
+	return AgentTools()[:3]
 }
 
 func ReadFile(root, path string) (string, error) {

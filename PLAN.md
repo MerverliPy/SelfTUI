@@ -343,10 +343,12 @@ calls; qwen3 thinking suppression; jailed read_file/list_dir/grep; bounded loop;
 streaming `Msg`s; cancellation. **Exit: agent reads/lists/greps a project live; no
 mutation surfaced.**
 
-**M3b — Mutation agent (jailed).** write_file/edit_file + `run_command` per constrained
-design (argv-allowlist, no shell) with **jail + confirm + timeout + cancel + tests
-inline**; context budgeting; job serialization vs Ollama. ✅ *Exit: agent writes/edits
-files and runs allowed commands, all gated + tested.*
+**M3b — Mutation agent (jailed).** ✅ *done 2026-09-05:* jailed atomic
+`write_file`/exact `edit_file`, plus confirmed `run_command` constrained to approved
+`go` and read-only `git` argv (no shell/interpreters), scrubbed environment, 30s
+default/60s cap, 256 KiB per stream, process-group cancellation, serialization,
+context budgeting, and focused UI/executor tests. ✅ *Exit: agent writes/edits files
+and runs allowed commands, all gated + tested.*
 
 **M4 — Settings & persistence.** huh forms wired to config file + env + flags; theme
 toggle; live-apply where cheap. ✅ *Exit: settings persist & revert.*
@@ -384,10 +386,11 @@ first safety gate.)*
 ## 12. Next step
 
 **M1a — model list/show landed 2026-09-03**, **M1b — delete + streamed pull landed
-2026-09-04**, **M2 — chat + plain-chat landed 2026-09-03**, and **M3a — read-only
-agent landed 2026-09-05**. `make check` is green with focused filesystem, dual
-transport, loop-bound, fallback, and cancellation tests. Next milestone: **M3b —
-mutation agent**, with jailed write/edit/run_command controls shipped inline.
+2026-09-04**, **M2 — chat + plain-chat landed 2026-09-03**, **M3a — read-only agent
+landed 2026-09-05**, and **M3b — jailed mutation agent landed 2026-09-05**.
+`make check` is green with focused filesystem, confirmation, argv validation,
+environment, output-cap, cancellation, dual transport, loop-bound, fallback, and
+context-budget tests. Next milestone: **M4 — Settings & persistence**.
 
 ---
 

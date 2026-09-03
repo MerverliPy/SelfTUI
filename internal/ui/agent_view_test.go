@@ -161,6 +161,55 @@ func TestAgentViewReadOnlyToolLoop(t *testing.T) {
 	}
 }
 
+func TestAgentViewDeclinesMutationConfirmation(t *testing.T) {
+	root := t.TempDir()
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/tags":
+			w.Header().Set("Content-Type", "application/json")
+			io.WriteString(w, uiTagsBody)
+		case "/api/chat":
+			calls++
+			w.Header().Set("Content-Type", "application/x-ndjson")
+			if calls == 1 {
+				io.WriteString(w, `{"message":{"role":"assistant","tool_calls":[{"function":{"name":"write_file","arguments":{"path":"no.txt","content":"no"}}}]},"done":true}`+"\n")
+			} else {
+				io.WriteString(w, chatEvent("declined safely", true)+"\n")
+			}
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	cfg := config.Default()
+	v := NewAgentViewWithWorkspace(ollama.New(srv.URL, ""), NewStyles("dark"), "dark", "", root, cfg.Agent)
+	v, _ = v.Update(tea.WindowSizeMsg{Width: 88, Height: 40})
+	v, _ = v.Update(agentModelsLoadedMsg{models: sampleModels()})
+	typeText(t, &v, "write no")
+	v, _ = v.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	deadline := time.After(3 * time.Second)
+	for !v.ModalOpen() {
+		select {
+		case msg := <-v.chatCh:
+			v, _ = v.Update(msg)
+		case <-deadline:
+			t.Fatal("tool confirmation did not arrive")
+		}
+	}
+	if !strings.Contains(stripANSI(v.View()), "Confirm mutation") {
+		t.Fatalf("confirmation modal missing: %s", stripANSI(v.View()))
+	}
+	v, _ = v.Update(tea.KeyPressMsg{Text: "n"})
+	drainChat(t, &v)
+	if _, err := os.Stat(filepath.Join(root, "no.txt")); !os.IsNotExist(err) {
+		t.Fatalf("declined write created file: %v", err)
+	}
+	if calls != 2 || !strings.Contains(v.history[1].Content, "declined safely") {
+		t.Fatalf("calls=%d history=%+v", calls, v.history)
+	}
+}
+
 func TestAgentViewLoadsModels(t *testing.T) {
 	v := testAgent(t, nil)
 	if v.model != "" {

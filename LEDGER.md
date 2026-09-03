@@ -524,3 +524,36 @@ Charm set pinned (v2 line), tests green.
 **Blockers / next action**
 - None. Next fresh session: **M3b — mutation agent**, with write/edit and constrained
   `run_command` safety controls implemented inline and tested before exposure.
+
+### 2026-09-05 — M3b — Mutation agent (DONE)
+**Milestone:** M3b · **Result:** ✅ done — jailed mutations and a constrained confirmed command executor are implemented and tested.
+
+**Work done**
+- Added atomic, workspace/symlink-jail-checked `write_file` (explicit overwrite only) and
+  exact-one-match `edit_file`; both now require an in-TUI per-call approval dialog.
+- Added `run_command`: fixed argv only; approved `go` and read-only `git` subcommands;
+  no shells/interpreters; scrubbed HOME/TMP/GOPATH/GOCACHE environment; 30s default / 60s
+  maximum timeout; 256 KiB stdout and stderr caps; process-group TERM/KILL cancellation;
+  serialized execution and streaming output events.
+- Added the runner confirmation/output events, context-window budgeting with explicit
+  truncation marker, and Agent UI confirmation modal (`y`/enter approve; `n`/esc decline).
+- Added executor, filesystem jail, command validation/env/output/cancellation, context,
+  runner, and UI refusal tests. Updated README, containment design, and PLAN §10/§12.
+
+**Commands + exit codes**
+- `go test ./internal/agent -run 'Test(WriteAndEdit|MutationTools|DeclinedMutation|RunCommand|Budget)' -count=1` `1` — expected RED before implementation (missing mutation APIs).
+- `go test ./internal/agent -count=1` `0`
+- `go test ./internal/ui -run 'TestAgentView(DeclinesMutation|ReadOnly)' -count=1` `0`
+- `go test -race ./... -count=1 -timeout=120s` `0`
+- `make check` `0` (build + tests + vet + gofmt)
+- `git diff --check` `0`
+
+**Decisions / findings**
+- Owner chose the v1 allowlist: bounded `go` plus read-only `git`; `make`, `rg`, git
+  mutations, general shells, and interpreters remain disabled.
+- The executor is explicitly a guardrail, not an OS/container sandbox; confirmations,
+  jail validation, env scrubbing, limits, and process-group kill reduce risk but cannot
+  isolate malicious code run by an approved `go test`.
+
+**Blockers / next action**
+- None. M3b is committed; per the session rule, stop. Next fresh session: **M4 — Settings & persistence**.

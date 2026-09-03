@@ -1,8 +1,8 @@
 # run_command containment design (M0a Spike 2)
 
-**Status:** design — gate evidence. Implementation ships inline with M3b (per
-`COUNCIL-MEMO.md` finding C: safety controls land with the tool that exposes them).
-**Drives the M0a go/no-go item "command containment".**
+**Status:** implemented in M3b. The containment controls landed inline with
+`run_command` (per `COUNCIL-MEMO.md` finding C). **Drives the M0a go/no-go item
+"command containment".**
 
 ## Threat model (what containment must assume)
 
@@ -34,10 +34,12 @@ Therefore **v1 `run_command` is a constrained executor, not a shell**:
    argv element with shell metacharacters — at the *element* level (see below), so
    `run_command ["sh", "-c", "…"]` and `run_command ["echo", "x; rm -rf /"]` both
    fail with a readable reason. This is the "no shell/interpreter" rule.
-2. **Allowlists** the executable: `internal/agent/commands.go` declares the v1 set
-   (e.g. `go`, `git` (read-only subcommands first), `rg`/grep-equivalent, `make`
-   only with an explicit target allowlist expansion later). Anything else →
-   `ErrNotAllowed` surfaced to the model *and* in the confirmation prompt.
+2. **Allowlists** the executable: `internal/agent/command.go` permits only
+   `go` (`test`, `vet`, `build`, `list`, `env`, `version`) and read-only `git`
+   (`status`, `diff`, `log`, `show`, `branch`, `rev-parse`, `ls-files`, `grep`).
+   `make`, `rg`, shells, interpreters, config injection, absolute paths, and
+   `..` escapes are rejected. Anything else is surfaced to the model before a
+   confirmation is shown.
 3. **Scrubs the environment**: passes only a fixed allowlist (e.g.
    `PATH`, `HOME`→jail, `TMPDIR`→jail, `GOCACHE`→jail, `GOPATH`→jail, `TERM`,
    `LANG`). Everything else (tokens, `OLLAMA_*`, `SSH_*`, `AWS_*`…) is stripped.
@@ -69,10 +71,9 @@ Therefore **v1 `run_command` is a constrained executor, not a shell**:
 
 - **Read-only commands** (the M3a allowlist) run with a start-line notice but no
   prompt.
-- **Mutation commands** (M3b allowlist: e.g. `go test -race` is read-only; applying
-  a formatter or installer is not) require an explicit in-TUI confirm showing the
-  resolved argv, the jail root, and the limits. Default = **no**; a
-  `confirm-everything` toggle exists but has a distinct visual state.
+- **Every `run_command` call** requires an explicit in-TUI confirmation showing
+  the resolved argv, jail root, and timeout. File writes and exact edits use the
+  same per-call dialog. Default = **no**; there is no confirm-everything toggle.
 - The confirmation UI and the allowlist **ship in the same change as the tool**
   (M3b), never later.
 
@@ -89,13 +90,12 @@ Therefore **v1 `run_command` is a constrained executor, not a shell**:
 6. serialization: second command while first runs → queues, not interleave.
 7. confirmation: refusals by default; ack only after explicit confirm (UI test).
 
-## Open owner decisions
+## Resolved owner decisions
 
-- Exact v1 allowlist breadth (which build/test/toolchain binaries) — propose
-  `go`, `git`, `rg`/pure-Go grep, `make`; owner trims.
-- Whether `git` non-read-only subcommands (commit/push) enter v1 at all, or wait.
-- Config-file override scope for limits (per-host trust levels for the remote
-  Ollama case).
+- v1 permits the bounded `go` and read-only `git` subcommand sets above; `make`,
+  `rg`, and all git mutations wait for a later decision.
+- Limits are fixed in v1 (30s default, 60s maximum; 256 KiB per stdout/stderr)
+  rather than config-overridable trust levels.
 
 ## Gate bearing
 
