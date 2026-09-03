@@ -176,12 +176,15 @@ Architecture: **Ollama native tool/function calling** + an async tool-execution 
 background goroutine. No external agent framework.
 
 > **Spike-verified (M0a, 2026-09-03):** native `message.tool_calls` work only on some
-> installed models (e.g. `qwen3-vl:8b` ✅ full 2-step pass). The primary coding model
-> `qwen2.5-coder:14b` streams the call as JSON in `message.content` with `tool_calls` empty,
-> and `gemma3:12b` rejects tools (HTTP 400). **Therefore the tool layer must support two
-> dispatch paths:** (a) native `message.tool_calls`, and (b) detect → parse → validate a
-> tool-JSON emitted in `content`, feeding the same executor. This makes the "explicit fallback,
-> never silent" owner decision an **empirical requirement**.
+> installed models. **`qwen3:8b` is the confirmed tool-capable default** (full 2-step PASS,
+> `tools`+`thinking` capabilities). `qwen2.5-coder:14b` streams the call as JSON in
+> `message.content` with `tool_calls` empty, and `gemma3:12b` rejects tools (HTTP 400).
+> **Therefore the tool layer must support two dispatch paths:** (a) native
+> `message.tool_calls`, and (b) detect → parse → validate a
+> tool-JSON emitted in `content`, feeding the same executor. qwen3 also emits a `thinking`
+> phase — the runner must consume/ignore reasoning messages so they don't corrupt the tool
+> loop or get shown as final output. This makes the "explicit fallback, never silent" owner
+> decision an **empirical requirement**.
 
 ### Tool loop (state machine in `internal/agent/runner.go`)
 ```
@@ -352,7 +355,7 @@ first safety gate.)*
 | 1 | **Git ownership** ✅ *decided + set up* | Standalone repo at `/home/calvin/SelfTUI`; `git init` done (dotfiles `.gitignore` uses `*` default-ignore, so no extra step was needed). |
 | 2 | **Markdown rendering** ✅ *decided* | Use `glamour` for GitHub-flavored markdown. |
 | 3 | **Agent tool breadth** | "Full coding agent" is large. v1 tool set is bounded by the read-only (M3a) then mutation (M3b) split. Confirm whether git-awareness/project-indexing/multi-file apply belong in v1 or later. |
-| 4 | **No-tool model behavior** | *Owner decision, now spike-informed:* native tool-calling varies by build — `qwen3-vl:8b` works; `qwen2.5-coder:14b` emits tool-JSON in `content` (needs parser); `gemma3:12b` → 400. Agent must support both dispatch paths + an **explicit** (never-silent) fallback. Choose preferred coding model too. |
+| 4 | **Coding model + dispatch** | *OD3 resolved:* default agent model = **`qwen3:8b`** (native tool PASS). Dual dispatch (native `tool_calls` + content-embedded tool-JSON) stays required for pick-any-model (`qwen2.5-coder` content-JSON; `gemma3` → 400 → explicit non-agent fallback). Agent loop must handle qwen3 `thinking` phase. |
 | 5 | **Remote host auth + job serialization** | Basic/bearer depends on what the remote exposes — verify the concrete setup. *Owner decision:* serialize Ollama jobs (no pull during agent) vs allow overlap on one GPU. |
 | 6 | **iPhone terminal width** | **Measure**, don't assume 88-col. Confirm actual cols/rows + key behavior + reconnect per Blink/Termius during M0a, and drive breakpoint ranges from that measurement. |
 | 7 | **Charm version set** | *Owner decision:* pick **v1 or v2 as one aligned set** (bubbletea/lipgloss/huh/bubbles/glamour) after a compile spike; never mix majors. |

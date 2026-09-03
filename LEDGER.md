@@ -126,6 +126,12 @@ qwen3-vl:8b, qwen2.5:1.5b (+ `-pi` variants).
    model (e.g., a qwen3 non-VL coder, or qwen3-vl) OR implement the content-JSON parser so
    `qwen2.5-coder:14b` works. Owner to pick (owner decision OD3).
 
+**Follow-up — OD3 RESOLVED (owned):** pulled + validated **`qwen3:8b`** — Capabilities:
+`tools` + `thinking`; full 2-step native tool PASS (args parsed, correct summary). This is
+now the recommended default agent coding model. Dual-dispatch (native + content-JSON) is
+still required for backward/pick-any-model behavior. **Note:** qwen3 emits a `thinking`
+phase — the agent loop must handle/omitt thinking messages appropriately (see PLAN §6).
+
 ---
 
 ## Appendix — canonical commands (update as build grows)
