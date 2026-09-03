@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"syscall"
 
 	tea "charm.land/bubbletea/v2"
@@ -29,9 +30,17 @@ func main() {
 
 func run() error {
 	// --- flags (highest config priority) ---
-	flagHost := flag.String("host", "", "Ollama base URL (overrides env + config file)")
-	flagTheme := flag.String("theme", "", "theme: dark (default) or light")
 	flagConfig := flag.String("config", "", "config file path (default: $XDG_CONFIG_HOME/selftui/config.toml)")
+	flagHost := flag.String("host", "", "Ollama base URL (overrides env + config file)")
+	flagAuthToken := flag.String("auth-token", "", "auth token (overrides env + config file)")
+	flagTheme := flag.String("theme", "", "theme: dark (default) or light")
+	flagDefaultModel := flag.String("default-model", "", "default model for new sessions")
+	flagWorkspaceRoot := flag.String("workspace-root", "", "agent workspace root")
+	flagTemperature := flag.String("temperature", "", "agent temperature")
+	flagTopP := flag.String("top-p", "", "agent top_p")
+	flagNumCtx := flag.String("num-ctx", "", "agent num_ctx")
+	flagMaxToolIterations := flag.String("max-tool-iterations", "", "max tool iterations")
+	flagSystemPrompt := flag.String("system-prompt", "", "agent system prompt")
 	flagVerbose := flag.Bool("verbose", false, "debug-level logging")
 	flag.Parse()
 
@@ -39,8 +48,48 @@ func run() error {
 	if *flagHost != "" {
 		ov.Host = flagHost
 	}
+	if *flagAuthToken != "" {
+		ov.AuthToken = flagAuthToken
+	}
 	if *flagTheme != "" {
 		ov.Theme = flagTheme
+	}
+	if *flagDefaultModel != "" {
+		ov.DefaultModel = flagDefaultModel
+	}
+	if *flagWorkspaceRoot != "" {
+		ov.WorkspaceRoot = flagWorkspaceRoot
+	}
+	if *flagTemperature != "" {
+		tv, err := strconv.ParseFloat(*flagTemperature, 64)
+		if err != nil {
+			return fmt.Errorf("parse flag temperature: %w", err)
+		}
+		ov.Temperature = &tv
+	}
+	if *flagTopP != "" {
+		tv, err := strconv.ParseFloat(*flagTopP, 64)
+		if err != nil {
+			return fmt.Errorf("parse flag top-p: %w", err)
+		}
+		ov.TopP = &tv
+	}
+	if *flagNumCtx != "" {
+		nv, err := strconv.Atoi(*flagNumCtx)
+		if err != nil {
+			return fmt.Errorf("parse flag num-ctx: %w", err)
+		}
+		ov.NumCtx = &nv
+	}
+	if *flagMaxToolIterations != "" {
+		nv, err := strconv.Atoi(*flagMaxToolIterations)
+		if err != nil {
+			return fmt.Errorf("parse flag max-tool-iterations: %w", err)
+		}
+		ov.MaxToolIterations = &nv
+	}
+	if *flagSystemPrompt != "" {
+		ov.SystemPrompt = flagSystemPrompt
 	}
 
 	cfg, err := config.Load(ov)

@@ -90,10 +90,7 @@ func NewModelsView(client *ollama.Client, styles Styles, theme string) ModelsVie
 	l.KeyMap.NextPage = key.NewBinding(key.WithKeys("pgdown", "right", "l", "f"))
 	l.Styles = list.DefaultStyles(dark)
 
-	accent := lipgloss.Color("63")
-	if !dark {
-		accent = lipgloss.Color("57")
-	}
+	accent := styles.accent
 	sp := spinner.New(
 		spinner.WithSpinner(spinner.Dot),
 		spinner.WithStyle(lipgloss.NewStyle().Foreground(accent)),
@@ -123,10 +120,7 @@ func modelsDelegate(styles Styles, dark bool) list.DefaultDelegate {
 	d.SetSpacing(0)
 
 	s := list.NewDefaultItemStyles(dark)
-	accent := lipgloss.Color("63")
-	if !dark {
-		accent = lipgloss.Color("57")
-	}
+	accent := styles.accent
 	s.SelectedTitle = s.SelectedTitle.BorderForeground(accent).Foreground(accent)
 	s.SelectedDesc = s.SelectedDesc.Foreground(accent)
 	d.Styles = s
@@ -976,4 +970,31 @@ func maxInt(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// --- M4 live apply: re-theme + client swap --------------------------------
+
+// applyTheme re-tints the Models tab (list chrome, selected-row accent,
+// spinner) after a settings Theme change or live preview.
+func (v ModelsView) applyTheme(dark bool, styles Styles) ModelsView {
+	v.styles = styles
+	v.list.Styles = list.DefaultStyles(dark)
+	v.list.SetDelegate(modelsDelegate(styles, dark))
+	v.spinner.Style = lipgloss.NewStyle().Foreground(v.styles.accent)
+	return v
+}
+
+// ApplyClient points the tab at a new Ollama client after a settings save
+// that changed host or token; the stale list/detail are dropped and reloaded
+// from the new host via the returned non-blocking load cmd.
+func (v ModelsView) ApplyClient(c *ollama.Client) (ModelsView, tea.Cmd) {
+	v.client = c
+	v.models = nil
+	v.detail = nil
+	v.detailName = ""
+	v.listErr = ""
+	v.notice = ""
+	v.loading = true
+	v.list.SetItems(nil)
+	return v, v.loadCmd()
 }

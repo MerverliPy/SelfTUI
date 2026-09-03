@@ -5,9 +5,7 @@
 // See load.go for the chain and config_test.go for the priority tests.
 package config
 
-// Config is the full configuration surface defined by PLAN.md §5. M0 wires
-// loading for the subset the skeleton uses (host, theme); the remaining keys
-// keep their defaults until Settings & persistence land in M4.
+// Config is the full configuration surface defined by PLAN.md §5.
 type Config struct {
 	// Host is the Ollama base URL, e.g. http://localhost:11434.
 	Host string
@@ -21,7 +19,7 @@ type Config struct {
 	// WorkspaceRoot is the project root the agent operates on (defaults to cwd).
 	WorkspaceRoot string
 
-	// Agent parameters (defaults only until M4).
+	// Agent parameters.
 	Agent AgentConfig
 
 	// filePath records the config file this was loaded from (for UI display).

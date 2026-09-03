@@ -30,7 +30,7 @@ func TestDefaults(t *testing.T) {
 }
 
 func TestFileOnly(t *testing.T) {
-	p := writeFile(t, "host = \"http://192.168.1.50:11434\"\ntheme = \"light\"\n")
+	p := writeFile(t, "host = \"http://192.168.1.50:11434\"\ntheme = \"light\"\ndefault_model = \"qwen3:0.6b\"\n\n[agent]\ntemperature = 0.21\ntop_p = 0.91\nnum_ctx = 2048\nmax_tool_iterations = 9\nsystem_prompt = \"test agent prompt\"\n")
 	c, err := Load(Overrides{ConfigPath: &p})
 	if err != nil {
 		t.Fatal(err)
@@ -41,6 +41,12 @@ func TestFileOnly(t *testing.T) {
 	if c.Theme != "light" {
 		t.Errorf("Theme = %q", c.Theme)
 	}
+	if c.DefaultModel != "qwen3:0.6b" {
+		t.Errorf("DefaultModel = %q", c.DefaultModel)
+	}
+	if c.Agent.Temperature != 0.21 || c.Agent.TopP != 0.91 || c.Agent.NumCtx != 2048 || c.Agent.MaxToolIterations != 9 {
+		t.Errorf("agent fields = %+v", c.Agent)
+	}
 	if got := c.ConfigPath(); got != p {
 		t.Errorf("ConfigPath = %q, want %q", got, p)
 	}
@@ -49,6 +55,8 @@ func TestFileOnly(t *testing.T) {
 func TestEnvOverridesFile(t *testing.T) {
 	p := writeFile(t, "host = \"file-host\"\ntheme = \"light\"\n")
 	t.Setenv(envPrefix+"HOST", "env-host")
+	t.Setenv(envPrefix+"AUTH_TOKEN", "secret")
+	t.Setenv(envPrefix+"AGENT_TEMPERATURE", "0.11")
 	c, err := Load(Overrides{ConfigPath: &p})
 	if err != nil {
 		t.Fatal(err)
@@ -56,21 +64,56 @@ func TestEnvOverridesFile(t *testing.T) {
 	if c.Host != "env-host" {
 		t.Errorf("Host = %q, want env-host (env beats file)", c.Host)
 	}
+	if c.AuthToken != "secret" {
+		t.Errorf("AuthToken = %q", c.AuthToken)
+	}
+	if c.Agent.Temperature != 0.11 {
+		t.Errorf("Temperature = %v", c.Agent.Temperature)
+	}
 	if c.Theme != "light" {
 		t.Errorf("Theme = %q, want light (file value kept when env unset)", c.Theme)
 	}
 }
 
 func TestOverridesWinEverything(t *testing.T) {
-	p := writeFile(t, "host = \"file-host\"\ntheme = \"light\"\n")
+	p := writeFile(t, "host = \"file-host\"\ntheme = \"light\"\n[agent]\ntemperature = 0.11\n")
 	t.Setenv(envPrefix+"HOST", "env-host")
 	flagHost := "flag-host"
-	c, err := Load(Overrides{ConfigPath: &p, Host: &flagHost})
+	flagTheme := "flag-dark"
+	flagTemp := 0.33
+	flagTopP := 0.88
+	flagNumCtx := 1234
+	flagModel := "qwen3:latest"
+	flagIter := 15
+	flagPrompt := "custom agent"
+	c, err := Load(Overrides{
+		ConfigPath:        &p,
+		Host:              &flagHost,
+		Theme:             &flagTheme,
+		Temperature:       &flagTemp,
+		TopP:              &flagTopP,
+		NumCtx:            &flagNumCtx,
+		DefaultModel:      &flagModel,
+		MaxToolIterations: &flagIter,
+		SystemPrompt:      &flagPrompt,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if c.Host != "flag-host" {
 		t.Errorf("Host = %q, want flag-host (flags beat env + file)", c.Host)
+	}
+	if c.Theme != "flag-dark" {
+		t.Errorf("Theme = %q, want flag-dark", c.Theme)
+	}
+	if c.Agent.Temperature != 0.33 || c.Agent.TopP != 0.88 || c.Agent.NumCtx != 1234 || c.Agent.MaxToolIterations != 15 {
+		t.Errorf("agent fields = %+v", c.Agent)
+	}
+	if c.DefaultModel != "qwen3:latest" {
+		t.Errorf("DefaultModel = %q", c.DefaultModel)
+	}
+	if c.Agent.SystemPrompt != "custom agent" {
+		t.Errorf("SystemPrompt = %q", c.Agent.SystemPrompt)
 	}
 }
 
@@ -83,8 +126,48 @@ func TestMissingFileFallsBackToDefaults(t *testing.T) {
 	if c.Host != Default().Host || c.Theme != Default().Theme {
 		t.Errorf("expected defaults on missing file, got host=%q theme=%q", c.Host, c.Theme)
 	}
-	if got := c.ConfigPath(); got != "" {
-		t.Errorf("ConfigPath = %q, want empty when no file", got)
+	if got := c.ConfigPath(); got != p {
+		t.Errorf("ConfigPath = %q, want %q", got, p)
+	}
+}
+
+func TestSaveWritesConfig(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "saved.toml")
+	c := Default()
+	c.filePath = p
+	c.Host = "http://example.test:11434"
+	c.AuthToken = "abc123"
+	c.Theme = "light"
+	c.DefaultModel = "gemma3:12b"
+	c.WorkspaceRoot = "/tmp/project"
+	c.Agent.Temperature = 0.33
+	c.Agent.TopP = 0.81
+	c.Agent.NumCtx = 1234
+	c.Agent.MaxToolIterations = 9
+	c.Agent.SystemPrompt = "assistant for tests"
+
+	if err := Save(c); err != nil {
+		t.Fatalf("Save() error: %v", err)
+	}
+
+	loaded, err := Load(Overrides{ConfigPath: &p})
+	if err != nil {
+		t.Fatalf("Load() error after Save: %v", err)
+	}
+	if loaded.Host != c.Host {
+		t.Errorf("Host = %q, want %q", loaded.Host, c.Host)
+	}
+	if loaded.AuthToken != c.AuthToken {
+		t.Errorf("AuthToken = %q, want %q", loaded.AuthToken, c.AuthToken)
+	}
+	if loaded.Agent.Temperature != c.Agent.Temperature || loaded.Agent.TopP != c.Agent.TopP || loaded.Agent.MaxToolIterations != c.Agent.MaxToolIterations {
+		t.Errorf("agent values = %+v", loaded.Agent)
+	}
+	if loaded.Agent.NumCtx != c.Agent.NumCtx {
+		t.Errorf("NumCtx = %d, want %d", loaded.Agent.NumCtx, c.Agent.NumCtx)
+	}
+	if loaded.Agent.SystemPrompt != c.Agent.SystemPrompt {
+		t.Errorf("SystemPrompt = %q, want %q", loaded.Agent.SystemPrompt, c.Agent.SystemPrompt)
 	}
 }
 

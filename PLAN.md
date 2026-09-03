@@ -350,8 +350,7 @@ default/60s cap, 256 KiB per stream, process-group cancellation, serialization,
 context budgeting, and focused UI/executor tests. ✅ *Exit: agent writes/edits files
 and runs allowed commands, all gated + tested.*
 
-**M4 — Settings & persistence.** huh forms wired to config file + env + flags; theme
-toggle; live-apply where cheap. ✅ *Exit: settings persist & revert.*
+**M4 — Settings & persistence.** ✅ *done 2026-09-06:* huh (v2-aligned `charm.land/huh/v2 v2.0.3`) forms over the full config surface in four sections (Connection / Model defaults / Theme / Agent), two-column on wide screens (LayoutColumns), single-column pages otherwise; field validation (http(s) host, numeric ranges); esc-discard = nothing written (revert); submit writes the config file off-loop (`config.Save`, 0600 perms) and live-applies in-session — theme swap restyles the whole shell, host/token rebuild the Ollama client and reload both model lists, and agent params/default model/workspace/system prompt apply to the next agent run; Theme select previews live while arrowing (rolls back on discard). New flags/env for every config key. **Exit: settings persist & revert.**
 
 **M5 — Responsive completion + iPhone path.** golden render tests at two widths; README
 SSH-on-iPhone guide (Blink/Termius); light theme; mobile approval ergonomics. (Much
@@ -387,10 +386,13 @@ first safety gate.)*
 
 **M1a — model list/show landed 2026-09-03**, **M1b — delete + streamed pull landed
 2026-09-04**, **M2 — chat + plain-chat landed 2026-09-03**, **M3a — read-only agent
-landed 2026-09-05**, and **M3b — jailed mutation agent landed 2026-09-05**.
-`make check` is green with focused filesystem, confirmation, argv validation,
-environment, output-cap, cancellation, dual transport, loop-bound, fallback, and
-context-budget tests. Next milestone: **M4 — Settings & persistence**.
+landed 2026-09-05**, **M3b — jailed mutation agent landed 2026-09-05**, and
+**M4 — Settings & persistence landed 2026-09-06**. `make check` is green with
+focused filesystem, confirmation, argv validation, environment, output-cap,
+cancellation, dual transport, loop-bound, fallback, context-budget, settings
+form/preview/submit/apply, and config round-trip tests. Next milestone:
+**M5 — Responsive completion + iPhone path** (golden render tests at two widths;
+README SSH-on-iPhone guide; light theme polish; mobile approval ergonomics).
 
 ---
 

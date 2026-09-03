@@ -44,12 +44,49 @@ func TestBootsAndRendersTabs(t *testing.T) {
 }
 
 func TestTabCycling(t *testing.T) {
+	// The Settings form is a modal while editing (see the ownership test), so
+	// shell wrap is exercised between Models and Agent here: tab forward once,
+	// shift+tab back.
 	m := newTestApp(t)
-	for i := 0; i < 3; i++ {
-		m = updateTab(t, m, tea.KeyPressMsg{Code: tea.KeyTab})
+	m = updateTab(t, m, tea.KeyPressMsg{Code: tea.KeyTab})
+	if got := m.tab; got != 1 {
+		t.Fatalf("tab after forward = %d, want 1", got)
 	}
+	m = updateTab(t, m, tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
 	if got := m.tab; got != 0 {
-		t.Errorf("tab after 3 tabs = %d, want 0 (wrap)", got)
+		t.Errorf("tab after shift+tab = %d, want 0 (wrap)", got)
+	}
+}
+
+// TestSettingsFormOwnsTabKeysWhileEditing: an open settings form is a modal —
+// tab advances the form's fields, so the shell tab bar and 1/2/3 jumps are
+// inert until the form is saved or discarded (esc).
+func TestSettingsFormOwnsTabKeysWhileEditing(t *testing.T) {
+	m := newTestApp(t)
+	m = updateTab(t, m, tea.WindowSizeMsg{Width: 100, Height: 40})
+	m = updateTab(t, m, tea.KeyPressMsg{Text: "3"})
+	if !m.settings.Editing() {
+		t.Fatal("entering Settings should open the editing form")
+	}
+
+	// Tab and digit jumps must not steal keys from the form.
+	m = updateTab(t, m, tea.KeyPressMsg{Code: tea.KeyTab})
+	m = updateTab(t, m, tea.KeyPressMsg{Text: "1"})
+	if m.tab != 2 || !m.settings.Editing() {
+		t.Fatalf("form lost focus while editing: tab=%d editing=%v", m.tab, m.settings.Editing())
+	}
+
+	// esc discards; only then does the shell regain the keys.
+	m = updateTab(t, m, tea.KeyPressMsg{Code: tea.KeyEsc})
+	if m.settings.Editing() {
+		t.Fatal("esc should discard the editing form")
+	}
+	if got := view(t, m); !strings.Contains(got, "Changes discarded") {
+		t.Errorf("expected discarded panel, got:\n%s", got)
+	}
+	m = updateTab(t, m, tea.KeyPressMsg{Text: "1"})
+	if m.tab != 0 {
+		t.Errorf("tab after leaving settings = %d, want 0", m.tab)
 	}
 }
 

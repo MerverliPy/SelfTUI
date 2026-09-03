@@ -557,3 +557,33 @@ Charm set pinned (v2 line), tests green.
 
 **Blockers / next action**
 - None. M3b is committed; per the session rule, stop. Next fresh session: **M4 — Settings & persistence**.
+
+### 2026-09-06 — M4 — Settings & persistence (DONE)
+**Milestone:** M4 · **Result:** ✅ done — huh settings forms persist to the config file and live-apply in-session; esc discards (revert).
+
+**Work done**
+- **Config write-back (`internal/config`):** added `Save(Config)` (full-file TOML rewrite, dir 0700 / file 0600), kept load chain flags > env > file > defaults untouched; env+flag overrides now cover every §5 key (`SELFTUI_AGENT_*`, auth token, …). Round-trip + precedence tests extended.
+- **CLI (`cmd/self-tui`):** flags for the full config surface (`-auth-token -default-model -workspace-root -temperature -top-p -num-ctx -max-tool-iterations -system-prompt`), parsed/validated before load.
+- **Settings tab (`internal/ui/settings_view.go`, new):** embedded `charm.land/huh/v2` v2.0.3 (v2-aligned set per risk #7; never mix majors) with four sections matching PLAN §8: Connection (host + masked auth token), Model defaults (default model, temperature, top-p, num_ctx with range validation), Theme (dark/light select), Agent (system-prompt editor, workspace root, max tool iterations). Wide (≥120) = `LayoutColumns(2)` two-column sections; narrow = one group/page, scrollable. Esc (rebound form Quit) = discard; ctrl+c stays quit-app at the shell.
+- **Form ownership model:** while the Settings form is open it is a modal — enter/tab advance, shift+tab back, esc discards; the shell tab bar + 1/2/3 jumps are inert until save/discard (entering Settings always rebuilds a fresh form from the current config). The root App forwards all leftover messages (huh internal next/prev field/group + re-fed commands) to the form while editing; a handled nav key is never re-typed into the form (ordering bug found + fixed via tests).
+- **Live theme preview:** huh pushes the Theme selection into the bound accessor as the user arrows → `settingsThemeMsg` → App re-themes the shell + all child views immediately (list chrome/delegate/spinner accent, glamour renderer rebuild + cache re-render, form palette). Preview never touches `cfg.Theme`; discard rolls back to the start theme.
+- **Submit = persist + live apply:** form completion snapshots the bound values and runs `config.Save` off-loop (`settingsSaveDoneMsg`); on success the App replaces the live config, re-themes when the theme changed, and — when host/token changed — rebuilds the `ollama.Client`, clears+reloads both model lists, and rebuilds the agent runner (new client/workspace/system prompt/iteration cap). Agent params/default model apply to the next send; an in-flight turn keeps its own runner (safe mid-stream swap). Write failure shows an error panel and applies nothing.
+- **Bindings pattern:** form `Value(&v.field)` bindings live on one shared `*settingsValues` so the view and the form read the same data (enables preview diff + snapshot without form accessors).
+- Tests: form seeding, key-ownership modal, esc discard, live theme message emission (march Dark→Light→Dark), submit→file write + saved panel, injected save error (no apply), live apply of host/theme/agent params without mutating the source config, config round-trip. Headless driver replays bubbletea cmd→msg chains with a grace window so cursor-blink `tea.Tick` cmds don't stall tests.
+
+**Commands + exit codes**
+- `go build ./...` `0`
+- `go vet ./...` `0` · `gofmt -l cmd internal` clean
+- `go test ./... -count=1 -timeout=180s` `0`
+- `go test -race ./... -count=1 -timeout=180s` `0`
+- `make check` `0` (build + tests + vet + gofmt)
+- `git diff --check` `0`
+
+**Decisions / lines to respect**
+- Settings editing is intentionally modal: leaving the Settings tab requires save (last-field submit) or discard (esc). This follows huh conventions; hint text on the result panels says "enter edit again · tab switch tabs · ctrl+c quit". Flagged for owner: if mid-form tab-away is wanted later, it needs field-level prev/next rebinding.
+- Save writes the *whole effective config* to the file (env/flag sources are re-loadable on next boot; nothing is preserved as "file-only").
+- Theme preview is the only live-apply during editing; host/token/model/agent apply on submit ("live-apply where cheap").
+- huh v2 is embedded as an internal `*huh.Form` (Init/Update/View called by the view; init cmds dropped — focus is synchronous, blink ticks not routed), which keeps the v2 `compat` adapter out of the app.
+
+**Blockers / next action**
+- None. M4 is committed; per the session rule, stop. Next fresh session: **M5 — Responsive completion + iPhone path** (golden render tests at two widths, SSH-on-iPhone guide, light theme polish, mobile approval ergonomics).

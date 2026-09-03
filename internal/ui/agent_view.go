@@ -770,3 +770,44 @@ func (v *AgentView) clampScroll() {
 func (s Styles) agentAccent() lipgloss.Style {
 	return lipgloss.NewStyle().Bold(true).Foreground(s.accent)
 }
+
+// --- M4 live apply: re-theme + config apply -------------------------------
+
+// applyTheme re-tints the Agent tab and rebuilds the glamour renderer at the
+// new dark/light state so committed blocks re-render in the active theme.
+func (v AgentView) applyTheme(dark bool, styles Styles) AgentView {
+	v.styles = styles
+	v.dark = dark
+	v.rebuildRenderer()
+	v.rebuildRenderCache()
+	return v
+}
+
+// ApplyConfig applies a successful settings save in-session: scalar chat
+// parameters and the default model take effect for the next send, and the
+// runner is rebuilt so a new workspace root, system prompt, iteration cap,
+// and client apply. An in-flight turn keeps the runner it started with
+// (startChat copies the pointer before the goroutine runs), so swapping here
+// is safe mid-stream. reload=true (host/token change) clears the selector
+// models and refetches from the new host.
+func (v AgentView) ApplyConfig(cfg config.Config, c *ollama.Client, reload bool) (AgentView, tea.Cmd) {
+	v.client = c
+	v.defaultModel = cfg.DefaultModel
+	v.temperature = cfg.Agent.Temperature
+	v.topP = cfg.Agent.TopP
+	v.numCtx = cfg.Agent.NumCtx
+	root := cfg.WorkspaceRoot
+	if root == "" {
+		root, _ = os.Getwd()
+	}
+	v.runner = agent.NewRunner(c, root, cfg.Agent.SystemPrompt, cfg.Agent.MaxToolIterations)
+	if !reload {
+		return v, nil
+	}
+	v.loading = true
+	v.modelsErr = ""
+	v.models = nil
+	v.model = ""
+	v.selIdx = 0
+	return v, v.loadModelsCmd()
+}
