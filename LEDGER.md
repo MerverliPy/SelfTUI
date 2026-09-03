@@ -172,3 +172,70 @@ phase — the agent loop must handle/omitt thinking messages appropriately (see 
 **Next action**
 - <first concrete step for the next session>
 ```
+### 2026-09-03 — M0: repo skeleton + Charm v1-v2 compile spike + pinned set (DONE)
+**Milestone:** M0 · **Result:** done — app boots (pty-verified), tabs work, clean build,
+Charm set pinned (v2 line), tests green.
+
+**Work done**
+- **Charm v1-v2 compile spike** (throwaway, kept in `/tmp/spike-v1`, `/tmp/spike-v2`):
+  headless harness (no tty; drives `tea.Model` via direct `Update`/`View` calls) exercising
+  bubbletea core (WindowSizeMsg, tab keys, quit), bubbles (list/viewport/textarea/spinner/table),
+  huh (construct+bind+validate), glamour, log, xdg, toml.
+  - **v1 set** (bubbletea v1.3.10, lipgloss v1.1.1-pseudo, huh v1.0.0, bubbles v1.0.0, glamour
+    v1.0.0): **19/19 PASS**; caveat — glamour pins lipgloss to a *dev pseudo-version*
+    (`v1.1.1-0.20250404…`), and this line's newest patches also require Go ≥1.24.
+  - **v2 set** (`charm.land/…/v2`: bubbletea v2.0.9, lipgloss v2.0.6, huh v2.0.3, bubbles
+    v2.2.1, glamour v1.0.0, log v1.0.0): **18/18 PASS**. Key findings:
+    1. v2 modules self-declare as **`charm.land/…`** (moved off github.com) and require
+       **go ≥1.25**.
+    2. glamour v1.0.0 drags `x/cellbuf@v0.0.13` into the graph, which is incompatible with
+       the `x/ansi v0.11.8` that lipgloss/v2 v2.0.6 requires → **cellbuf must be pinned
+       ≥v0.0.15** (applies the moment glamour joins at M2).
+    3. v2 API deltas vs v1: `View() tea.View` (struct, use `tea.NewView`), `KeyMsg` is an
+       interface (`KeyPressMsg`/`KeyReleaseMsg`, `Key{Code,Text,Mod}`), `KeyMod.Contains`,
+       `tea.Quit()` is a Msg-returning func, `lipgloss.Color` is now `func(string) color.Color`,
+       `Italic(bool)` explicit, `table/table.New(opts...)` + `WithColumns/WithRows/WithHeight/WithWidth`,
+       viewport `New(options…)`.
+- **OD removal — Charm version set (plan risk #7), OWNER decision resolved by spike evidence:**
+  pinned the **v2 aligned set**. Rationale: v2 is Charm's current maintained major; v1's own
+  latest needs ≥1.24 anyway, so there is no toolchain-compatibility reason to stay on v1;
+  v2's context-native program (`tea.WithContext`) + layered `View` fit M0 cancellation and the
+  iPhone path. `go.mod` declares `go 1.25.0` — within plan §2's "Go 1.22+" floor; `GOTOOLCHAIN=auto`
+  fetches the toolchain. "Never mix majors" honored: our direct imports are 100% v2 line;
+  glamour/log's transitive lipgloss-v1 is inert (no cross-major type sharing).
+- **M0 code** (repo root = module `selftui`): `go.mod` pinned set (`charm.land/bubbletea/v2 v2.0.9`,
+  `charm.land/lipgloss/v2 v2.0.6`, `github.com/adrg/xdg v0.5.3`, `github.com/charmbracelet/log v1.0.0`,
+  `github.com/pelletier/go-toml/v2 v2.4.3`, + `x/cellbuf v0.0.15` pin); `cmd/self-tui/main.go`
+  (flags `-host/-theme/-config/-verbose`, config chain, file logger via `xdg.StateFile`, cancellation:
+  `signal.NotifyContext` → `tea.WithContext`, clean quit path); `internal/config` (struct §5 + defaults,
+  load chain flags > env > file > defaults, `Overrides` struct, TOML file; config_test.go ×6);
+  `internal/ui` (root `App` model with Tab/ShiftTab/1-2-3/ctrl+c keys + `WindowSizeMsg`;
+  `styles.go` centralized dark/light theme; `layout.go` breakpoint system `Compact(≤79)/Medium(≤119)/Wide`
+  + `ForModels` geometry — thresholds centralized for M0a measurement; `components.go` TabBar/StatusBar;
+  placeholders per tab; `app_test.go` headless boot/tabs/quit/two-widths/layout-boundary tests =
+  10 assertions).
+- **Tooling:** `Makefile` (`build/test/lint(=vet+fmt)/run/check`); `README.md` (status, build, config
+  sources, nav); logs never touch stderr (risk #10).
+
+**Commands + exit codes**
+- `go version` (1.22.2; GOTOOLCHAIN auto) `0`
+- spikes: `go build` v1 `0` · run `0` (19/19) · v2 `0` (18/18); toolchains auto-fetched go1.24.2/go1.25.8/go1.26.8
+- `make check` (build+test+vet+fmt) `0` — all tests pass
+- pty boot smoke `script -qefc "timeout 2 ./bin/selftui" /tmp/boot.out` → exit `124` (ran until kill,
+  no panic; bubbletea v2 init + Kitty protocol confirmed)
+- non-tty run fails cleanly: `selftui: tui: bubbletea: could not open TTY` `1` (expected)
+
+**Decisions / lines to respect**
+- Charm **v2 aligned set pinned** (see OD above); cellbuf ≥v0.0.15 pin is a permanent go.mod line.
+- assert in LEDGER: when glamour is added (M2), cellbuf pin is already in place.
+- Breakpoint thresholds (79/119) are placeholders pending M0a real-width measurement.
+- Config: only host/theme/default_model/workspace_root wire through file+env+flags in M0; agent params
+  stay defaults until M4. Logs to `$XDG_STATE_HOME/selftui/log.txt`.
+
+**Blockers / open decisions (carry to next session)**
+- None blocking. M0a (gate) is next: measure real SSH widths, Ollama tool spikes (already partially
+  done via earlier spike1 + OD3), run_command containment design.
+
+**Next action**
+- Begin **M0a** in a fresh session: measure WindowSizeMsg on real SSH clients (Blink/Termius),
+  recalibrate `layout.go` thresholds, complete the go/no-go gate evidence.

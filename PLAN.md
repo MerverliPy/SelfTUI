@@ -298,7 +298,7 @@ Re-cut per `COUNCIL-MEMO.md`. Principle: **each milestone is a ship gate**, safe
 controls ship inline with the tool that exposes them, and the **agent scope is gated on
 an evidence spike — model management + plain chat are not.**
 
-**M0 — Repo + skeleton + minimal config.** standalone git repo at `/home/calvin/SelfTUI`
+**M0 — Repo + skeleton + minimal config.** ✅ *done 2026-09-03 — see LEDGER* standalone git repo at `/home/calvin/SelfTUI`
 (dotfiles ignores it by default, so no `.gitignore` step needed there); `go.mod`, Charm
 dependency set pinned; root model + tab/status bar;
 config load; **responsive shell + breakpoint system at measured sizes** (not an assumed
