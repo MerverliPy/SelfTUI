@@ -11,6 +11,11 @@ record (what happened, why, what you hit, what happens next) that complements:
 always append. Keep the append template filled (work done → commands + exit codes →
 decisions/blockers → next action).
 
+> **One fresh session per step (binding — see `AGENTS.md`).** A "step" = one milestone
+> (`PLAN.md` §10) or one owner-assigned task. Do not chain a second step in the same
+> session. Finish the chosen step → append this file → commit → stop; start the next step
+> in a new `pi` session with cwd `/home/calvin/SelfTUI`.
+
 ---
 
 ## Ledger conventions

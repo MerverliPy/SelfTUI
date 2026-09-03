@@ -37,7 +37,7 @@
   so remote hosts (needed for iPhone-only workflows) are supported.
 - **Markdown rendering:** `glamour` for GitHub-flavored markdown with syntax-highlighted
   code blocks in agent/chat output.
-- **Repository:** standalone git repo at `/home/calvin/TUI`; `/TUI` gitignored by the
+- **Repository:** standalone git repo at `/home/calvin/SelfTUI`; `/TUI` gitignored by the
   parent dotfiles repo so the code never pollutes it.
 
 ---
@@ -371,7 +371,7 @@ first safety gate.)*
 
 This plan pins the architecture, the re-cut ship-gated roadmap, and the council verdict.
 **No code has been written.** Decisions captured: Go + Bubble Tea, SSH-into-host on iPhone,
-full coding agent, configurable Ollama host, standalone repo at `/home/calvin/TUI`, glamour
+full coding agent, configurable Ollama host, standalone repo at `/home/calvin/SelfTUI`, glamour
 markdown, council re-cut (M0a gate; M1 split; M3a/M3b; inline safety; alpha after M2).
 
 On green-light, **M0** begins: repo setup (done — `git init` at `/home/calvin/SelfTUI`;
@@ -386,5 +386,13 @@ gate. Track decisions + work in `LEDGER.md` (§13) and record each milestone exi
 `LEDGER.md` is the persistent work/decision log that keeps sessions efficient and
 high-performant. It is the **past-facing** record (what happened, why, what you hit, what
 happens next) that complements `PLAN.md` (future-facing) and `COUNCIL-MEMO.md` (this
-audit). **Consult it at session start; append to it at session end.** See `LEDGER.md` for
-its sections and append template.
+
+---
+
+## 14. Session rule (binding)
+
+**One fresh session per step.** A "step" = one milestone (`§10`) or one owner-assigned task.
+Never chain a second step in the same session. Session-start ritual: `AGENTS.md` →
+`PLAN.md` §10+§11 → tail of `LEDGER.md` → choose exactly one step. Session-end ritual:
+complete it → append `LEDGER.md` → tick the `§10` exit → commit → **stop**. The full rule
+and the self-hosted tooling reality notes are in `AGENTS.md`.
