@@ -13,35 +13,38 @@ import (
 
 // App is the root Bubble Tea model: owns tab state, geometry, and the
 // responsive shell. Each tab's view lives in its own file (models_view.go
-// since M1a; agent/settings land with M2/M4).
+// since M1a, agent_view.go since M2; settings lands with M4).
 type App struct {
 	cfg    *config.Config
 	styles Styles
 	tab    int
 	w, h   int
 	models ModelsView
+	agent  AgentView
 }
 
-// New builds the root model. client is the Ollama connection used by the
-// Models tab (M1a); later tabs share it.
+// New builds the root model. client is the Ollama connection shared by the
+// Models and Agent tabs.
 func New(cfg *config.Config, styles Styles, client *ollama.Client) App {
 	return App{
 		cfg:    cfg,
 		styles: styles,
 		models: NewModelsView(client, styles, cfg.Theme),
+		agent:  NewAgentView(client, styles, cfg.Theme, cfg.DefaultModel, cfg.Agent),
 	}
 }
 
-// Init starts the Models list fetch.
-func (a App) Init() tea.Cmd { return a.models.Init() }
+// Init starts the Models list and Agent model-list fetches.
+func (a App) Init() tea.Cmd { return tea.Batch(a.models.Init(), a.agent.Init()) }
 
-// Update handles window geometry, navigation keys, Models-tab keys and async
-// model/detail results.
+// Update handles window geometry, navigation keys, tab keys, and async
+// model/chat results.
 func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		a.w, a.h = msg.Width, msg.Height
 		a.models, _ = a.models.Update(msg)
+		a.agent, _ = a.agent.Update(msg)
 
 	case tea.KeyMsg:
 		switch k := msg.Key(); {
@@ -49,19 +52,24 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.tab = (a.tab + 1) % numTabs
 		case k.Mod.Contains(tea.ModShift) && k.Code == tea.KeyTab:
 			a.tab = (a.tab + numTabs - 1) % numTabs
-		case k.Text == "1" && !a.models.ModalOpen():
+		case k.Text == "1" && !a.models.ModalOpen() && !a.agent.ModalOpen():
 			a.tab = 0
-		case k.Text == "2" && !a.models.ModalOpen():
+		case k.Text == "2" && !a.models.ModalOpen() && !a.agent.ModalOpen():
 			a.tab = 1
-		case k.Text == "3" && !a.models.ModalOpen():
+		case k.Text == "3" && !a.models.ModalOpen() && !a.agent.ModalOpen():
 			a.tab = 2
 		case k.Code == 'c' && k.Mod.Contains(tea.ModCtrl):
 			return a, func() tea.Msg { return tea.Quit() }
 		default:
 			// Keys not claimed by the shell go to the active tab.
-			if a.tab == 0 {
+			switch a.tab {
+			case 0:
 				models, cmd := a.models.Update(msg)
 				a.models = models
+				return a, cmd
+			case 1:
+				agent, cmd := a.agent.Update(msg)
+				a.agent = agent
 				return a, cmd
 			}
 		}
@@ -70,6 +78,11 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		modelsDeleteDoneMsg, modelsPullMsg, modelsPullDoneMsg, spinner.TickMsg:
 		models, cmd := a.models.Update(msg)
 		a.models = models
+		return a, cmd
+
+	case agentModelsLoadedMsg, agentModelsErrMsg, agentTokenMsg, agentDoneMsg:
+		agent, cmd := a.agent.Update(msg)
+		a.agent = agent
 		return a, cmd
 	}
 	return a, nil
@@ -99,9 +112,7 @@ func (a App) View() tea.View {
 	return tea.NewView(lipgloss.JoinVertical(lipgloss.Left, header, body, status))
 }
 
-func (a App) agentView() string {
-	return a.styles.Body.Render("Agent chat + tools (M2/M3)")
-}
+func (a App) agentView() string { return a.agent.View() }
 
 func (a App) settingsView() string {
 	return a.styles.Body.Render("Settings forms (M4)")

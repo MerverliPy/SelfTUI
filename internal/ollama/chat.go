@@ -1,0 +1,117 @@
+package ollama
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+)
+
+// Role identifies the speaker of a message in POST /api/chat conversations
+// (PLAN.md §5). Plain chat (M2) sends user/assistant pairs; the agent tool
+// loop (M3) adds system on top.
+type Role string
+
+const (
+	RoleSystem    Role = "system"
+	RoleUser      Role = "user"
+	RoleAssistant Role = "assistant"
+)
+
+// ChatMessage is one exchange in a /api/chat conversation.
+type ChatMessage struct {
+	Role    Role   `json:"role"`
+	Content string `json:"content"`
+}
+
+// ChatOptions are the sampling / context controls sent under "options".
+// Zero values are omitted so the server default applies.
+type ChatOptions struct {
+	Temperature float64 `json:"temperature,omitempty"`
+	TopP        float64 `json:"top_p,omitempty"`
+	NumCtx      int     `json:"num_ctx,omitempty"`
+}
+
+// ChatRequest is the POST /api/chat body. Tools are wired in the agent
+// milestone (M3); M2 plain chat sends none.
+type ChatRequest struct {
+	Model    string        `json:"model"`
+	Messages []ChatMessage `json:"messages"`
+	Stream   bool          `json:"stream"`
+	// Options is a pointer so that an all-zero options block is omitted from
+	// the wire (Go's omitempty does not apply to structs).
+	Options *ChatOptions `json:"options,omitempty"`
+}
+
+// Chat streams POST /api/chat. The response is NDJSON: every event carries a
+// message delta in message.content; onContent (nil allowed) receives each
+// non-empty delta in arrival order until the done:true event, which ends the
+// call normally.
+//
+// Like Pull, Chat is a long operation and goes through the stream client
+// (no request timeout): the caller's context is the only deadline, so the UI
+// can cancel mid-generation. Mirroring pull streams, an {"error": ...} line
+// inside the stream (HTTP 200) is the in-band error channel.
+func (c *Client) Chat(ctx context.Context, req ChatRequest, onContent func(string)) error {
+	const path = "/api/chat"
+	if req.Model == "" {
+		return fmt.Errorf("ollama POST %s: empty model name", path)
+	}
+	if len(req.Messages) == 0 {
+		return fmt.Errorf("ollama POST %s: empty message list", path)
+	}
+
+	body, err := json.Marshal(req)
+	if err != nil {
+		return fmt.Errorf("ollama POST %s: encode request: %w", path, err)
+	}
+	r, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+path, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("ollama POST %s: build request: %w", path, err)
+	}
+	r.Header.Set("Content-Type", "application/json")
+	if c.token != "" {
+		r.Header.Set("Authorization", "Bearer "+c.token)
+	}
+
+	resp, err := c.stream.Do(r)
+	if err != nil {
+		return fmt.Errorf("ollama POST %s: %w", path, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
+		return apiError(http.MethodPost, path, resp.StatusCode, raw)
+	}
+
+	dec := json.NewDecoder(resp.Body)
+	for {
+		var ev struct {
+			Message struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			} `json:"message"`
+			Done  bool   `json:"done"`
+			Error string `json:"error"`
+		}
+		if err := dec.Decode(&ev); err != nil {
+			if errors.Is(err, io.EOF) {
+				return fmt.Errorf("ollama POST %s: stream ended without done", path)
+			}
+			return fmt.Errorf("ollama POST %s: decode stream: %w", path, err)
+		}
+		if ev.Error != "" {
+			return fmt.Errorf("ollama POST %s: %s", path, ev.Error)
+		}
+		if ev.Message.Content != "" && onContent != nil {
+			onContent(ev.Message.Content)
+		}
+		if ev.Done {
+			return nil
+		}
+	}
+}

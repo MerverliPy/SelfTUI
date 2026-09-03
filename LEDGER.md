@@ -430,3 +430,56 @@ Charm set pinned (v2 line), tests green.
 - None blocking. README updated (M1b keys + `make smoke`). PLAN §10 M1b ticked; §12 next
   step = M2. Next fresh session: **M2 — chat + plain-chat path** (streaming chat in the
   Agent view, glamour markdown, input, graceful errors) → **Ship ALPHA**.
+
+### 2026-09-03 — M2 — Chat + plain-chat path (DONE)
+**Milestone:** M2 · **Result:** ✅ done — non-tool streaming chat path in Agent view works live with markdown rendering and explicit no-tool fallback.
+
+**Work done**
+- Added `internal/ollama/chat.go` with typed `/api/chat` request/response:
+  - `Role` / `ChatMessage` / `ChatOptions` / `ChatRequest`
+  - streaming `POST /api/chat` with NDJSON decode
+  - per-event in-band `error` handling (HTTP 200 stream errors)
+  - model/message/stream validation, context cancellation, and body cap via `maxBodyBytes`
+- Added `internal/ollama/chat_test.go`:
+  - payload fields
+  - streaming delta aggregation
+  - in-band and HTTP errors
+  - empty input guards
+  - bad JSON / missing done
+  - context cancellation, token auth, options omission when zero
+- Added `internal/ui/agent_view.go` (M2 Agent tab):
+  - model loading/default selection (`/api/tags` + config default fallback)
+  - markdown-rendered transcript with `glamour`
+  - textarea-driven input with plain enter to send, shift+enter newline
+  - `m` selector overlay (model switch), `r` refresh, `u`/`d` scrolling, `esc` stop
+  - streaming async channel plumbing with resubscribed command (`waitChatCmd`)
+  - stop-aware notice state (`stopped`) and graceful inline error/notice/hint lines
+  - scroll math fixed to count rendered lines (not block entries)
+- Wired Agent tab into `internal/ui/app.go`:
+  - App owns both `models` and `agent`
+  - dual init (`models.Init` + `agent.Init`)
+  - key routing with modal guards for tab jumps
+  - async chat events routed to Agent view
+- Added `internal/ui/agent_view_test.go` for model loading, send/commit flow, live streaming,
+  retry/error paths, selector, cancellation, scroll/resizes at multiple widths.
+
+**Commands + exit codes**
+- `go test ./...` `0`
+- `go test ./internal/ollama ./internal/ui -count=1` `0`
+- `go test ./internal/ui -run TestAgentViewScrollAndResize` `0`
+- `go test ./internal/ui/` `0`
+- `make check` `0` (`go build -o bin/selftui ./cmd/self-tui`; `go test ./...`; `go vet ./...`)
+
+**Decisions / notes**
+- Kept M2 strictly non-tool: plain chat prompt always sends to `/api/chat` and commits streamed
+  assistant content without tool calls.
+- `renderChatPane` scroll now uses flattened rendered lines and explicit follow offset, fixing early
+  failures where scrolling and content visibility were wrong on multi-line markdown blocks.
+- Stop handling marks `stopped` even if stream naturally finishes while cancellation was requested,
+  matching current UX expectations.
+
+**Blockers / open decisions**
+- None.
+
+**Next action**
+- Fresh session: begin **M3a — Read-only agent tool loop** (state machine + `read_file` / `list_dir` / `grep` path).
