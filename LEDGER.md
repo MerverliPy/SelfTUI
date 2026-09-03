@@ -239,3 +239,58 @@ Charm set pinned (v2 line), tests green.
 **Next action**
 - Begin **M0a** in a fresh session: measure WindowSizeMsg on real SSH clients (Blink/Termius),
   recalibrate `layout.go` thresholds, complete the go/no-go gate evidence.
+
+### 2026-09-03 — M0a: GATE — SSH measurement, layout recalibration, go/no-go evidence (DONE — GO)
+**Milestone:** M0a — gate · **Result:** done — **GO**; all 4 gate items evidenced; next is M1a.
+
+**Work done**
+- **`cmd/size-probe`** — two-mode measurement instrument: **tui** = Bubble Tea
+  `WindowSizeMsg` viewer (alt screen via `View.AltScreen`, v2 idiom), **raw** = standalone
+  `TIOCGWINSZ` + SIGWINCH CSV reporter with *no* Bubble Tea (deliberate: two independent
+  reporters of the same pty cross-check each other). Every event → screen + durable log
+  `$XDG_STATE_HOME/selftui/probe.txt`. Filters `WindowSizeMsg` 0x0 (a pty can deliver a
+  zero-size frame before negotiating a size — app must tolerate it; observed under
+  `script` without a parent tty).
+- **`scripts/probe-local.sh` + Makefile targets** (`probe`, `probe-raw`, `probe-local`,
+  `probe-build`): local control harness, **5/5 PASS** — exact negotiation at 50x100 /
+  88x44 / 120x40 / 160x50, plus live 88x44→100x50 mid-run resize. Bugs fixed along the
+  way: POSIX gives background jobs stdin=/dev/null, so raw mode now ioctls `/dev/tty`
+  (controlling terminal); tab-splitting must use awk (grep -E won't interpret `\t`).
+- **Owner decision — target client = Moshi** (custom answer; plan said Blink/Termius).
+  **Device run captured:** initial **72x30 → compact**, TERM=tmux-256color +
+  COLORTERM=truecolor (TrueColor), keys `j`(106)/DEL(127) delivered with correct codes.
+  Landscape not rotated during the run (residual).
+- **`internal/ui/layout.go` recalibration** — constants now evidence-anchored:
+  `devicePortraitCols = 72` (measured), `compactMax = 79`, `mediumMax = 119`,
+  `mediumSplitMin = 90` (replaces magic 90; 60/40 split keeps detail ≥50 cols).
+  Comments cite `docs/m0a-gate-evidence.md`. Measured 72 sits inside compact with margin;
+  landscape ≈150 cols (Wide) at default font.
+- **`app_test.go`** — `TestMeasuredDeviceWidthIsCompact` pins the measurement.
+- **`docs/run-command-containment.md`** (Spike 2) — argv allowlist, no shell/interpreter
+  (incl. metachar rejection), scrubbed env, output/resource caps, process-group kill,
+  per-call confirm, cwd jail, timeout, cancel, serialization; ships inline at M3b.
+- **`docs/m0a-gate-evidence.md`** — the four gate items + verdict **GO** + residuals.
+- PLAN §10 M0a tick, §11#6 (Moshi + instrument), §12 next-step refresh; README Moshi.
+
+**Commands + exit codes**
+- `make probe-local` `0` (5/5) · `make check` `0` (build+test+vet+fmt) · `gofmt -l .` empty
+- probe smoke under `script` / with `stty`: tui `0`, raw `0`
+- `ssh localhost …` `255` (no pubkey — unnecessary; pty→WindowSizeMsg path validated by harness)
+
+**Decisions / lines to respect**
+- **Gate = GO** — agent scope (M3a/M3b) proceeds; model mgmt + chat proceed regardless.
+- Thresholds compact ≤79 / medium 80–119 (split ≥90) / wide ≥120 are
+  measurement-backed; revisit when landscape/large-font data lands.
+- Moshi is the primary mobile client; Blink/Termius/iSH are similar but *unmeasured*.
+- `qwen3:8b` remains the release agent-model default (spike 1 + OD3); dual dispatch
+  stays an implementation requirement.
+
+**Blockers / open decisions (carry to next session)**
+- None blocking. **Residuals:** landscape geometry + rotation events (owner: run
+  `./bin/size-probe -dur 30` rotated, or after font change); reconnect behavior
+  (M5/M6 smoke); height-aware layout (device height 30 rows — stack by height for
+  M1a/M2 views, not just width); scrolling measurement when scrollable views land.
+
+**Next action**
+- Fresh session: **M1a** — ollama client `tags`/`show` + Models view selection &
+  inspect pane (exit: list + inspect models live).

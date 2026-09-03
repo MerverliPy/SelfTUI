@@ -117,6 +117,18 @@ func TestBreakpointBoundaries(t *testing.T) {
 	}
 }
 
+func TestMeasuredDeviceWidthIsCompact(t *testing.T) {
+	// M0a evidence: the real Moshi session on an iPhone 16 Pro measured
+	// 72x30 (docs/m0a-gate-evidence.md). The measured portrait width must
+	// classify compact and stack the Models panes.
+	if got := BreakpointFor(devicePortraitCols); got != Compact {
+		t.Errorf("BreakpointFor(%d) = %v, want Compact (measured device width)", devicePortraitCols, got)
+	}
+	if got := ForModels(devicePortraitCols).SideBySide; got {
+		t.Error("ForModels(devicePortraitCols).SideBySide = true, want false (stacked on the phone)")
+	}
+}
+
 // stripANSI removes SGR/CSI sequences so tests assert on text, not styling.
 func stripANSI(s string) string {
 	var b strings.Builder

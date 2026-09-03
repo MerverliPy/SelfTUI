@@ -1,18 +1,32 @@
 package ui
 
-// Breakpoint system (PLAN.md §7 + §10 M0).
+// Breakpoint system (PLAN.md §7 + §10 M0/M0a).
 //
-// Thresholds are deliberately centralized here. M0a will MEASURE real
-// WindowSizeMsg widths on the target SSH clients (Blink/Termius) and drive
-// these ranges from that measurement — they are explicitly NOT an assumed
-// 88-col value.
+// Thresholds are evidence-based, not assumed: M0a MEASURED the target SSH
+// client (Moshi, iPhone 16 Pro) at 72 cols x 30 rows portrait with the
+// default font — see docs/m0a-gate-evidence.md; the local control harness is
+// scripts/probe-local.sh, instrument = cmd/size-probe. Moshi landscape at the
+// default font is ~150+ cols (Wide); with a large font ~100–119 (Medium).
+// PC terminals are the wide reference.
 
 const (
+	// devicePortraitCols is the measured narrow geometry: Moshi on an iPhone
+	// 16 Pro in portrait, default font. Anchor for the compact range.
+	devicePortraitCols = 72
+
 	// compactMax is the widest "compact" layout: stacked panels, full-width
-	// controls. Target: narrow SSH windows (iPhone portrait).
+	// controls. Holds the measured portrait width (72) with margin for
+	// zoomed-in fonts (~60–78 cols).
 	compactMax = 79
 	// mediumMax is the widest "medium" layout: split panels where sensible.
+	// Portrait never reaches it; landscape-with-large-font and mid-size PC
+	// windows do.
 	mediumMax = 119
+	// mediumSplitMin: below this, a medium-width screen still stacks the
+	// Models panes — a 60/40 split would leave the detail pane <50 cols,
+	// which is not readable on the phone. Roughly 1.25x the measured
+	// portrait width.
+	mediumSplitMin = 90
 )
 
 // Breakpoint classifies a width for layout selection.
@@ -67,8 +81,9 @@ func ForModels(width int) ModelsLayout {
 	case Wide:
 		return ModelsLayout{SideBySide: true, ListWidth: width * 40 / 100}
 	case Medium:
-		// narrow-but-split: stack below 90 cols to keep text readable.
-		if width < 90 {
+		// narrow-but-split: below mediumSplitMin, keep text readable by
+		// stacking (a split leaves the detail pane <50 cols).
+		if width < mediumSplitMin {
 			return ModelsLayout{SideBySide: false}
 		}
 		return ModelsLayout{SideBySide: true, ListWidth: width * 40 / 100}

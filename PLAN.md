@@ -304,15 +304,20 @@ dependency set pinned; root model + tab/status bar;
 config load; **responsive shell + breakpoint system at measured sizes** (not an assumed
 88-col); cancellation plumbing. ✅ *Exit: app boots, tabs work, clean build, Charm set compiles.*
 
-**M0a — GATE: measurement + technical/security/device spikes** *(hard gate before any
-agent work; Models/chat may proceed regardless)*. Measure real `WindowSizeMsg`
+**M0a — GATE: measurement + technical/security/device spikes** ✅ *done 2026-09-03 —
+GO, evidence in `docs/m0a-gate-evidence.md` + LEDGER*. Measure real `WindowSizeMsg`
 width/height, resize, key delivery, color, scrolling, reconnect on the actual SSH
 client(s). **Spike 1:** Ollama tool-calling on named release-target models — streamed arg
 assembly, malformed/parallel calls, multi-tool-turn correlation, retries, cancellation,
 context exhaustion, iteration exhaustion. **Spike 2:** `run_command` containment design
 (argv-allowlist, no-shell, scrubbed env, limits, process-kill). ✅ *Exit: predefined
 go/no-go gate passes = one validated target workflow + supported model/tool-loop
-compatibility + command containment + observed mobile usability.*
+compatibility + command containment + observed mobile usability.* — **All four items
+passed 2026-09-03:** measured Moshi (owner client, iPhone 16 Pro) 72x30 portrait /
+truecolor / key delivery (`cmd/size-probe` + `scripts/probe-local.sh` harness 5/5);
+`qwen3:8b` native tool loop PASS (spike 1 + OD3); containment design in
+`docs/run-command-containment.md`; verdict **GO**. Residuals carried: landscape
+geometry, reconnect, height-aware layout, scrolling.
 
 **M1a — Model list/show.** ollama client tags/show; Models view selection + inspect pane.
 ✅ *Exit: list + inspect models live.*
@@ -357,7 +362,7 @@ first safety gate.)*
 | 3 | **Agent tool breadth** | "Full coding agent" is large. v1 tool set is bounded by the read-only (M3a) then mutation (M3b) split. Confirm whether git-awareness/project-indexing/multi-file apply belong in v1 or later. |
 | 4 | **Coding model + dispatch** | *OD3 resolved:* default agent model = **`qwen3:8b`** (native tool PASS). Dual dispatch (native `tool_calls` + content-embedded tool-JSON) stays required for pick-any-model (`qwen2.5-coder` content-JSON; `gemma3` → 400 → explicit non-agent fallback). Agent loop must handle qwen3 `thinking` phase. |
 | 5 | **Remote host auth + job serialization** | Basic/bearer depends on what the remote exposes — verify the concrete setup. *Owner decision:* serialize Ollama jobs (no pull during agent) vs allow overlap on one GPU. |
-| 6 | **iPhone terminal width** | **Measure**, don't assume 88-col. Confirm actual cols/rows + key behavior + reconnect per Blink/Termius during M0a, and drive breakpoint ranges from that measurement. |
+| 6 | **iPhone terminal width** | **Measure**, don't assume 88-col. Confirm actual cols/rows + key behavior + reconnect **per Moshi (owner's client; Blink/Termius/iSH similar)** during M0a, and drive breakpoint ranges from that measurement. *M0a update:* measurement instrument = `cmd/size-probe` (+ `make probe-local` harness); owner device run records into `$XDG_STATE_HOME/selftui/probe.txt`.
 | 7 | **Charm version set** | *Owner decision:* pick **v1 or v2 as one aligned set** (bubbletea/lipgloss/huh/bubbles/glamour) after a compile spike; never mix majors. |
 | 8 | **Concurrency + model structure** | *Owner decision:* activity channel (resubscribed `tea.Cmd`) vs `tea.Program.Send`; token coalescing + context cancel; nested per-view `tea.Models` vs god `Update`. Ordered events + nonblocking `Update` required; race/teardown tests. |
 | 9 | **Grep dependency** | *Owner decision:* declared `rg` runtime prerequisite vs pure-Go grep. *Pure-Go preferred* to preserve the single-binary claim unless `rg` speed is required. |
@@ -369,15 +374,11 @@ first safety gate.)*
 
 ## 12. Next step
 
-This plan pins the architecture, the re-cut ship-gated roadmap, and the council verdict.
-**No code has been written.** Decisions captured: Go + Bubble Tea, SSH-into-host on iPhone,
-full coding agent, configurable Ollama host, standalone repo at `/home/calvin/SelfTUI`, glamour
-markdown, council re-cut (M0a gate; M1 split; M3a/M3b; inline safety; alpha after M2).
-
-On green-light, **M0** begins: repo setup (done — `git init` at `/home/calvin/SelfTUI`;
-dotfiles ignores it automatically), Charm set pinned, skeleton + responsive shell, then
-**M0a** measurement + spikes for the go/no-go
-gate. Track decisions + work in `LEDGER.md` (§13) and record each milestone exit there.
+**M0 (repo skeleton + pinned Charm v2 set + responsive shell) landed, and the M0a gate
+PASSED 2026-09-03 (GO — `docs/m0a-gate-evidence.md`).** Agent work is now un-gated.
+Next milestone: **M1a — model list/show**: ollama client `tags`/`show`; Models view
+selection + inspect pane; breakpoints already measurement-anchored (compact ≤79 /
+medium 80–119 / wide ≥120). Landscapes/reconnect measurement residues await M5.
 
 ---
 

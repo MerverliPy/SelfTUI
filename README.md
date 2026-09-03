@@ -2,8 +2,8 @@
 
 A visually appealing, responsive terminal UI to manage local/remote Ollama
 models, with an embedded AI coding-agent chat and a settings panel. Runs
-identically on a PC (native terminal) and over SSH on a phone (Blink/Termius)
-— layout adapts to narrow windows.
+identically on a PC (native terminal) and over SSH on a phone (Moshi;
+Blink/Termius similar) — layout adapts to narrow windows.
 
 **Status: M0 — skeleton.** The app boots, tabs work, the responsive layout
 system and cancellation plumbing are in place, and the Charm dependency set is
