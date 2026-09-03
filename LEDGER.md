@@ -711,3 +711,19 @@ bug found by the smoke and fixed, release docs. `make check` and
   future device run (documented in `docs/reconnect.md`). Per the session rule,
   stop here. Next fresh session: **v0.1 release** (tag the M6 build, release
   notes) or any owner-assigned follow-up.
+### 2026-09-03 — Owner decision for M7 (recorded between sessions)
+- **Pre-v0.1 UX polish step added (M7)**, scoped by the owner with opencode.ai's
+  TUI as the reference for feel/smoothness (researched: leader keys, command
+  palette ctrl+p, slash commands, filter-as-you-type pickers, per-turn
+  status/stop reasons, context visibility).
+- Selected packages: **A — composer + slash commands + ctrl+p palette**,
+  **B — transcript feel** (streaming caret, model chips, elapsed + stop
+  reason, paging/auto-follow), **C — context meter + filterable model
+  picker**. Package **D** (help/onboarding overlay) explicitly dropped for v0.1.
+- Per the binding one-step-per-session rule this starts in a **fresh session**
+  (cwd /home/calvin/SelfTUI); scope + constraints recorded in `PLAN.md` §10
+  (M7) and §12. Order within M7 is up to the executing session; each package
+  is one scoped build step with golden-test acceptance at 72×30/120×40.
+- Open for the M7 session to resolve: exact keybind set for palette/slash
+  (phone keyboards: no ctrl+p hardware? Blink maps ctrl; verify) and whether
+  the context meter lives in the hint row or the status bar.

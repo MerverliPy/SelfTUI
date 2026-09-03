@@ -383,6 +383,27 @@ helper removed. `selftui -version` prints `0.6.0-m6` and is logged at startup.
 *(Hardening was pushed inline into each tool's milestone, so M6 is acceptance, not the
 first safety gate.)*
 
+**M7 — UX polish, pre-v0.1 (owner scope 2026-09-03; opencode.ai TUI as the
+reference for feel).** Runs after M6, before the v0.1 tag. Owner selected
+packages **A + B + C** (D — onboarding/help — dropped for v0.1):
+- **A — Composer + commands:** slash-command menu with live filter over the
+  Agent input (`/clear` with confirm, `/model`, `/theme`, `/help`, `/refresh`)
+  + a command palette (`ctrl+p`) reachable from any tab; `esc` clears a
+  drafted prompt when idle; "`/` for commands" placeholder. Reuses the modal/
+  overlay + fitContent height-cap machinery; every overlay golden-tested at
+  72×30 and 120×40.
+- **B — Transcript feel:** stable per-block headers with a model chip;
+  streaming caret ("▍") that disappears at rest; after each turn show
+  elapsed + stop reason (done_reason: stop/length); pgup/pgdn paging and an
+  auto-follow toggle alongside u/d.
+- **C — Context meter + picker upgrade:** live context meter (`ctx
+  ▓▓▓░░ 62%`) in the Agent hint/status reusing BudgetMessages' approximate
+  token math (make the truncation marker visible); model selector upgraded to
+  filter-as-you-type showing family/size/quant with the default model starred.
+Constraints to respect: phone-first compact geometry, letter-command
+empty-input rule, digits-are-text-while-composing lesson, every overlay
+height-capped. *Next: v0.1 release after M7 lands.*
+
 ---
 
 ## 11. Risks & open questions
@@ -421,8 +442,10 @@ tests, settings save-error + retry test, context-truncation edge fixes
 (single-huge-turn bound, plain-chat fallback budget, marker idempotence, tool
 args counted), digit-tab-jump bug fix + regression test, `-version` flag,
 release docs (`docs/reconnect.md`, README). `make check` and `go test -race`
-green. Next: **v0.1 release** (tag the M6 build, ship notes) — or any
-owner-assigned follow-up.
+green. Next: **M7 — UX polish, pre-v0.1** (owner-scoped: composer + slash
+commands/palette, transcript feel, context meter + filterable model picker —
+opencode.ai TUI as the reference; scope + constraints in §10 M7). A fresh
+session executes M7, then **v0.1 release** (tag, release notes).
 
 ---
 
