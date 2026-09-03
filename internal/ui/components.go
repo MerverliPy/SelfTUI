@@ -32,6 +32,27 @@ func fitContent(lines []string, budget int) []string {
 	return out
 }
 
+// renderCenteredOverlay centers a bordered dialog over a body band. Shared by
+// every full-screen overlay (Agent modals, the App command palette) so they
+// render identically: the body is capped at bodyH-4 rows, then padded and
+// centered — a long payload (a multi-KB tool input, a long list) can never
+// push the box past the terminal height. On a 30-row phone the decision
+// legend and status bar must stay on screen (see fitContent).
+func renderCenteredOverlay(w, bodyH int, styles Styles, title string, lines []string) string {
+	innerW := maxInt(w-6, 16)
+	wrapped := wrapLines(lines, innerW)
+	wrapped = fitContent(wrapped, maxInt(bodyH-4, 4))
+	padded := make([]string, len(wrapped))
+	for i, l := range wrapped {
+		padded[i] = l + strings.Repeat(" ", maxInt(0, innerW-lipgloss.Width(l)))
+	}
+	content := strings.Join(padded, "\n")
+	box := styles.Pane.Render(
+		lipgloss.NewStyle().Bold(true).Foreground(styles.accent).Render(title) + "\n\n" + content,
+	)
+	return lipgloss.Place(w, maxInt(1, bodyH), lipgloss.Center, lipgloss.Center, box)
+}
+
 // Tab labels in navigation order. <1>/<2>/<3> and tab/shift-tab cycle here.
 var tabLabels = []string{"Models", "Agent", "Settings"}
 

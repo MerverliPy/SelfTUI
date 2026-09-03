@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strings"
 	"time"
@@ -42,6 +43,21 @@ type AgentView struct {
 	turnModel []string
 	render    []string
 
+	// Transcript meta (M7-B): per committed assistant message, a footer row
+	// with the turn's elapsed time and terminal reason ("3.4s · stop"). It is
+	// a separate parallel slice so geometry-change re-renders of render never
+	// lose it; cleared with the conversation.
+	turnMeta  []string
+	turnStart time.Time // when the current turn started (elapsed footer)
+
+	// Context budget (M7-C): systemPrompt is kept on the view so the meter and
+	// the truncation-marker check budget against the same payload the runner
+	// sends (system prompt + conversation). truncated turns on when a send
+	// exceeds the input budget; the truncation marker then stays visible in
+	// the transcript head until /clear.
+	systemPrompt string
+	truncated    bool
+
 	streaming    bool                  // generation in flight
 	streamText   string                // in-flight assistant content (deltas appended)
 	stopRequest  bool                  // esc asked to stop; treat stream end as a stop
@@ -60,14 +76,28 @@ type AgentView struct {
 	chatErr string
 	notice  string
 
+	// Composer (M7-A): slash-command drafting. The menu is derived from the
+	// live input value (typing "/cl" filters to clear), so there is no
+	// separate buffer; slashIdx is the highlighted row and slashQuery the
+	// last-seen filter (a change resets the highlight to the top).
+	// helpOpen is the /help overlay; clearConfirm asks before wiping the
+	// conversation (both are modals for the App's tab-jump guard).
+	slashIdx     int
+	slashQuery   string
+	helpOpen     bool
+	clearConfirm bool
+
 	// Transcript scroll: follow auto-tails the newest content while
 	// streaming or after a new turn; u/d scroll away from the tail.
 	scroll int
 	follow bool
 
-	// Model selector overlay.
+	// Model selector overlay. M7-C: filter-as-you-type with the config default
+	// starred; the filter is a plain string (the overlay owns its keys), not a
+	// textinput, so typing letters filters instead of moving a cursor.
 	selectorOpen bool
 	selIdx       int
+	selFilter    string
 
 	// glamour renderer, rebuilt when width changes (wrap is width-bound).
 	tr      *glamour.TermRenderer
@@ -97,7 +127,7 @@ func NewAgentViewWithWorkspace(client *ollama.Client, styles Styles, theme, defa
 func newAgentView(client *ollama.Client, styles Styles, theme, defaultModel, workspaceRoot, systemPrompt string, agentCfg config.AgentConfig) AgentView {
 	ta := textarea.New()
 	ta.Prompt = "❯ "
-	ta.Placeholder = "chat with the selected model…"
+	ta.Placeholder = "/ for commands, or chat with the selected model…"
 	ta.ShowLineNumbers = false // line numbers waste width on a phone
 	ta.Focus()                 // the input is the Agent tab's primary surface
 	return AgentView{
@@ -110,6 +140,7 @@ func newAgentView(client *ollama.Client, styles Styles, theme, defaultModel, wor
 		temperature:  agentCfg.Temperature,
 		topP:         agentCfg.TopP,
 		numCtx:       agentCfg.NumCtx,
+		systemPrompt: systemPrompt,
 		follow:       true,
 		input:        ta,
 		selectorOpen: false,
@@ -123,7 +154,16 @@ func newAgentView(client *ollama.Client, styles Styles, theme, defaultModel, wor
 type agentModelsLoadedMsg struct{ models []ollama.Model }
 type agentModelsErrMsg struct{ err string }
 type agentTokenMsg struct{ text string }
-type agentDoneMsg struct{ err string }
+
+type agentDoneMsg struct {
+	err    string
+	reason string // terminal ollama done_reason of the final stream (stop/length)
+}
+
+// agentThemeMsg asks the root App to switch the whole shell theme. The Agent
+// view does not own the palette (settings do), so the slash command /theme
+// emits this and App applies it (M7-A).
+type agentThemeMsg struct{ theme string }
 
 // Init starts the model list fetch for the selector.
 func (v AgentView) Init() tea.Cmd {
@@ -144,7 +184,7 @@ func (v AgentView) loadModelsCmd() tea.Cmd {
 
 // startChat begins a streaming agent turn in a background goroutine. The
 // activity channel carries tool events, token deltas, and one final
-// agentDoneMsg.
+// agentDoneMsg. turnStart anchors the per-turn elapsed footer (M7-B).
 func (v AgentView) startChat() (AgentView, tea.Cmd) {
 	ch := make(chan tea.Msg, 64)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -157,6 +197,7 @@ func (v AgentView) startChat() (AgentView, tea.Cmd) {
 	v.chatErr = ""
 	v.notice = ""
 	v.follow = true
+	v.turnStart = time.Now()
 
 	model := v.model
 	history := append([]ollama.ChatMessage(nil), v.history...)
@@ -186,8 +227,11 @@ func (v AgentView) waitChatCmd() tea.Cmd {
 }
 
 // ModalOpen reports whether the Agent tab is showing a modal. The root App
-// uses it so the 1/2/3 tab-jump keys cannot steal from an approval dialog.
-func (v AgentView) ModalOpen() bool { return v.selectorOpen || v.confirmation != nil }
+// uses it so the 1/2/3 tab-jump keys cannot steal from an approval dialog, a
+// confirmation, or the help overlay.
+func (v AgentView) ModalOpen() bool {
+	return v.selectorOpen || v.confirmation != nil || v.helpOpen || v.clearConfirm
+}
 
 // --- update ---------------------------------------------------------------
 
@@ -260,7 +304,7 @@ func (v AgentView) Update(msg tea.Msg) (AgentView, tea.Cmd) {
 		return v.onChatDone(msg)
 
 	case agent.AgentDoneMsg:
-		return v.onChatDone(agentDoneMsg{err: msg.Err})
+		return v.onChatDone(agentDoneMsg{err: msg.Err, reason: msg.Reason})
 
 	case tea.KeyMsg:
 		v, cmd = v.handleKey(msg)
@@ -314,8 +358,9 @@ func (v AgentView) onModelsLoaded(models []ollama.Model) (AgentView, tea.Cmd) {
 }
 
 // onChatDone finalizes a turn: commits the streamed text as an assistant
-// message (when non-empty), then surfaces an error unless the user stopped
-// the stream with esc (a stop is not an error).
+// message (when non-empty) with a footer of elapsed time + the terminal
+// reason (M7-B), then surfaces an error unless the user stopped the stream
+// with esc (a stop is not an error).
 func (v AgentView) onChatDone(m agentDoneMsg) (AgentView, tea.Cmd) {
 	v.streaming = false
 	v.stopCancel = nil
@@ -324,8 +369,10 @@ func (v AgentView) onChatDone(m agentDoneMsg) (AgentView, tea.Cmd) {
 	v.confirmation = nil
 
 	if v.streamText != "" {
+		meta := turnFooter(v.turnStart, m.reason, v.stopRequest)
 		v.history = append(v.history, ollama.ChatMessage{Role: ollama.RoleAssistant, Content: v.streamText})
 		v.turnModel = append(v.turnModel, v.model)
+		v.turnMeta = append(v.turnMeta, meta)
 		v.render = append(v.render, v.renderBlock(v.assistantHeader(v.model), v.streamText))
 		v.streamText = ""
 	}
@@ -351,6 +398,8 @@ func (v AgentView) handleKey(msg tea.KeyMsg) (AgentView, tea.Cmd) {
 	}
 	k := msg.Key()
 
+	// Hard modals own every key: a pending mutation approval, the model
+	// selector, the /clear confirmation, and the /help overlay.
 	if v.confirmation != nil {
 		switch {
 		case k.Text == "y" || k.Code == tea.KeyEnter:
@@ -366,6 +415,48 @@ func (v AgentView) handleKey(msg tea.KeyMsg) (AgentView, tea.Cmd) {
 	}
 	if v.selectorOpen {
 		return v.selectorKey(k)
+	}
+	if v.clearConfirm {
+		return v.clearConfirmKey(k)
+	}
+	if v.helpOpen {
+		if k.Code == tea.KeyEsc || k.Code == tea.KeyEnter || k.Text == "x" {
+			v.helpOpen = false
+		}
+		return v, nil
+	}
+
+	// While a slash draft is showing, arrows steer the highlighted row, enter
+	// runs it, and esc drops the whole draft. Every other key keeps editing
+	// the draft, so the menu filters live as characters land (backspace too).
+	if v.slashMenu() {
+		switch {
+		case k.Code == tea.KeyEsc:
+			ti := v.input
+			ti.Reset()
+			v.input = ti
+			v.slashQuery = ""
+			v.slashIdx = 0
+			return v, nil
+		case k.Code == tea.KeyEnter && !k.Mod.Contains(tea.ModShift):
+			return v.runSlashCommand()
+		case k.Code == tea.KeyUp:
+			if v.slashIdx > 0 {
+				v.slashIdx--
+			}
+			return v, nil
+		case k.Code == tea.KeyDown:
+			if n := len(v.slashMatches()); v.slashIdx < n-1 {
+				v.slashIdx++
+			}
+			return v, nil
+		}
+		// Draft text changed: reset the highlight to the top row unless the
+		// filter still selects the same command (keep it simple: top row).
+		if q := v.slashQueryOf(); q != v.slashQuery {
+			v.slashQuery = q
+			v.slashIdx = 0
+		}
 	}
 
 	switch {
@@ -383,13 +474,34 @@ func (v AgentView) handleKey(msg tea.KeyMsg) (AgentView, tea.Cmd) {
 		}
 		return v.sendInput()
 	case k.Code == tea.KeyEsc:
-		if v.streaming && v.stopCancel != nil {
+		switch {
+		case v.streaming && v.stopCancel != nil:
 			v.stopRequest = true
 			v.stopCancel()
+		case v.input.Value() != "":
+			// Idle with a drafted prompt: esc clears it (M7-A). A second esc
+			// on an already-empty input is a no-op.
+			ti := v.input
+			ti.Reset()
+			v.input = ti
+			v.slashQuery = ""
+			v.slashIdx = 0
+		}
+		return v, nil
+	case (k.Code == tea.KeyPgUp || k.Code == tea.KeyPgDown) && v.input.Value() == "" && !v.streaming:
+		return v.pageScroll(k.Code == tea.KeyPgUp)
+	case k.Text == "f" && v.input.Value() == "" && !v.streaming:
+		// Auto-follow toggle (M7-B): off lets pgup/u scroll away; on snaps
+		// back to the live tail.
+		if v.follow {
+			v.follow = false
+		} else {
+			v.follow = true
+			v.scroll = 0
 		}
 		return v, nil
 	case k.Text == "m" && v.input.Value() == "" && !v.streaming:
-		// The letter commands (m/r/u/d) only fire while the input is empty,
+		// The letter commands (m/r/u/d/f) only fire while the input is empty,
 		// so typing ordinary prose never triggers them (confirmed live: the
 		// 'm' in "stop me" opened the selector — M2 lesson).
 		return v.openSelector()
@@ -404,14 +516,44 @@ func (v AgentView) handleKey(msg tea.KeyMsg) (AgentView, tea.Cmd) {
 		return v, nil
 	case k.Text == "d" && v.input.Value() == "":
 		v.scroll--
-		v.follow = false
 		v.clampScroll()
+		if v.scroll <= 0 {
+			v.follow = true // reaching the tail re-engages auto-follow
+		}
 		return v, nil
 	}
 
 	ta, cmd := v.input.Update(msg)
 	v.input = ta
 	return v, cmd
+}
+
+// pageScroll moves the transcript window one visible page (pgup up, pgdn
+// down). Reaching the tail on the way down re-engages auto-follow.
+func (v AgentView) pageScroll(up bool) (AgentView, tea.Cmd) {
+	page := maxInt(1, v.pageHeight())
+	if up {
+		v.scroll += page
+		v.follow = false
+	} else {
+		v.scroll -= page
+		if v.scroll <= 0 {
+			v.scroll = 0
+			v.follow = true
+			return v, nil
+		}
+		v.follow = false
+	}
+	v.clampScroll()
+	return v, nil
+}
+
+// pageHeight is the number of visible transcript rows used as the pgup/pgdn
+// page size — the same accounting renderChatPane uses for its window.
+func (v AgentView) pageHeight() int {
+	bodyH := maxInt(v.h-2, 1)
+	chatH := maxInt(bodyH-4-1, 1)
+	return maxInt(chatH-2, 1)
 }
 
 // sendInput appends the typed text as a user message and starts a stream.
@@ -430,11 +572,106 @@ func (v AgentView) sendInput() (AgentView, tea.Cmd) {
 
 	v.history = append(v.history, ollama.ChatMessage{Role: ollama.RoleUser, Content: text})
 	v.turnModel = append(v.turnModel, v.model)
+	v.turnMeta = append(v.turnMeta, "") // placeholder keeps turnMeta aligned with history
 	v.render = append(v.render, v.renderBlock(v.userHeader(), text))
+	v.checkContextBudget()
 	return v.startChat()
 }
 
-// --- model selector -------------------------------------------------------
+// --- slash commands (M7-A) ------------------------------------------------
+
+// slashCommand is one entry of the "/" command menu.
+type slashCommand struct {
+	name string // matched after the leading "/"
+	desc string
+}
+
+func slashCommandList() []slashCommand {
+	return []slashCommand{
+		{"clear", "clear the conversation (asks first)"},
+		{"model", "pick a model (m)"},
+		{"theme", "toggle dark/light for this session"},
+		{"help", "list slash commands and keys"},
+		{"refresh", "reload the model list (r)"},
+	}
+}
+
+// slashQueryOf is the lowercased filter text after the leading "/".
+func (v AgentView) slashQueryOf() string {
+	return strings.ToLower(strings.TrimPrefix(v.input.Value(), "/"))
+}
+
+// slashMenu reports whether the command menu should show: the input holds a
+// "/" draft that still matches at least one command. A draft matching
+// nothing ("how do I write a /"? chat about a file named /x) is treated as
+// ordinary prose and typed/sent normally.
+func (v AgentView) slashMenu() bool {
+	if v.streaming || v.input.Value() == "" || !strings.HasPrefix(v.input.Value(), "/") {
+		return false
+	}
+	return len(v.slashMatches()) > 0
+}
+
+// slashMatches returns the commands whose name starts with the draft filter.
+func (v AgentView) slashMatches() []slashCommand {
+	q := v.slashQueryOf()
+	var out []slashCommand
+	for _, c := range slashCommandList() {
+		if strings.HasPrefix(c.name, q) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// runSlashCommand executes the highlighted command, consuming the draft. Only
+// reachable while the menu is open (the highlight is in range).
+func (v AgentView) runSlashCommand() (AgentView, tea.Cmd) {
+	matches := v.slashMatches()
+	if len(matches) == 0 {
+		return v, nil
+	}
+	if v.slashIdx < 0 || v.slashIdx >= len(matches) {
+		v.slashIdx = 0
+	}
+	name := matches[v.slashIdx].name
+
+	ti := v.input
+	ti.Reset()
+	v.input = ti
+	v.slashQuery = ""
+	v.slashIdx = 0
+
+	switch name {
+	case "clear":
+		if len(v.history) == 0 && v.streamText == "" {
+			v.notice = "nothing to clear"
+			return v, nil
+		}
+		v.clearConfirm = true
+		return v, nil
+	case "model":
+		return v.openSelector()
+	case "theme":
+		next := "dark"
+		if v.dark {
+			next = "light"
+		}
+		// The theme lives on the root App (shared with Settings and Models);
+		// emit a message and let App apply it shell-wide.
+		return v, func() tea.Msg { return agentThemeMsg{theme: next} }
+	case "help":
+		v.helpOpen = true
+		return v, nil
+	case "refresh":
+		v.loading = true
+		v.modelsErr = ""
+		return v, v.loadModelsCmd()
+	}
+	return v, nil
+}
+
+// --- model selector (M7-C: filter as you type) ----------------------------
 
 func (v AgentView) openSelector() (AgentView, tea.Cmd) {
 	if len(v.models) == 0 {
@@ -442,29 +679,191 @@ func (v AgentView) openSelector() (AgentView, tea.Cmd) {
 		return v, nil
 	}
 	v.selectorOpen = true
+	v.selFilter = ""
+	v.reanchorSelector()
 	return v, nil
 }
 
+// filteredModels applies the live selector filter, a case-insensitive
+// substring across name, family, parameter size, and quantization.
+func (v AgentView) filteredModels() []ollama.Model {
+	f := strings.ToLower(strings.TrimSpace(v.selFilter))
+	if f == "" {
+		return v.models
+	}
+	var out []ollama.Model
+	for _, m := range v.models {
+		hay := strings.ToLower(strings.Join([]string{m.Name, m.Family, m.ParameterSize, m.Quantization}, " "))
+		if strings.Contains(hay, f) {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// reanchorSelector points the highlight at the current chat model when a
+// filter edit still contains it, else at the top of the filtered list.
+func (v *AgentView) reanchorSelector() {
+	if v.model != "" {
+		for i, m := range v.filteredModels() {
+			if m.Name == v.model {
+				v.selIdx = i
+				return
+			}
+		}
+	}
+	v.selIdx = 0
+}
+
 func (v AgentView) selectorKey(k tea.Key) (AgentView, tea.Cmd) {
+	list := v.filteredModels()
 	switch {
 	case k.Code == tea.KeyEsc:
 		v.selectorOpen = false
+		v.selFilter = ""
+		v.selIdx = 0
 	case k.Code == tea.KeyEnter:
-		if v.selIdx >= 0 && v.selIdx < len(v.models) {
-			v.model = v.models[v.selIdx].Name
+		if len(list) > 0 && v.selIdx >= 0 && v.selIdx < len(list) {
+			v.model = list[v.selIdx].Name
 			v.notice = "model " + v.model
 		}
 		v.selectorOpen = false
+		v.selFilter = ""
 	case k.Text == "j" || k.Code == tea.KeyDown:
-		if v.selIdx < len(v.models)-1 {
+		if v.selIdx < len(list)-1 {
 			v.selIdx++
 		}
 	case k.Text == "k" || k.Code == tea.KeyUp:
 		if v.selIdx > 0 {
 			v.selIdx--
 		}
+	case k.Code == tea.KeyBackspace:
+		if v.selFilter != "" {
+			v.selFilter = trimLastRune(v.selFilter)
+			v.reanchorSelector()
+		}
+	default:
+		// Every other printable rune extends the live filter. j/k stay
+		// reserved for navigation; spaces are legal filter characters.
+		if t := k.Text; t != "" {
+			v.selFilter += t
+			v.reanchorSelector()
+		}
 	}
 	return v, nil
+}
+
+// trimLastRune removes the final rune (used by the selector filter backspace).
+func trimLastRune(s string) string {
+	if s == "" {
+		return ""
+	}
+	r := []rune(s)
+	return string(r[:len(r)-1])
+}
+
+// clearConfirmKey handles y/enter (wipe) vs n/esc (cancel) in the /clear dialog.
+func (v AgentView) clearConfirmKey(k tea.Key) (AgentView, tea.Cmd) {
+	switch {
+	case k.Text == "y" || k.Code == tea.KeyEnter:
+		v.clearConfirm = false
+		v.notice = "conversation cleared"
+		v.history = nil
+		v.turnModel = nil
+		v.turnMeta = nil
+		v.render = nil
+		v.scroll = 0
+		v.follow = true
+		v.truncated = false
+	case k.Text == "n" || k.Code == tea.KeyEsc:
+		v.clearConfirm = false
+		v.notice = "clear cancelled"
+	}
+	return v, nil
+}
+
+// --- context budget (M7-C) ------------------------------------------------
+
+// payloadMessages mirrors exactly what the runner will send on the next turn
+// (system prompt + committed conversation + in-flight/drafted text), so the
+// meter and truncation marker budget against the same payload BudgetMessages
+// sees.
+func (v AgentView) payloadMessages() []ollama.ChatMessage {
+	var msgs []ollama.ChatMessage
+	if v.systemPrompt != "" {
+		msgs = append(msgs, ollama.ChatMessage{Role: ollama.RoleSystem, Content: v.systemPrompt})
+	}
+	msgs = append(msgs, v.history...)
+	if v.streaming && v.streamText != "" {
+		msgs = append(msgs, ollama.ChatMessage{Role: ollama.RoleAssistant, Content: v.streamText})
+	}
+	if v.input.Value() != "" {
+		msgs = append(msgs, ollama.ChatMessage{Role: ollama.RoleUser, Content: v.input.Value()})
+	}
+	return msgs
+}
+
+// ctxTokens counts the approximate tokens of the next payload using the same
+// estimator as agent.BudgetMessages (4 chars per token).
+func (v AgentView) ctxTokens() int {
+	return agent.ApproxTokens(v.payloadMessages())
+}
+
+// checkContextBudget flags the conversation as truncated when a send exceeds
+// the input budget the runner enforces (three quarters of numCtx). The flag
+// surfaces the truncation marker in the transcript head until /clear (M7-C:
+// make the marker visible, not a silent wire-only drop).
+func (v *AgentView) checkContextBudget() {
+	limit := v.ctxLimit()
+	if limit > 0 && v.ctxTokens() > limit {
+		v.truncated = true
+	}
+}
+
+// ctxLimit is the approximate input-token budget: three quarters of numCtx,
+// the same bound BudgetMessages enforces (the model keeps the rest to reply).
+func (v AgentView) ctxLimit() int {
+	return v.numCtx * 3 / 4
+}
+
+// ctxPct is the budget percentage used, 0..100, computed from the same
+// approximate tokens BudgetMessages counts.
+func (v AgentView) ctxPct() int {
+	limit := v.ctxLimit()
+	if limit <= 0 {
+		return 0
+	}
+	pct := v.ctxTokens() * 100 / limit
+	if pct > 100 {
+		pct = 100
+	}
+	return pct
+}
+
+// ctxMeterPlain renders the plain (unstyled) live context meter, e.g.
+// "ctx ▓▓░░░ 38%", used for width fitting; ctxMeterStyled restyles it.
+func (v AgentView) ctxMeterPlain() string {
+	limit := v.ctxLimit()
+	if limit <= 0 {
+		return ""
+	}
+	pct := v.ctxPct()
+	filled := (pct + 9) / 20
+	if filled > 5 {
+		filled = 5
+	}
+	bar := strings.Repeat("▓", filled) + strings.Repeat("░", 5-filled)
+	return "ctx " + bar + " " + fmt.Sprintf("%d%%", pct)
+}
+
+// ctxMeterStyled colors the meter: muted below full, error (red) at 100% —
+// the truncation point the runner enforces.
+func (v AgentView) ctxMeterStyled(plain string) string {
+	var pct int
+	if n, err := fmt.Sscanf(plain, "ctx %*s %d%%", &pct); n == 1 && err == nil && pct >= 100 {
+		return v.styles.Error.Render(plain)
+	}
+	return v.styles.mutedText().Render(plain)
 }
 
 // --- rendering ------------------------------------------------------------
@@ -480,6 +879,29 @@ func (v AgentView) assistantHeader(model string) string {
 // userHeader is the marker above each user block.
 func (v AgentView) userHeader() string {
 	return v.styles.agentAccent().Render("❯ you")
+}
+
+// turnFooter renders the per-turn transcript footer (M7-B): elapsed wall time
+// plus the terminal reason — the model's ollama done_reason ("stop"/"length")
+// or "stopped" when the user cut the stream with esc. Returns "" when no
+// start time was recorded (an assistant block committed without startChat),
+// so hand-constructed transcripts in tests render no footer.
+func turnFooter(start time.Time, reason string, stopped bool) string {
+	elapsed := ""
+	if !start.IsZero() {
+		elapsed = fmt.Sprintf("%.1fs", time.Since(start).Seconds())
+	}
+	if elapsed == "" {
+		return ""
+	}
+	switch {
+	case stopped:
+		return elapsed + " · stopped"
+	case reason != "":
+		return elapsed + " · " + reason
+	default:
+		return elapsed
+	}
 }
 
 // ensureRenderer builds the glamour renderer when it is missing or the width
@@ -555,11 +977,18 @@ func (v AgentView) renderBlock(header, md string) string {
 }
 
 // chatLines assembles the full rendered transcript as individual display
-// lines: the cached history blocks (header + markdown content) plus the live
-// streaming block. Block content is split on newlines so scroll/window
-// arithmetic counts real rows, not multi-line entries.
+// lines: an optional truncation marker (M7-C), the cached history blocks
+// (header + markdown content + per-turn footer), plus the live streaming
+// block with the streaming caret (M7-B). Block content is split on newlines
+// so scroll/window arithmetic counts real rows, not multi-line entries.
 func (v AgentView) chatLines() []string {
 	var lines []string
+	if v.truncated {
+		// The runner silently omitted older turns once the budget filled; show
+		// the same marker in the transcript head instead of hiding it (M7-C).
+		lines = append(lines, v.styles.mutedText().Render("… "+agent.TruncationNotice))
+		lines = append(lines, "")
+	}
 	for i, m := range v.history {
 		block := m.Content
 		if i < len(v.render) && v.render[i] != "" {
@@ -569,10 +998,20 @@ func (v AgentView) chatLines() []string {
 			continue
 		}
 		lines = append(lines, strings.Split(block, "\n")...)
+		if m.Role == ollama.RoleAssistant && i < len(v.turnMeta) && v.turnMeta[i] != "" {
+			// Turn footer: elapsed + terminal reason (M7-B). It lives between
+			// the block and the separator so geometry re-renders of render
+			// never need to reproduce it.
+			lines = append(lines, v.styles.mutedText().Render(v.turnMeta[i]))
+		}
 		lines = append(lines, "") // separator after each message
 	}
 	if v.streaming || v.streamText != "" {
-		lines = append(lines, strings.Split(v.renderBlock(v.assistantHeader(v.model), v.streamText), "\n")...)
+		sb := strings.Split(v.renderBlock(v.assistantHeader(v.model), v.streamText), "\n")
+		if v.streaming {
+			sb = withStreamingCaret(sb)
+		}
+		lines = append(lines, sb...)
 		lines = append(lines, "")
 	}
 	// Drop trailing blanks.
@@ -582,8 +1021,26 @@ func (v AgentView) chatLines() []string {
 	return lines
 }
 
+// withStreamingCaret appends the streaming caret ("▍") to the live block. It
+// rides the last visible line while a turn streams and disappears the moment
+// the turn commits and streaming goes false (M7-B).
+func withStreamingCaret(lines []string) []string {
+	if len(lines) == 0 {
+		return []string{"▍"}
+	}
+	last := len(lines) - 1
+	if strings.TrimSpace(lines[last]) != "" {
+		lines[last] += "▍"
+	} else {
+		lines = append(lines, "▍")
+	}
+	return lines
+}
+
 // View renders transcript + hint + input per the current geometry. A modal
-// (model selector) replaces the body with a centered overlay.
+// (model selector, mutation approval, /help, /clear confirm) replaces the
+// body with a centered overlay; the slash-command menu (M7-A) floats between
+// the transcript and the input while a "/" draft is being composed.
 func (v AgentView) View() string {
 	bodyH := maxInt(v.h-2, 1)
 
@@ -593,19 +1050,33 @@ func (v AgentView) View() string {
 	if v.selectorOpen {
 		return v.renderSelectorOverlay(bodyH)
 	}
+	if v.helpOpen {
+		return v.renderHelpOverlay(bodyH)
+	}
+	if v.clearConfirm {
+		return v.renderClearConfirmOverlay(bodyH)
+	}
 
 	if len(v.models) == 0 {
 		return v.fullSizePane(bodyH)
 	}
 
 	inputOuter, hintH := 4, 1
-	chatH := maxInt(bodyH-inputOuter-hintH, 1)
+	menuH := 0
+	if v.slashMenu() {
+		menuH = v.slashMenuHeight()
+	}
+	chatH := maxInt(bodyH-inputOuter-hintH-menuH, 1)
 
 	chatPane := v.renderChatPane(chatH)
 	hint := v.hintLine()
 	input := v.renderInput()
 
-	return chatPane + "\n" + hint + "\n" + input
+	out := chatPane
+	if menuH > 0 {
+		out += "\n" + v.renderSlashMenu()
+	}
+	return out + "\n" + hint + "\n" + input
 }
 
 // renderChatPane windows the transcript into the scroll region.
@@ -648,29 +1119,113 @@ func (v AgentView) composing() bool {
 }
 
 // hintLine is the one-row strip between transcript and input: an error, the
-// streaming state, a transient notice, or the legend.
+// streaming state, a transient notice, or a width-fitted legend carrying the
+// context meter (M7-C) so the row can never wrap on a phone.
 func (v AgentView) hintLine() string {
+	maxW := maxInt(v.w-2, 24)
+
 	switch {
 	case v.chatErr != "":
 		return v.styles.Error.Render("⚠ " + v.chatErr + " — press enter to retry")
 	case v.streaming:
+		base := []string{"⏳ " + v.model, "esc stop"}
+		if v.model == "" {
+			base[0] = "⏳ ?"
+		}
 		if v.toolStatus != "" {
-			return v.styles.Placeholder.Render(v.toolStatus + " · esc stop")
+			base = []string{v.toolStatus, "esc stop"}
 		}
-		model := v.model
-		if model == "" {
-			model = "?"
-		}
-		return v.styles.Placeholder.Render("⏳ " + model + " · esc stop")
+		return v.renderHintParts(maxW, base, v.ctxMeterPlain())
 	case v.notice != "":
 		return v.styles.Placeholder.Render(v.notice)
 	}
-	// While the user is composing, the letter commands (m/r/u/d) are off;
-	// the legend only advertises them for an empty input.
+
+	// Legend. While composing, the letter commands (m/r/u/d/f) are off and the
+	// meter shows the draft eating the context budget; idle, the legend shows
+	// the meter once a conversation has real weight (or a "ctx full" warning
+	// once a send overflowed the budget — the marker is in the transcript
+	// head).
 	if v.input.Value() != "" {
-		return v.styles.Placeholder.Render("enter send · shift+enter newline")
+		return v.renderHintParts(maxW,
+			[]string{"enter send", "shift+enter newline", "esc clear draft"},
+			v.ctxMeterPlain())
 	}
-	return v.styles.Placeholder.Render("enter send · shift+enter newline · m model · r refresh · esc stop")
+	suffix := ""
+	switch pct := v.ctxPct(); {
+	case pct >= 100:
+		suffix = "ctx full — /clear"
+	case pct >= 1:
+		suffix = v.ctxMeterPlain()
+	}
+	return v.renderHintParts(maxW,
+		[]string{"enter send", "/ commands", "m model", "r refresh", "shift+enter newline", "esc stop"},
+		suffix)
+}
+
+// renderHintParts styles one hint row: the leading segments (Placeholder,
+// ordered most-important first) joined with " · ", then an optional styled
+// suffix (the context meter). Segments drop from the tail until the whole
+// row fits maxW, so the row never wraps on a narrow phone. suffix is plain
+// text; ctxMeter suffixes are restyled by ctxMeterStyled.
+func (v AgentView) renderHintParts(maxW int, segments []string, suffix string) string {
+	plain := strings.Join(segments, " · ")
+	if suffix != "" {
+		plain += " · " + suffix
+	}
+	for lipgloss.Width(plain) > maxW && len(segments) > 1 {
+		segments = segments[:len(segments)-1]
+		plain = strings.Join(segments, " · ")
+		if suffix != "" {
+			plain += " · " + suffix
+		}
+	}
+	if lipgloss.Width(plain) > maxW {
+		// Even the first segment plus a mandatory suffix overflows (a very
+		// long tool-status line): trim the segment itself to make room.
+		room := maxW
+		if suffix != "" {
+			room -= lipgloss.Width(suffix) + 3 // " · "
+		}
+		if room > 0 {
+			segments[0] = truncateToWidth(segments[0], room)
+		}
+	}
+
+	styled := v.styles.Placeholder.Render(strings.Join(segments, " · "))
+	if suffix == "" {
+		return styled
+	}
+	if strings.HasPrefix(suffix, "ctx ") && strings.HasSuffix(suffix, "%") {
+		return styled + " · " + v.ctxMeterStyled(suffix)
+	}
+	if suffix == "ctx full — /clear" {
+		return styled + " · " + v.styles.Error.Render(suffix)
+	}
+	return styled + " · " + suffix
+}
+
+// truncateToWidth trims s to at most maxW visible columns, appending "…"
+// when cut. ANSI sequences count as zero width via lipgloss.Width.
+func truncateToWidth(s string, maxW int) string {
+	if maxW < 1 {
+		return ""
+	}
+	if lipgloss.Width(s) <= maxW {
+		return s
+	}
+	out := lipgloss.NewStyle().MaxWidth(maxW).Render(s)
+	if lipgloss.Width(out) <= maxW {
+		return out
+	}
+	// MaxWidth is byte-wise; fall back to a rune-wise trim.
+	out = ""
+	for _, r := range s {
+		if lipgloss.Width(out)+1 > maxW-1 {
+			break
+		}
+		out += string(r)
+	}
+	return out + "…"
 }
 
 // fullSizePane renders the loading / error / empty model-list states.
@@ -716,54 +1271,150 @@ func (v AgentView) renderConfirmationOverlay(bodyH int) string {
 	return v.renderOverlayTitle(bodyH, "Confirm mutation", lines)
 }
 
-// renderSelectorOverlay centers the model picker over the body. The list is
-// windowed around the selection so long model lists stay readable on a phone.
-func (v AgentView) renderSelectorOverlay(bodyH int) string {
-	innerW := maxInt(v.w-8, 20)
-	maxRows := maxInt(bodyH-8, 3)
-	start := clampInt(v.selIdx-maxRows/2, 0, maxInt(0, len(v.models)-maxRows))
-	end := start + maxRows
-	if end > len(v.models) {
-		end = len(v.models)
-	}
+const slashMenuMaxRows = 5
 
-	var lines []string
-	for i := start; i < end; i++ {
-		m := v.models[i]
-		marker := "  "
-		label := m.Name
-		if i == v.selIdx {
-			marker = "❯ "
-			label = lipgloss.NewStyle().Bold(true).Foreground(v.styles.accent).Render(m.Name)
+// renderSelectorOverlay centers the model picker over the body. The picker
+// filters as you type (any printable key extends the filter across name,
+// family, size, quant), stars the config default model, and windows the list
+// around the selection so long model lists stay readable on a phone (M7-C).
+func (v AgentView) renderSelectorOverlay(bodyH int) string {
+	list := v.filteredModels()
+	maxRows := maxInt(bodyH-12, 3)
+
+	lines := []string{"filter: " + v.selFilter}
+	if len(list) == 0 {
+		lines = append(lines, v.styles.Placeholder.Render("no model matches “"+v.selFilter+"”"))
+	} else {
+		start := clampInt(v.selIdx-maxRows/2, 0, maxInt(0, len(list)-maxRows))
+		end := start + maxRows
+		if end > len(list) {
+			end = len(list)
 		}
-		row := marker + label
-		if summary := modelSummary(m); summary != "" && lipgloss.Width(row)+1+lipgloss.Width(summary) <= innerW {
-			row += "  " + v.styles.Placeholder.Render(summary)
+		if start > 0 {
+			lines = append(lines, fmt.Sprintf("… %d earlier", start))
 		}
-		lines = append(lines, row)
+		for i := start; i < end; i++ {
+			m := list[i]
+			marker := "  "
+			name := m.Name
+			if i == v.selIdx {
+				marker = "❯ "
+			}
+			base := marker + name
+			if m.Name == v.defaultModel {
+				base += " ★"
+			}
+			// Row width is measured on plain text; styling never changes it.
+			row := marker + name
+			if m.Name == v.defaultModel {
+				row += " " + v.styles.agentAccent().Render("★")
+			}
+			if i == v.selIdx {
+				row = marker + lipgloss.NewStyle().Bold(true).Foreground(v.styles.accent).Render(name) + strings.TrimPrefix(row, marker+name)
+			}
+			if summary := modelSummary(m); summary != "" && lipgloss.Width(base)+2+lipgloss.Width(summary) <= maxInt(v.w-8, 20) {
+				row += "  " + v.styles.Placeholder.Render(summary)
+			}
+			lines = append(lines, row)
+		}
+		if end < len(list) {
+			lines = append(lines, fmt.Sprintf("… %d more", len(list)-end))
+		}
 	}
+	lines = append(lines, "type to filter · ↑/↓ or j/k move · enter pick · esc close")
 
 	return v.renderOverlayTitle(bodyH, "Model", lines)
 }
 
-// renderOverlayTitle centers a bordered dialog over the whole Agent body.
-// The body is capped at bodyH-4 rows so a long payload (a multi-line tool
-// input, a long model list) can never push the box past the terminal
-// height: on a 30-row phone the decision legend and status bar must stay
-// on screen (see fitContent).
-func (v AgentView) renderOverlayTitle(bodyH int, title string, lines []string) string {
-	innerW := maxInt(v.w-6, 16)
-	wrapped := wrapLines(lines, innerW)
-	wrapped = fitContent(wrapped, maxInt(bodyH-4, 4))
-	padded := make([]string, len(wrapped))
-	for i, l := range wrapped {
-		padded[i] = l + strings.Repeat(" ", maxInt(0, innerW-lipgloss.Width(l)))
+// renderHelpOverlay is the /help reference: slash commands, keys, and the
+// command palette. A compact list, not the onboarding flow (package D stays
+// out of v0.1 scope).
+func (v AgentView) renderHelpOverlay(bodyH int) string {
+	lines := []string{
+		"slash commands",
+		" /clear    clear the conversation (asks first)",
+		" /model    pick a model",
+		" /theme    toggle dark/light for this session",
+		" /help     show this reference",
+		" /refresh  reload the model list",
+		"",
+		"composing",
+		" enter send · shift+enter newline · esc clear draft",
+		"",
+		"transcript (empty input)",
+		" m model · r refresh · u/d scroll · f auto-follow",
+		" pgup/pgdn page · digits switch tab",
+		"",
+		"any tab",
+		" ctrl+p command palette · ctrl+c quit",
+		"",
+		"y / enter approve · n / esc decline",
 	}
-	content := strings.Join(padded, "\n")
-	box := v.styles.Pane.Render(
-		lipgloss.NewStyle().Bold(true).Foreground(v.styles.accent).Render(title) + "\n\n" + content,
-	)
-	return lipgloss.Place(v.w, maxInt(1, bodyH), lipgloss.Center, lipgloss.Center, box)
+	return v.renderOverlayTitle(bodyH, "Help", lines)
+}
+
+// renderClearConfirmOverlay asks before /clear wipes the conversation (same
+// guard rails as every destructive action: y/enter to confirm, esc to back
+// out; nothing is cleared on a stray key).
+func (v AgentView) renderClearConfirmOverlay(bodyH int) string {
+	lines := []string{
+		"Clear the conversation?",
+		"",
+		"y / enter clear · n / esc cancel",
+	}
+	return v.renderOverlayTitle(bodyH, "Clear conversation", lines)
+}
+
+// slashMenuHeight is the bordered menu's row budget while a slash draft is
+// showing (rows + box borders), capped so the chat pane keeps room on a phone.
+func (v AgentView) slashMenuHeight() int {
+	rows := len(v.slashMatches())
+	if rows > slashMenuMaxRows {
+		rows = slashMenuMaxRows
+	}
+	return rows + 2
+}
+
+// renderSlashMenu draws the bordered "/" command menu between the transcript
+// and the input. The highlighted row is bold/accent; the filter is the draft
+// itself (typing narrows the menu live — M7-A).
+func (v AgentView) renderSlashMenu() string {
+	matches := v.slashMatches()
+	if len(matches) == 0 {
+		return ""
+	}
+	rows := len(matches)
+	if rows > slashMenuMaxRows {
+		rows = slashMenuMaxRows
+	}
+	innerW := maxInt(v.w-2, 16)
+
+	out := make([]string, 0, rows)
+	for i, c := range matches[:rows] {
+		marker := "  "
+		name := "/" + c.name
+		if i == v.slashIdx {
+			marker = "❯ "
+			name = lipgloss.NewStyle().Bold(true).Foreground(v.styles.accent).Render("/" + c.name)
+		}
+		prefix := marker + name
+		desc := c.desc
+		if room := innerW - lipgloss.Width(prefix) - 2; room > 0 {
+			desc = truncateToWidth(c.desc, room)
+			prefix += "  " + v.styles.Placeholder.Render(desc)
+		} else {
+			prefix = truncateToWidth(prefix, innerW)
+		}
+		out = append(out, prefix)
+	}
+	return v.styles.Pane.Width(v.w).Height(rows + 2).Render(strings.Join(out, "\n"))
+}
+
+// renderOverlayTitle centers a bordered dialog over the whole Agent body via
+// the shared overlay helper (fitContent keeps every decision row on screen at
+// the measured phone geometry).
+func (v AgentView) renderOverlayTitle(bodyH int, title string, lines []string) string {
+	return renderCenteredOverlay(v.w, bodyH, v.styles, title, lines)
 }
 
 // clampScroll bounds the stored scroll offset by the currently visible window.
@@ -782,6 +1433,12 @@ func (v *AgentView) clampScroll() {
 // agentAccent returns the accent style applied to role headers.
 func (s Styles) agentAccent() lipgloss.Style {
 	return lipgloss.NewStyle().Bold(true).Foreground(s.accent)
+}
+
+// mutedText returns the muted foreground style for secondary rows (transcript
+// footers, the context meter's idle bar) — plain, not the italic Placeholder.
+func (s Styles) mutedText() lipgloss.Style {
+	return lipgloss.NewStyle().Foreground(s.muted)
 }
 
 // --- M4 live apply: re-theme + config apply -------------------------------
@@ -809,6 +1466,7 @@ func (v AgentView) ApplyConfig(cfg config.Config, c *ollama.Client, reload bool)
 	v.temperature = cfg.Agent.Temperature
 	v.topP = cfg.Agent.TopP
 	v.numCtx = cfg.Agent.NumCtx
+	v.systemPrompt = cfg.Agent.SystemPrompt
 	root := cfg.WorkspaceRoot
 	if root == "" {
 		root, _ = os.Getwd()

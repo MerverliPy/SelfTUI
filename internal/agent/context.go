@@ -4,7 +4,11 @@ import (
 	"selftui/internal/ollama"
 )
 
-const truncationNotice = "Earlier conversation omitted to fit the context window."
+// TruncationNotice is the deterministic marker BudgetMessages inserts when it
+// drops earlier conversation (PLAN.md §10 M7-C: the UI shows the same marker
+// in the transcript once its context meter passes the budget, so a silent
+// wire-only truncation becomes visible).
+const TruncationNotice = "Earlier conversation omitted to fit the context window."
 
 // BudgetMessages keeps the system prompt and newest turn while dropping the
 // oldest conversation when the approximate input budget is full. Three
@@ -32,7 +36,7 @@ func BudgetMessages(messages []ollama.ChatMessage, numCtx int) []ollama.ChatMess
 	}
 	// A deterministic marker is the bounded stand-in for a future model-driven
 	// summary; never silently pretend the earlier messages are still present.
-	marker := ollama.ChatMessage{Role: ollama.RoleSystem, Content: truncationNotice}
+	marker := ollama.ChatMessage{Role: ollama.RoleSystem, Content: TruncationNotice}
 	out = append(out[:firstTurn], append([]ollama.ChatMessage{marker}, out[firstTurn:]...)...)
 	firstTurn++
 	for approximateTokens(out) > limit && firstTurn < len(out)-1 {
@@ -56,6 +60,12 @@ func truncateLatest(messages []ollama.ChatMessage, limit int) []ollama.ChatMessa
 	}
 	return messages
 }
+
+// ApproxTokens is the exported approximate-token estimator (4 chars per
+// token, tool-call arguments counted) that drives both BudgetMessages and the
+// UI context meter (M7-C). The meter reuses exactly this math so its
+// percentage is the number the runner will actually budget against.
+func ApproxTokens(messages []ollama.ChatMessage) int { return approximateTokens(messages) }
 
 func approximateTokens(messages []ollama.ChatMessage) int {
 	total := 0

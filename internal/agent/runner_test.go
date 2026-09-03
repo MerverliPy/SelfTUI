@@ -211,6 +211,42 @@ func TestRunnerBoundsIterations(t *testing.T) {
 	}
 }
 
+func TestRunnerReportsTerminalDoneReason(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		body   string
+		reason string
+	}{
+		{"stop", finalEvent("done by stop"), "stop"},
+		{"length", `{"message":{"role":"assistant","content":"cut short"},"done":true,"done_reason":"length"}` + "\n", "length"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/x-ndjson")
+				io.WriteString(w, tc.body)
+			}))
+			t.Cleanup(srv.Close)
+			var done AgentDoneMsg
+			r := NewRunner(ollama.New(srv.URL, ""), t.TempDir(), "", 3)
+			if err := r.Run(context.Background(), Request{
+				Model: "qwen3:8b", Messages: []ollama.ChatMessage{{Role: ollama.RoleUser, Content: "hi"}},
+			}, func(msg Msg) {
+				if d, ok := msg.(AgentDoneMsg); ok {
+					done = d
+				}
+			}); err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			if done.Reason != tc.reason {
+				t.Errorf("AgentDoneMsg.Reason = %q, want %q", done.Reason, tc.reason)
+			}
+			if done.Err != "" {
+				t.Errorf("AgentDoneMsg.Err = %q, want empty", done.Err)
+			}
+		})
+	}
+}
+
 func TestRunnerCancellationReturnsPromptly(t *testing.T) {
 	started := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

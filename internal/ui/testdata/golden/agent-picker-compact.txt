@@ -1,0 +1,30 @@
+  Models    Agent    Settings                                           
+                                                                        
+                                                                        
+                                                                        
+                                                                        
+                                                                        
+                                                                        
+                                                                        
+                                                                        
+                                                                        
+                                                                        
+  ╭──────────────────────────────────────────────────────────────────╮  
+  │Model                                                             │  
+  │                                                                  │  
+  │filter:                                                           │  
+  │❯ qwen3:8b  qwen3 · 8.2B · Q4_K_M                                 │  
+  │  gemma3:12b  gemma3 · 12B · Q4_K_M                               │  
+  │type to filter · ↑/↓ or j/k move · enter pick · esc close         │  
+  ╰──────────────────────────────────────────────────────────────────╯  
+                                                                        
+                                                                        
+                                                                        
+                                                                        
+                                                                        
+                                                                        
+                                                                        
+                                                                        
+                                                                        
+                                                                        
+ ⏻ http://localhost:11434                       Agent · 72x30 · compact 

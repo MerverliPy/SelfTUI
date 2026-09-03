@@ -1,0 +1,30 @@
+  Models    Agent    Settings                                           
+                                                                        
+                                                                        
+                                                                        
+  ╭──────────────────────────────────────────────────────────────────╮  
+  │Help                                                              │  
+  │                                                                  │  
+  │slash commands                                                    │  
+  │ /clear    clear the conversation (asks first)                    │  
+  │ /model    pick a model                                           │  
+  │ /theme    toggle dark/light for this session                     │  
+  │ /help     show this reference                                    │  
+  │ /refresh  reload the model list                                  │  
+  │                                                                  │  
+  │composing                                                         │  
+  │ enter send · shift+enter newline · esc clear draft               │  
+  │                                                                  │  
+  │transcript (empty input)                                          │  
+  │ m model · r refresh · u/d scroll · f auto-follow                 │  
+  │ pgup/pgdn page · digits switch tab                               │  
+  │                                                                  │  
+  │any tab                                                           │  
+  │ ctrl+p command palette · ctrl+c quit                             │  
+  │                                                                  │  
+  │y / enter approve · n / esc decline                               │  
+  ╰──────────────────────────────────────────────────────────────────╯  
+                                                                        
+                                                                        
+                                                                        
+ ⏻ http://localhost:11434                       Agent · 72x30 · compact 

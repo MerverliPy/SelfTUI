@@ -54,7 +54,15 @@ type ToolOutputMsg struct {
 }
 
 type FallbackMsg struct{ Reason string }
-type AgentDoneMsg struct{ Err string }
+
+// AgentDoneMsg is emitted exactly once, after the loop or any error. Reason
+// is the terminal Ollama done_reason of the final stream ("stop", "length",
+// "tool_calls") so the UI can show why the turn ended (M7-B); it stays empty
+// on errors where no terminal event arrived.
+type AgentDoneMsg struct {
+	Err    string
+	Reason string
+}
 
 // Request is one agent turn. Messages should contain the current conversation
 // but not the system prompt; Runner adds that exactly once.
@@ -84,16 +92,19 @@ func NewRunner(client *ollama.Client, workspaceRoot, systemPrompt string, maxIte
 	}
 }
 
-// Run executes only the read-only tool loop. The first tools request doubles
+// Run executes the agent tool loop (read-only first, then the confirmed
+// mutation set) with the plain-chat fallback. The first tools request doubles
 // as a capability probe: models that reject tools with HTTP 400 are explicitly
 // downgraded to plain chat instead of silently pretending to be an agent.
-// AgentDoneMsg is emitted exactly once, after the loop or any error.
+// AgentDoneMsg is emitted exactly once, after the loop or any error, carrying
+// the terminal done_reason of the final stream when one arrived (M7-B).
 func (r *Runner) Run(ctx context.Context, req Request, emit func(Msg)) error {
 	if emit == nil {
 		emit = func(Msg) {}
 	}
-	err := r.run(ctx, req, emit)
-	done := AgentDoneMsg{}
+	var reason string
+	err := r.run(ctx, req, emit, &reason)
+	done := AgentDoneMsg{Reason: reason}
 	if err != nil {
 		done.Err = err.Error()
 	}
@@ -101,7 +112,7 @@ func (r *Runner) Run(ctx context.Context, req Request, emit func(Msg)) error {
 	return err
 }
 
-func (r *Runner) run(ctx context.Context, req Request, emit func(Msg)) error {
+func (r *Runner) run(ctx context.Context, req Request, emit func(Msg), reasonOut *string) error {
 	if r == nil || r.client == nil {
 		return errors.New("agent: nil Ollama client")
 	}
@@ -130,6 +141,7 @@ func (r *Runner) run(ctx context.Context, req Request, emit func(Msg)) error {
 		var content strings.Builder
 		var calls []ollama.ToolCall
 		streamedLen := 0
+		var lastReason string
 		err := r.client.ChatStream(ctx, ollama.ChatRequest{
 			Model: req.Model, Messages: BudgetMessages(messages, req.NumCtx), Stream: true, Tools: tools, Options: options,
 		}, func(ev ollama.ChatEvent) {
@@ -145,6 +157,9 @@ func (r *Runner) run(ctx context.Context, req Request, emit func(Msg)) error {
 					emit(TokenMsg{Text: ev.Message.Content})
 					streamedLen = content.Len()
 				}
+			}
+			if ev.Done && ev.DoneReason != "" {
+				lastReason = ev.DoneReason
 			}
 			calls = mergeToolCalls(calls, ev.Message.ToolCalls)
 		})
@@ -166,6 +181,7 @@ func (r *Runner) run(ctx context.Context, req Request, emit func(Msg)) error {
 			if streamedLen < content.Len() {
 				emit(TokenMsg{Text: content.String()[streamedLen:]})
 			}
+			*reasonOut = lastReason
 			return nil
 		}
 

@@ -89,6 +89,49 @@ func buildAgent(t *testing.T, w, h int) App {
 	return updateTab(t, m, agentModelsLoadedMsg{models: sampleModels()})
 }
 
+// buildAgentModal frames the Agent tab with the given overlay open: each M7
+// overlay must render inside the terminal at both canonical geometries.
+func buildAgentModal(t *testing.T, w, h int, open func(t *testing.T, m App) App) App {
+	m := buildAgent(t, w, h)
+	return open(t, m)
+}
+
+func openModelPicker(t *testing.T, m App) App {
+	return updateTab(t, m, tea.KeyPressMsg{Text: "m"})
+}
+
+func openSlashMenu(t *testing.T, m App) App {
+	for _, r := range "/" {
+		m = updateTab(t, m, tea.KeyPressMsg{Text: string(r)})
+	}
+	return m
+}
+
+func openHelp(t *testing.T, m App) App {
+	for _, r := range "/help" {
+		m = updateTab(t, m, tea.KeyPressMsg{Text: string(r)})
+	}
+	return updateTab(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+}
+
+func openClearConfirm(t *testing.T, m App) App {
+	// Seed a conversation so /clear has something to confirm, then type it.
+	m.agent.history = append(m.agent.history,
+		ollama.ChatMessage{Role: ollama.RoleUser, Content: "explain this repo"},
+		ollama.ChatMessage{Role: ollama.RoleAssistant, Content: "It is a terminal UI."},
+	)
+	m.agent.turnModel = []string{"qwen3:8b", "qwen3:8b"}
+	m.agent.turnMeta = []string{"", "0.4s · stop"}
+	for _, r := range "/clear" {
+		m = updateTab(t, m, tea.KeyPressMsg{Text: string(r)})
+	}
+	return updateTab(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+}
+
+func openPalette(t *testing.T, m App) App {
+	return updateTab(t, m, tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
+}
+
 func buildSettingsEditing(t *testing.T, w, h int) App {
 	m := bootApp(t, w, h)
 	return updateTab(t, m, tea.KeyPressMsg{Text: "3"})
@@ -99,10 +142,20 @@ var goldenFrames = []goldenFrame{
 	{"models-compact", 72, 30, buildModelsCompact},
 	{"models-compact-inspect", 72, 30, buildModelsCompactInspect},
 	{"agent-compact", 72, 30, buildAgent},
+	{"agent-picker-compact", 72, 30, func(t *testing.T, w, h int) App { return buildAgentModal(t, w, h, openModelPicker) }},
+	{"agent-slash-compact", 72, 30, func(t *testing.T, w, h int) App { return buildAgentModal(t, w, h, openSlashMenu) }},
+	{"agent-help-compact", 72, 30, func(t *testing.T, w, h int) App { return buildAgentModal(t, w, h, openHelp) }},
+	{"agent-clear-confirm-compact", 72, 30, func(t *testing.T, w, h int) App { return buildAgentModal(t, w, h, openClearConfirm) }},
+	{"palette-compact", 72, 30, func(t *testing.T, w, h int) App { return buildAgentModal(t, w, h, openPalette) }},
 	{"settings-compact", 72, 30, buildSettingsEditing},
 	// Wide: PC window.
 	{"models-wide-inspect", 120, 40, buildModelsWideInspect},
 	{"agent-wide", 120, 40, buildAgent},
+	{"agent-picker-wide", 120, 40, func(t *testing.T, w, h int) App { return buildAgentModal(t, w, h, openModelPicker) }},
+	{"agent-slash-wide", 120, 40, func(t *testing.T, w, h int) App { return buildAgentModal(t, w, h, openSlashMenu) }},
+	{"agent-help-wide", 120, 40, func(t *testing.T, w, h int) App { return buildAgentModal(t, w, h, openHelp) }},
+	{"agent-clear-confirm-wide", 120, 40, func(t *testing.T, w, h int) App { return buildAgentModal(t, w, h, openClearConfirm) }},
+	{"palette-wide", 120, 40, func(t *testing.T, w, h int) App { return buildAgentModal(t, w, h, openPalette) }},
 	{"settings-wide", 120, 40, buildSettingsEditing},
 }
 

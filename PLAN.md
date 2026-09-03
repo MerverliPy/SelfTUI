@@ -384,25 +384,35 @@ helper removed. `selftui -version` prints `0.6.0-m6` and is logged at startup.
 first safety gate.)*
 
 **M7 — UX polish, pre-v0.1 (owner scope 2026-09-03; opencode.ai TUI as the
-reference for feel).** Runs after M6, before the v0.1 tag. Owner selected
-packages **A + B + C** (D — onboarding/help — dropped for v0.1):
-- **A — Composer + commands:** slash-command menu with live filter over the
-  Agent input (`/clear` with confirm, `/model`, `/theme`, `/help`, `/refresh`)
-  + a command palette (`ctrl+p`) reachable from any tab; `esc` clears a
-  drafted prompt when idle; "`/` for commands" placeholder. Reuses the modal/
-  overlay + fitContent height-cap machinery; every overlay golden-tested at
-  72×30 and 120×40.
-- **B — Transcript feel:** stable per-block headers with a model chip;
-  streaming caret ("▍") that disappears at rest; after each turn show
-  elapsed + stop reason (done_reason: stop/length); pgup/pgdn paging and an
-  auto-follow toggle alongside u/d.
-- **C — Context meter + picker upgrade:** live context meter (`ctx
-  ▓▓▓░░ 62%`) in the Agent hint/status reusing BudgetMessages' approximate
-  token math (make the truncation marker visible); model selector upgraded to
-  filter-as-you-type showing family/size/quant with the default model starred.
-Constraints to respect: phone-first compact geometry, letter-command
-empty-input rule, digits-are-text-while-composing lesson, every overlay
-height-capped. *Next: v0.1 release after M7 lands.*
+reference for feel).** ✅ *done 2026-09-06 — evidence: 40+ new M7 tests in
+`internal/ui/m7_test.go`, 10 new golden frames (17 total) at 72×30/120×40,
+`make check` + `go test -race` green.*
+- **A — Composer + commands:** slash-command menu over the Agent input with a
+  live filter (`/clear` with y/n confirm, `/model`, `/theme`, `/help`,
+  `/refresh`); unmatched slash drafts are ordinary prose; `esc` clears a
+  drafted prompt when idle; the input placeholder reads “/ for commands”; a
+  `ctrl+p` command palette from any tab (go to tab, change model, clear
+  conversation, toggle theme, refresh models, command list) with live filter;
+  session-scope theme actions show a status-bar toast cleared on the next
+  key. `esc`-while-draft, palette modal guard, and composer empty-input
+  letter-command rules all preserved (digit typing tests still pass).
+- **B — Transcript feel:** stable per-block headers with the model chip,
+  streaming caret “▍” that disappears at rest, per-turn footers with elapsed
+  time + terminal reason (`· stop`/`· length`/`· stopped`) surfaced through
+  `AgentDoneMsg.Reason`, `pgup`/`pgdn` paging, and an `f` auto-follow toggle
+  (d/pgdn back to the tail re-engages follow).
+- **C — Context meter + picker upgrade:** live meter (`ctx ▓▓░░░ 38%`) in the
+  Agent hint row over system+history+draft, reusing `agent.ApproxTokens`;
+  red at 100% with a visible truncation marker in the transcript head until
+  `/clear`; model picker filters as you type (name/family/size/quant,
+  j/k+arrows nav) and stars the configured default model.
+Constraints respected: every overlay and menu is height-capped/width-fitted
+(fitContent + renderCenteredOverlay + wrapLines now ANSI-width aware; guard
+frame rows ≤ terminal at both geometries), letter commands are empty-input
+only, digits are text while composing, phone-first compact geometry held.
+*Owner decisions recorded in LEDGER: palette/slash keybind set (ctrl+p on
+any tab + “/” menu as the phone path) and the meter lives in the Agent hint
+row, not the shared status bar.* → **v0.1 next (tag + release notes).**
 
 ---
 
@@ -442,10 +452,13 @@ tests, settings save-error + retry test, context-truncation edge fixes
 (single-huge-turn bound, plain-chat fallback budget, marker idempotence, tool
 args counted), digit-tab-jump bug fix + regression test, `-version` flag,
 release docs (`docs/reconnect.md`, README). `make check` and `go test -race`
-green. Next: **M7 — UX polish, pre-v0.1** (owner-scoped: composer + slash
-commands/palette, transcript feel, context meter + filterable model picker —
-opencode.ai TUI as the reference; scope + constraints in §10 M7). A fresh
-session executes M7, then **v0.1 release** (tag, release notes).
+green.
+**M7 — UX polish landed 2026-09-06** (opencode.ai TUI as the feel reference):
+slash-command menu + `ctrl+p` palette (A), transcript feel — caret, turn
+footers with elapsed + stop reason, pgup/pgdn + `f` follow (B), context meter
++ filter-as-you-type model picker with the default starred (C); `make check`
+and `go test -race` green, 10 new golden frames (17 total) at 72×30/120×40.
+Next: **v0.1 release** (tag `v0.1.0` + release notes) in a fresh session.
 
 ---
 

@@ -5,7 +5,7 @@ models, with an embedded AI coding-agent chat and a settings panel. Runs
 identically on a PC (native terminal) and over SSH on a phone (Moshi;
 Blink/Termius similar) — layout adapts to narrow windows.
 
-**Status: M6 — release acceptance done.** The Models tab lists live models from the Ollama host (`/api/tags`) with selection + an inspect pane (`/api/show`): key facts, parameters, template, modelfile, model info, license — scrollable, side-by-side on wide screens and stacked (enter-toggled) on the phone. **Delete with confirm (`x` → `y`/`esc`) and streaming pull (`p` → name → spinner + progress; `esc` cancels)** work live; pulls reload the list automatically. The Agent tab supports native or content-embedded tool calls, explicit plain-chat fallback, jailed read/write/edit tools, and a constrained confirmed command executor. It is a guardrail rather than an OS sandbox; general shell and interpreters remain disabled. The Settings tab (huh forms) edits the whole config surface and writes it back to the config file with in-session live apply. Golden render fixtures pin the full shell at the two canonical geometries — the measured Moshi portrait device (72×30) and a wide PC window (120×40) — every frame is asserted to stay inside its terminal, dialogs are height-capped, and the light palette is verified across every tab. **Auth/TLS**: https hosts (public CA, verified) + bearer token are covered by tests on every endpoint; a settings save failure surfaces inline with retry; the context budget bounds even a giant first message and the plain-chat fallback. `make smoke-reconnect` simulates an SSH drop mid-generation and verifies clean process death, Ollama host recovery, and a clean reconnect; the reconnect semantics (tmux reattach over SSH vs fresh SSH re-connect) were resolved live on the owner's Moshi/iPhone 16 Pro client — see `docs/reconnect.md`.
+**Status: M7 — pre-v0.1 UX polish done.** The Models tab lists live models from the Ollama host (`/api/tags`) with selection + an inspect pane (`/api/show`): key facts, parameters, template, modelfile, model info, license — scrollable, side-by-side on wide screens and stacked (enter-toggled) on the phone. **Delete with confirm (`x` → `y`/`esc`) and streaming pull (`p` → name → spinner + progress; `esc` cancels)** work live; pulls reload the list automatically. The Agent tab supports native or content-embedded tool calls, explicit plain-chat fallback, jailed read/write/edit tools, and a constrained confirmed command executor. It is a guardrail rather than an OS sandbox; general shell and interpreters remain disabled. M7 polished the feel (opencode.ai TUI as reference): a slash-command menu over the Agent input (`/clear`, `/model`, `/theme`, `/help`, `/refresh`) and a `ctrl+p` command palette reachable from any tab; stable per-turn headers, a streaming caret (`▍`) that disappears at rest, elapsed + stop-reason footers, `pgup`/`pgdn` paging and an `f` auto-follow toggle; and a live context meter (`ctx ▓▓░░░ 38%`) that goes red at the truncation point and surfaces the omission marker in the transcript. The model picker filters as you type and stars the configured default. The Settings tab (huh forms) edits the whole config surface and writes it back to the config file with in-session live apply. Golden render fixtures pin the shell — including every M7 overlay — at the two canonical geometries, the measured Moshi portrait device (72×30) and a wide PC window (120×40). **Auth/TLS**: https hosts (public CA, verified) + bearer token are covered by tests on every endpoint; a settings save failure surfaces inline with retry. `make smoke-reconnect` simulates an SSH drop mid-generation and verifies clean process death, Ollama host recovery, and a clean reconnect — see `docs/reconnect.md`.
 
 ## Build & run
 
@@ -46,15 +46,34 @@ like `qwen3:0.6b`, `enter` starts, `esc` cancels; progress + spinner show
 while it streams, and the list reloads when it lands). Wide screens
 auto-inspect the selected model.
 
-**Agent tab (M2/M3b)**: type a prompt · `enter` sends · `shift+enter` inserts a
-newline · `m` selects a model · `esc` cancels a turn. Tool-capable models may
-use jailed `read_file`, `list_dir`, `grep`, `write_file`, and `edit_file`;
-every mutation opens a `y`/`enter` approve or `n`/`esc` decline dialog. The
-only command executor accepts a fixed argv for approved `go` subcommands and
-read-only `git` subcommands; it has a scrubbed environment, 30s default/60s
-maximum timeout, 256 KiB cap per output stream, process-group cancellation,
-and no shell or interpreter. Models that reject tools or return no tool call
-show an explicit plain-chat fallback.
+**Agent tab (M2/M3b/M7)**: type a prompt · `enter` sends · `shift+enter` inserts a
+newline · `esc` stops a turn or clears a drafted prompt · `m` opens the model
+picker (filter as you type; the configured default is starred) · `r` reloads
+models · `u`/`d` scroll the transcript, `pgup`/`pgdn` page it, and `f`
+toggles auto-follow (the stream auto-tails by default; `d`/`pgdn` to the
+tail re-engages it). A **`/`** in the input opens the command menu — `/clear`
+(asks first), `/model`, `/theme` (session toggle; save in Settings to keep it),
+`/help` (command reference), `/refresh` — filtered as you type; arrows move
+and `enter` runs. Every finished turn gets a footer with its elapsed time and
+why it stopped (`· stop` / `· length` / `· stopped`); while a turn streams a
+`▍` caret rides the last line and vanishes at rest. The hint row carries a
+live context meter (`ctx ▓▓░░░ 38%`) that turns red at the truncation point
+and leaves the omission marker visible in the transcript until `/clear`.
+Tool-capable models may use jailed `read_file`, `list_dir`, `grep`,
+`write_file`, and `edit_file`; every mutation opens a `y`/`enter` approve or
+`n`/`esc` decline dialog. The only command executor accepts a fixed argv for
+approved `go` subcommands and read-only `git` subcommands; it has a scrubbed
+environment, 30s default/60s maximum timeout, 256 KiB cap per output stream,
+process-group cancellation, and no shell or interpreter. Models that reject
+tools or return no tool call show an explicit plain-chat fallback.
+
+**Command palette (M7)**: `ctrl+p` from any tab opens the command palette —
+go to a tab, change model, clear the conversation, toggle the theme, refresh
+models, or open the command list — filtered as you type (`↑/↓` or `j/k`
+move, `enter` runs, `esc` closes). On a phone keyboard without a ctrl key,
+the Agent tab's `/` menu is the equivalent path (Blink maps ctrl to the
+`ctrl+p` shortcut). Palette and slash actions are session-scoped; persistence
+is Settings → Theme.
 
 **Settings tab (M4)**: a huh form over the config surface, in four sections —
 Connection (host, auth token), Model defaults (default model, temperature,

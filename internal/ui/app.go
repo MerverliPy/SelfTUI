@@ -26,6 +26,21 @@ type App struct {
 	// modal: the shell's tab keys and 1/2/3 jumps yield to the form so typed
 	// characters reach the fields (see switchTab and the KeyMsg handling).
 	settings SettingsView
+
+	// Command palette (M7-A): ctrl+p from any tab. It owns its keys while
+	// open and routes actions back into the views; see palette.go.
+	paletteOpen bool
+	palFilter   string
+	palIdx      int
+
+	// curTheme is the theme actually applied this session (dark/light). It
+	// can differ from cfg.Theme between a Settings save and a session-only
+	// toggle (/theme, palette), so theme toggles never stick on the old value.
+	curTheme string
+
+	// note is a transient app-level toast shown in the status bar's left
+	// cell (theme toggles etc.), cleared on the next keypress.
+	note string
 }
 
 // New builds the root model. client is the Ollama connection shared by the
@@ -35,6 +50,7 @@ func New(cfg *config.Config, styles Styles, client *ollama.Client) App {
 	return App{
 		cfg:      cfg,
 		styles:   styles,
+		curTheme: cfg.Theme,
 		models:   NewModelsView(client, styles, cfg.Theme),
 		agent:    NewAgentViewWithWorkspace(client, styles, cfg.Theme, cfg.DefaultModel, cfg.WorkspaceRoot, cfg.Agent),
 		settings: NewSettingsView(cfg, styles),
@@ -73,6 +89,13 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.applyTheme(msg.theme)
 		return a, nil
 
+	case agentThemeMsg:
+		// The Agent slash command /theme: session-only shell-wide toggle.
+		// Persisting happens through Settings save (M7 decision).
+		a.applyTheme(msg.theme)
+		a.note = "theme " + msg.theme + " · save in Settings to keep it"
+		return a, nil
+
 	case settingsSaveDoneMsg:
 		if msg.err != nil {
 			a.settings = a.settings.noteSaveError(msg.err)
@@ -87,6 +110,25 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// ctrl+c always quits the app, even while a settings form is open.
 		if k.Code == 'c' && k.Mod.Contains(tea.ModCtrl) {
 			return a, func() tea.Msg { return tea.Quit() }
+		}
+		// Any keypress dismisses the transient status toast before the key
+		// reaches the view it is aimed at.
+		if a.note != "" {
+			a.note = ""
+		}
+		// ctrl+p opens the command palette from any tab (phone keyboards map
+		// ctrl in Blink; on a soft keyboard the Agent's "/" menu is the path).
+		if k.Code == 'p' && k.Mod.Contains(tea.ModCtrl) {
+			if a.canOpenPalette() {
+				a.paletteOpen = true
+				a.palFilter = ""
+				a.palIdx = 0
+			}
+			return a, nil
+		}
+		// An open palette is its own modal: it consumes every key.
+		if a.paletteOpen {
+			return a.paletteKey(k)
 		}
 		// An open settings form consumes every key (it is its own modal);
 		// esc discards, enter/tab advance. Tab-bar and digit keys only act
@@ -158,10 +200,19 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return a, nil
 }
 
+// canOpenPalette reports whether the command palette may open right now:
+// never over another modal (settings form, approval, picker, pull, delete)
+// and never mid-generation (its actions would race the stream).
+func (a App) canOpenPalette() bool {
+	return !a.paletteOpen && !a.settings.Editing() && !a.models.ModalOpen() && !a.agent.ModalOpen() && !a.agent.streaming
+}
+
 // applyTheme re-themes the whole shell (styles, tab chrome, and every child
-// view). Used for live Theme previews and after a saved theme change.
+// view). Used for live Theme previews and after a saved theme change, plus
+// the session-only /theme toggles.
 func (a *App) applyTheme(theme string) {
 	dark := theme != "light"
+	a.curTheme = theme
 	a.styles = NewStyles(theme)
 	a.models = a.models.applyTheme(dark, a.styles)
 	a.agent = a.agent.applyTheme(dark, a.styles)
@@ -203,22 +254,32 @@ func (a *App) applySaved(cfg config.Config) tea.Cmd {
 	return nil
 }
 
-// View renders header + active body + status bar.
+// View renders header + active body + status bar. The command palette
+// replaces the active tab's body; the transient note is shown in the status
+// bar's left cell (see Update: every keypress clears it).
 func (a App) View() tea.View {
 	header := TabBar{Active: a.tab, Styles: a.styles, Width: a.w}.Render()
 
 	var body string
-	switch a.tab {
-	case 0:
-		body = a.models.View()
-	case 1:
-		body = a.agent.View()
-	default:
-		body = a.settings.View()
+	if a.paletteOpen {
+		body = a.renderPaletteOverlay()
+	} else {
+		switch a.tab {
+		case 0:
+			body = a.models.View()
+		case 1:
+			body = a.agent.View()
+		default:
+			body = a.settings.View()
+		}
 	}
 
+	left := "⏻ " + a.cfg.Host
+	if a.note != "" {
+		left = a.note
+	}
 	status := StatusBar{
-		Left:   "⏻ " + a.cfg.Host,
+		Left:   left,
 		Right:  fmt.Sprintf("%s · %dx%d · %s", tabLabels[a.tab], a.w, a.h, BreakpointFor(a.w)),
 		Styles: a.styles,
 		Width:  a.w,

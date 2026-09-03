@@ -1,0 +1,40 @@
+  Models    Agent    Settings                                                                                           
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+  ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮  
+  │Command palette                                                                                                   │  
+  │                                                                                                                  │  
+  │filter:                                                                                                           │  
+  │❯ Models  go to the Models tab                                                                                    │  
+  │  Agent  go to the Agent tab                                                                                      │  
+  │  Settings  go to the Settings tab                                                                                │  
+  │  Change model  open the Agent model picker                                                                       │  
+  │  Clear conversation  wipe the Agent transcript (asks first)                                                      │  
+  │  Toggle theme  switch dark ↔ light for this session                                                              │  
+  │  Refresh models  reload the model list                                                                           │  
+  │  Command list  open the slash-command reference                                                                  │  
+  │type to filter · ↑/↓ or j/k move · enter run · esc close                                                          │  
+  ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯  
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+ ⏻ http://localhost:11434                                                                         Agent · 120x40 · wide 

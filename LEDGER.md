@@ -727,3 +727,84 @@ bug found by the smoke and fixed, release docs. `make check` and
 - Open for the M7 session to resolve: exact keybind set for palette/slash
   (phone keyboards: no ctrl+p hardware? Blink maps ctrl; verify) and whether
   the context meter lives in the hint row or the status bar.
+
+### 2026-09-06 — M7: UX polish, pre-v0.1 — composer/palette, transcript feel, context meter + picker (DONE)
+**Milestone:** M7 (owner-scoped packages A + B + C, opencode.ai TUI as the feel
+reference) · **Result:** done — `make check` and `go test -race` green; 10 new
+golden frames (17 total) at 72×30/120×40; README/PLAN updated; v0.1 is next.
+
+**Work done**
+- **A — Composer + commands.**
+  - Slash-command menu over the Agent input: typing "/" shows the command
+    list and the draft filters it live; arrows steer the highlight, enter
+    runs, esc drops the whole draft. Commands: `/clear` (y/n confirm dialog;
+    notice on empty), `/model` (opens the picker), `/theme` (sends
+    `agentThemeMsg` to the root — session-scoped shell-wide toggle),
+    `/help` (compact reference overlay; full onboarding stays out of v0.1),
+    `/refresh`. An unmatched slash draft ("/this file" chat) is ordinary
+    prose — no menu, sends normally. Input placeholder now reads
+    "/ for commands, or chat…". Idle `esc` clears a drafted prompt.
+  - `ctrl+p` command palette on any tab (palette.go): go to Models/Agent/
+    Settings, change model, clear conversation, toggle theme, refresh models,
+    open the command list — all filtered as you type; runs synchronously
+    against the App value (no async plumbing). Guarded against opening over
+    another modal or mid-stream; owns every key while open. Theme actions
+    (palette + /theme) show a status-bar toast cleared on the next keypress.
+  - `applyTheme` now tracks `curTheme` (session theme) so session toggles
+    never stick on the stale `cfg.Theme`; digits-are-text-while-composing and
+    empty-input letter-command rules verified intact by the M6 regression
+    tests.
+- **B — Transcript feel.** Streaming caret "▍" rides the live block and
+  disappears at rest; each finished assistant turn gains a muted footer with
+  elapsed time + terminal reason — `AgentDoneMsg` now carries the final
+  stream's `done_reason` (stop/length/tool_calls) out of the runner;
+  `turnMeta` parallels history (user placeholder) so geometry re-renders keep
+  footers; pgup/pgdn page the transcript, `f` toggles auto-follow, and d/pgdn
+  back to the tail re-engages it.
+- **C — Context meter + picker.** Meter in the Agent hint row (composing/
+  streaming always, idle once the conversation has ≥1% weight): same 4-chars-
+  per-token estimator as the runner via the new `agent.ApproxTokens`, over the
+  exact next payload (system prompt + history + in-flight/draft). Red at 100%,
+  and once a send exceeds the budget the transcript head shows the omission
+  marker (`agent.TruncationNotice`, exported from the same const the runner
+  inserts) until /clear. Model picker filters as you type across
+  name/family/size/quant with j/k+arrows navigation, stars the configured
+  default model, and shows a no-match row.
+- **Overlay safety:** `renderCenteredOverlay` (shared by Agent modals + the
+  palette) replaces the duplicate overlay titles; `wrapLines` is now
+  ANSI-width aware (styled rows no longer byte-split mid-sequence); hint rows
+  width-fit by dropping lowest-priority legend segments, meter last. New
+  golden frames: agent-picker/slash/help/clear-confirm + palette at both
+  72×30 and 120×40 — every frame passes the fit-terminal guard.
+- README: status line, Agent-tab keys, command palette + slash commands
+  section. PLAN.md §10 M7 ticked + §12 next-step rewritten (v0.1 next).
+
+**Commands + exit codes**
+- `go build ./...` `0` · `go vet ./...` `0` · `make check` `0`
+- `go test -race ./...` `0` (agent/config/ollama/ui)
+- `go test ./internal/ui -run TestGoldenRender -update` `0` (fixtures
+  regenerated: 17 frames under testdata/golden/)
+- `gofmt -l .` empty (clean)
+
+**Decisions / lines to respect**
+- **Palette/slash keybind set (M7 open question):** ctrl+p from any tab +
+  the "/" menu in the Agent input as the phone path (Blink maps ctrl for
+  ctrl+p; soft keyboards get the slash menu). Slash menu navigates with
+  arrows only (typed letters filter; j/k type into the draft). Palette and
+  picker filters reserve j/k for navigation.
+- **Context meter placement (M7 open question):** the Agent hint row, not the
+  shared status bar (status shows host/geometry shell chrome; the meter is
+  conversation-local). Shown while composing/streaming and, idle, once ≥1%
+  used; truncation shows "ctx full — /clear" + the transcript marker.
+- `/theme` and palette theme toggles are **session-scoped** (toast says
+  "save in Settings to keep it"); persistence stays a Settings action.
+- `esc` semantics: stops a stream, clears a drafted prompt when idle, closes
+  overlays/menus — never quits.
+- The user header stays plain "❯ you" (chip lives on assistant blocks).
+
+**Blockers / open decisions (carry to next session)**
+- None. v0.1 release (tag `v0.1.0`, release notes) is the next step.
+
+**Next action**
+- Fresh session: tag v0.1.0 + release notes (PLAN §10 says "tag + release
+  notes"; decide version string behavior — `-version` prints 0.6.0-m6 today).

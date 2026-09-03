@@ -915,12 +915,20 @@ func modelInfoLines(info map[string]any) string {
 
 // wrapLines word-wraps every line to at most width cells, splitting at the
 // last whitespace and hard-breaking mid-word when a single word overflows.
+// wrapLines wraps each line to width columns. Rows that already fit (judged
+// by visible width, so styled rows with ANSI escapes are never re-split
+// mid-sequence) pass through untouched; only genuinely long lines are
+// wrapped at word boundaries.
 func wrapLines(lines []string, width int) []string {
 	if width < 1 {
 		return lines
 	}
 	var out []string
 	for _, line := range lines {
+		if lipgloss.Width(line) <= width {
+			out = append(out, line)
+			continue
+		}
 		for len(line) > width {
 			cut := strings.LastIndex(line[:width+1], " ")
 			if cut <= 0 {
