@@ -95,6 +95,39 @@ found: `oracle`/`council-architect` pinned nonexistent `grok-4.5`.
 
 ---
 
+### 2026-09-03 — M0a Spike 1: Ollama native tool-calling probe (LINCHPIN)
+**Milestone:** M0a gate · **Result:** PARTIAL PASS — native tool_calls work on some models,
+but NOT on the primary coding model ⇒ agent needs a content-based tool fallback.
+
+**Method:** throwaway probe `/tmp/spike1.py` (kept out of repo) POSTs `/api/chat` with an
+Ollama `tools` schema (`read_file`, `echo_text`) and drives a real 2-step round trip
+(model emits tool_call → we inject tool result → model must summarize) on each installed
+model. Tested Ollama server **0.33.1**. Live models: qwen2.5-coder:14b, gemma3:12b,
+qwen3-vl:8b, qwen2.5:1.5b (+ `-pi` variants).
+
+**Results (compact):**
+- `qwen2.5-coder:14b` / `-pi` — `Capabilities: tools` TRUE, but emits the call as plain
+  JSON in `message.content`, `message.tool_calls` EMPTY → **Ollama did not convert**. Not
+  usable for a native tool loop.
+- `gemma3:12b` / `-pi` — HTTP 400 `does not support tools` → unusable.
+- `qwen3-vl:8b` — ✅ full 2-step PASS: proper `tool_calls`, args auto-parsed, streamed over
+  ~376 lines; after injecting the read_file result, produced a correct final summary.
+- `qwen2.5:1.5b` — emits tool_calls (PASS syntactically) but too small / wrong answer.
+
+**Commands + exit codes:** `ollama --version` (0.33.1) `0`; probe runs `0`.
+
+**Decision implications (see PLAN §6 / risk #4):**
+1. **Agent tool-dispatch must support BOTH** native `message.tool_calls` (qwen3-vl) **and**
+   content-embedded tool-JSON parsing+validation (qwen2.5-coder) — otherwise the primary
+   coding model can't drive the agent. This makes the "explicit fallback, never silent"
+   owner decision an **empirical requirement**, not a preference.
+2. Native tool loop is **confirmed feasible** (qwen3-vl 2-step pass) → M3 scope stays.
+3. **Model recommendation for the coding agent:** prefer a genuinely tool-capable coding
+   model (e.g., a qwen3 non-VL coder, or qwen3-vl) OR implement the content-JSON parser so
+   `qwen2.5-coder:14b` works. Owner to pick (owner decision OD3).
+
+---
+
 ## Appendix — canonical commands (update as build grows)
 
 | Task | Command |
