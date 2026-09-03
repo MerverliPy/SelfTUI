@@ -639,6 +639,14 @@ func (v AgentView) renderInput() string {
 	return v.styles.Pane.Width(v.w).Height(4).Render(v.input.View())
 }
 
+// composing reports whether the chat input holds text. The shell's digit-key
+// tab jumps are disabled while composing so bare digits type into the prompt
+// (M6 fix found by the reconnect smoke); with an empty input digits still
+// switch tabs.
+func (v AgentView) composing() bool {
+	return v.input.Value() != ""
+}
+
 // hintLine is the one-row strip between transcript and input: an error, the
 // streaming state, a transient notice, or the legend.
 func (v AgentView) hintLine() string {

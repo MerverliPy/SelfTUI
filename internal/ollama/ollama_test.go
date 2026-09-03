@@ -2,6 +2,8 @@ package ollama
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -411,6 +413,111 @@ func TestPullEmptyNameRejected(t *testing.T) {
 	c := New("http://localhost:11434", "")
 	if err := c.Pull(context.Background(), "", nil); err == nil {
 		t.Fatal("Pull with empty name: want error, got nil")
+	}
+}
+
+func TestPullSendsBearerToken(t *testing.T) {
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		io.WriteString(w, pullStream)
+	}))
+	t.Cleanup(srv.Close)
+
+	c := New(srv.URL, "sekrit")
+	if err := c.Pull(context.Background(), "qwen3:0.6b", nil); err != nil {
+		t.Fatalf("Pull: %v", err)
+	}
+	if gotAuth != "Bearer sekrit" {
+		t.Errorf("Authorization = %q, want %q", gotAuth, "Bearer sekrit")
+	}
+}
+
+// --- M6: auth/TLS acceptance (public-CA https + bearer token) -------------
+//
+// The client takes the host verbatim, so an https:// base URL exercises Go's
+// real TLS stack: certificate verification against the system roots (or an
+// explicitly trusted pool in tests) plus the Authorization header on every
+// endpoint. tlsClient trusts only the test server's certificate and disables
+// the proxy env so the handshake is deterministic.
+func tlsClient(t *testing.T, srv *httptest.Server, token string) *Client {
+	t.Helper()
+	pool := x509.NewCertPool()
+	pool.AddCert(srv.Certificate())
+	tlsCfg := &tls.Config{RootCAs: pool}
+	c := New(srv.URL, token)
+	c.http.Transport = &http.Transport{TLSClientConfig: tlsCfg, Proxy: nil}
+	c.stream.Transport = &http.Transport{TLSClientConfig: tlsCfg, Proxy: nil}
+	return c
+}
+
+// TestHTTPSVerifiedAndBearerSent: over a real TLS handshake (https:// host
+// whose certificate the client explicitly trusts), the bearer token must be
+// sent on both a JSON endpoint (List, through the timeout client) and a
+// streaming endpoint (Pull, through the no-timeout stream client).
+func TestHTTPSVerifiedAndBearerSent(t *testing.T) {
+	saw := struct{ auth, path string }{}
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		saw.auth = r.Header.Get("Authorization")
+		saw.path = r.URL.Path
+		switch r.URL.Path {
+		case "/api/pull":
+			w.Header().Set("Content-Type", "application/x-ndjson")
+			io.WriteString(w, pullStream)
+		case "/api/tags":
+			w.Write([]byte(`{"models":[]}`))
+		default:
+			http.Error(w, "unexpected path", http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	c := tlsClient(t, srv, "tok-https")
+
+	if _, err := c.List(context.Background()); err != nil {
+		t.Fatalf("List over https: %v", err)
+	}
+	if saw.auth != "Bearer tok-https" {
+		t.Errorf("List Authorization = %q, want %q", saw.auth, "Bearer tok-https")
+	}
+	if saw.path != "/api/tags" {
+		t.Errorf("List path = %q", saw.path)
+	}
+
+	var events []PullProgress
+	if err := c.Pull(context.Background(), "qwen3:0.6b", func(p PullProgress) {
+		events = append(events, p)
+	}); err != nil {
+		t.Fatalf("Pull over https: %v", err)
+	}
+	if saw.auth != "Bearer tok-https" {
+		t.Errorf("Pull Authorization = %q, want %q", saw.auth, "Bearer tok-https")
+	}
+	if len(events) != 6 {
+		t.Errorf("Pull got %d events over https, want 6", len(events))
+	}
+}
+
+// TestHTTPSUntrustedCertRejected: TLS verification is genuinely on — a host
+// with a certificate the client does not trust (the self-signed httptest
+// cert, with the default system roots) must fail with a certificate error,
+// never a silent downgrade or a hang.
+func TestHTTPSUntrustedCertRejected(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"models":[]}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	c := New(srv.URL, "") // default transports: system roots only
+	c.http.Transport = &http.Transport{Proxy: nil}
+
+	_, err := c.List(context.Background())
+	if err == nil {
+		t.Fatal("List against an untrusted https host: want certificate error, got nil")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "certificate") {
+		t.Errorf("error = %v, want a TLS certificate verification error", err)
 	}
 }
 

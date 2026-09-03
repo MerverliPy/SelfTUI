@@ -356,13 +356,30 @@ and runs allowed commands, all gated + tested.*
 
 **M6 — Release acceptance.** unit+golden tests throughout; auth/TLS; error surfacing;
 context-truncation edges; binary/reconnect smoke test; docs; release acceptance.
-**Owner decision (2026-09-06): the reconnect smoke runs LIVE over the owner's actual
-Moshi/iPhone 16 Pro client** (the measured 72×30 device) — not only the local pty
-harness — with evidence recorded in `docs/` like M0a. The M6 session must first resolve
-what "reconnect" means on the transport (mosh session reattach vs SSH re-connect vs a
-fresh client after a drop) and extend the M0a instrument pattern
-(`cmd/size-probe` + probe record at `$XDG_STATE_HOME/selftui/probe.txt`) to verify
-geometry, scroll state, and in-flight cancellation recovery after a reconnect.
+✅ *done 2026-09-03 — evidence in docs/reconnect.md + LEDGER.*
+**Reconnect semantics resolved live** on the owner's actual Moshi/iPhone 16 Pro
+client: the owner runs SelfTUI inside **tmux over SSH**, so a phone drop =
+**tmux reattach** — the app process survives (verified: pid survived the drop,
+"same screen" observation, app log shows no shutdown) and the host Ollama
+recovers (tags 200 in 1.4 ms). The **fresh-SSH death** shape (plain ssh: drop
+→ SIGHUP → process dies; config persists, chat is per-process) is covered
+deterministically by the new `make smoke-reconnect` harness
+(`scripts/reconnect-smoke.py`): 72×30 boot, mid-generation drop → SIGHUP
+death (rc=-1), host recovery (generation round-trip 0.1 s), clean fresh
+reconnect with config re-applied — PASS ×3. `cmd/size-probe` extended with
+session headers (pid + `-session` tag) and checkpoints (`c` / SIGUSR1) so
+probe.txt is attributable session blocks. Auth/TLS: bearer-token tests on the
+stream endpoints and real-TLS tests (trusted handshake over https on JSON +
+stream endpoints; untrusted cert rejected). Error surfacing: settings save
+failure now tested end-to-end (read-only dir → error panel with cause → retry
+after fix succeeds). Context-truncation edges: fixed + tested — a giant *first*
+message is now bounded (was sent raw past numCtx), the plain-chat fallback
+honors the budget, repeated budgeting inserts the marker exactly once,
+tool-call args count toward the budget. Bug found by the smoke: **digits typed
+in the Agent chat input switched tabs mid-prompt** — fixed: digits jump only
+from Models / an empty chat input (regression test). Dead `compactToolResult`
+helper removed. `selftui -version` prints `0.6.0-m6` and is logged at startup.
+`make check` + `go test -race` green; README ships the reconnect guidance.
 *(Hardening was pushed inline into each tool's milestone, so M6 is acceptance, not the
 first safety gate.)*
 
@@ -395,10 +412,17 @@ landed 2026-09-05**, **M3b — jailed mutation agent landed 2026-09-05**,
 **M4 — Settings & persistence landed 2026-09-06**, and
 **M5 — Responsive completion + iPhone path landed 2026-09-06** (golden render
 fixtures at 72×30 and 120×40 across all three tabs, height-capped approval
-dialogs, light-theme verification, README SSH-on-iPhone guide). `make check`
-is green. Next milestone: **M6 — Release acceptance** (unit+golden tests
-throughout; auth/TLS; error surfacing; context-truncation edges;
-binary/reconnect smoke test; docs; release acceptance).
+dialogs, light-theme verification, README SSH-on-iPhone guide).
+**M6 — Release acceptance landed 2026-09-03**: reconnect semantics resolved live
+on the Moshi/iPhone 16 Pro client (tmux-over-SSH reattach is the owner's
+transport; fresh-SSH death covered by the local smoke), `make smoke-reconnect`
+harness, size-probe session/checkpoint instrumentation, auth/TLS acceptance
+tests, settings save-error + retry test, context-truncation edge fixes
+(single-huge-turn bound, plain-chat fallback budget, marker idempotence, tool
+args counted), digit-tab-jump bug fix + regression test, `-version` flag,
+release docs (`docs/reconnect.md`, README). `make check` and `go test -race`
+green. Next: **v0.1 release** (tag the M6 build, ship notes) — or any
+owner-assigned follow-up.
 
 ---
 

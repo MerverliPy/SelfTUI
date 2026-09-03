@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -144,6 +146,51 @@ func TestThemePreviewEmitsLiveThemeMsg(t *testing.T) {
 // 4 groups) and submits unchanged values: the config file is written and the
 // saved panel shows (persist path of the M4 exit). Value-change/apply is
 // covered by TestSettingsApplyConfigLive.
+func TestSettingsSaveErrorSurfacedAndRetry(t *testing.T) {
+	m, cfg := settingsApp(t)
+	dir := filepath.Dir(cfg.ConfigPath())
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+
+	m = openSettings(t, m)
+	keys := make([]tea.Msg, 10)
+	for i := range keys {
+		keys[i] = tea.KeyPressMsg{Code: tea.KeyEnter}
+	}
+	app := drive(t, m, keys...).(App)
+
+	// The save failure must surface as an explicit panel, never a silent
+	// drop or a crash, and the error text must be visible.
+	if app.settings.state != settingsError {
+		t.Fatalf("state = %v, want settingsError (save to read-only dir should fail)\n%s",
+			app.settings.state, view(t, app))
+	}
+	got := view(t, app)
+	if !strings.Contains(got, "Could not save settings") || !strings.Contains(got, "permission denied") {
+		t.Errorf("expected save-error panel naming the cause, got:\n%s", got)
+	}
+
+	// Retry once the cause is fixed: enter reopens the editing form and a
+	// second submit succeeds.
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	app = updateTab(t, app, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if !app.settings.Editing() {
+		t.Fatalf("enter on the error panel should reopen the editing form, got:\n%s", view(t, app))
+	}
+	keys = make([]tea.Msg, 10)
+	for i := range keys {
+		keys[i] = tea.KeyPressMsg{Code: tea.KeyEnter}
+	}
+	app = drive(t, app, keys...).(App)
+	if app.settings.state != settingsSaved {
+		t.Errorf("retry state = %v, want saved\n%s", app.settings.state, view(t, app))
+	}
+}
+
 func TestSettingsSubmitPersistsAndApplies(t *testing.T) {
 	m, cfg := settingsApp(t)
 	path := cfg.ConfigPath()

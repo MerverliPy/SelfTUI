@@ -11,6 +11,14 @@
 //	                               ts kind width height breakpoint extra
 //	bin/size-probe -mode raw -once print the first negotiated size, then exit
 //	bin/size-probe -dur 20         auto-quit after N seconds (both modes)
+//	bin/size-probe -session live-1 tag this session in the event log (default:
+//	                               auto "pid-<pid>"; each fresh launch writes a
+//	                               session header, so reconnect runs are
+//	                               attributable across SSH re-connects)
+//
+// Checkpoints: press c in tui mode, or send SIGUSR1 in raw mode, to append a
+// checkpoint event line — a human marker ("about to drop", "just
+// reconnected") that makes probe.txt read like a timeline.
 //
 // The two modes are deliberately independent reporters of the same pty:
 // tui mode receives Bubble Tea's WindowSizeMsg, raw mode reads TIOCGWINSZ
@@ -20,7 +28,9 @@
 // durable evidence file: every event lands there in both modes.
 //
 // M0a gate evidence: run this over the target SSH client(s) and record the
-// output; see docs/m0a-gate-evidence.md.
+// output; see docs/m0a-gate-evidence.md. M6 reconnect evidence (fresh SSH
+// re-connect semantics) uses the session tags + checkpoints; see
+// docs/reconnect.md.
 package main
 
 import (
@@ -42,6 +52,18 @@ import (
 // ---- shared event line -----------------------------------------------------
 
 var logPath string
+
+// session names this probe launch in the event log. A fresh SSH session is a
+// fresh process, so the default (pid) already separates reconnect runs; an
+// explicit -session makes a live run legible (e.g. -session m6-live-1a).
+var sessionName string
+
+// sessionHeader is written once per process, before the first event line, so
+// probe.txt is a sequence of attributable session blocks.
+func sessionHeader(termEnv, colorEnv, profile string) string {
+	return fmt.Sprintf("# size-probe start session=%s pid=%d term=%s colorterm=%s profile=%s",
+		sessionName, os.Getpid(), termEnv, colorEnv, profile)
+}
 
 // line renders one CSV-ish measurement line, shared by both modes.
 func line(kind string, w, h int, extra string) string {
@@ -101,6 +123,11 @@ func runRaw(once bool, dur time.Duration, logFile *os.File) error {
 	signal.Notify(sigwinch, syscall.SIGWINCH)
 	defer signal.Stop(sigwinch)
 
+	// SIGUSR1 = human checkpoint marker ("about to drop", "reconnected").
+	sigusr1 := make(chan os.Signal, 1)
+	signal.Notify(sigusr1, syscall.SIGUSR1)
+	defer signal.Stop(sigusr1)
+
 	tick := time.NewTicker(250 * time.Millisecond)
 	defer tick.Stop()
 	var deadline <-chan time.Time
@@ -111,9 +138,12 @@ func runRaw(once bool, dur time.Duration, logFile *os.File) error {
 	}
 
 	prev := size
+	checkpoint := false
 	for {
 		select {
 		case <-sigwinch:
+		case <-sigusr1:
+			checkpoint = true
 		case <-tick.C:
 		case <-deadline:
 			return nil
@@ -121,6 +151,10 @@ func runRaw(once bool, dur time.Duration, logFile *os.File) error {
 		cur, err := sizeAt(fd)
 		if err != nil {
 			return err
+		}
+		if checkpoint {
+			log(line("checkpoint", cur.w, cur.h, "SIGUSR1"))
+			checkpoint = false
 		}
 		if cur != prev {
 			log(line("resize", cur.w, cur.h, ""))
@@ -210,6 +244,12 @@ func (m probe) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if k.Text == "q" {
 			return m, quit()
 		}
+		if k.Text == "c" {
+			// human checkpoint marker for reconnect runs: press c just
+			// before dropping the SSH session and again after reconnecting.
+			m.note("checkpoint", "user marker")
+			return m, nil
+		}
 
 	case tea.KeyMsg:
 		// other key messages (release etc.): display only
@@ -224,8 +264,9 @@ func (m probe) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m probe) View() tea.View {
 	lines := []string{
-		"size-probe — M0a measurement (q / ctrl+c quits)",
+		"size-probe — M0a measurement (q / ctrl+c quits, c = checkpoint)",
 		"",
+		fmt.Sprintf("  session    %s", sessionName),
 		fmt.Sprintf("  geometry   %dx%d  → %s", m.w, m.h, breakpointName(m.w)),
 		fmt.Sprintf("  keys seen  %d", m.keys),
 		fmt.Sprintf("  color      TERM=%s COLORTERM=%s profile=%s darkBg=%v",
@@ -257,8 +298,15 @@ func main() {
 	mode := flag.String("mode", "tui", "tui (alt screen) or raw (CSV lines)")
 	once := flag.Bool("once", false, "raw: print the first size, then exit")
 	dur := flag.Int("dur", 0, "auto-quit after N seconds (0 = run until quit)")
+	session := flag.String("session", "", "session tag for the event log (default: pid-<pid>)")
 	flag.StringVar(&logPath, "log", "", "event log file (default: $XDG_STATE_HOME/selftui/probe.txt)")
 	flag.Parse()
+
+	if *session != "" {
+		sessionName = *session
+	} else {
+		sessionName = fmt.Sprintf("pid-%d", os.Getpid())
+	}
 
 	if *mode != "tui" && *mode != "raw" {
 		fmt.Fprintln(os.Stderr, "size-probe: -mode must be tui or raw")
@@ -284,8 +332,7 @@ func main() {
 	termEnv, colorEnv := os.Getenv("TERM"), os.Getenv("COLORTERM")
 	profile := termenv.ColorProfile().Name()
 	darkBg := termenv.HasDarkBackground()
-	fmt.Fprintf(logFile, "# size-probe start term=%s colorterm=%s profile=%s\n",
-		termEnv, colorEnv, profile)
+	fmt.Fprintln(logFile, sessionHeader(termEnv, colorEnv, profile))
 
 	if *mode == "raw" {
 		if err := runRaw(*once, time.Duration(*dur)*time.Second, logFile); err != nil {

@@ -34,6 +34,9 @@ smoke: build ## live M1b smoke: pull + delete against the local Ollama host
 smoke-model: build ## live smoke pulling a specific model instead of the default
 	python3 scripts/pull-delete-smoke.py $(MODEL)
 
+smoke-reconnect: build ## M6 reconnect smoke: SSH-drop simulation + fresh reconnect
+	python3 scripts/reconnect-smoke.py
+
 probe-raw: probe-build ## size probe as CSV lines (harness/script friendly)
 	./bin/size-probe -mode raw
 

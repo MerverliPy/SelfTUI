@@ -151,7 +151,7 @@ func (r *Runner) run(ctx context.Context, req Request, emit func(Msg)) error {
 		if err != nil {
 			if iteration == 0 && isToolUnsupported(err) {
 				emit(FallbackMsg{Reason: "model does not support tools; using plain chat"})
-				return r.runPlainChat(ctx, req, messages, options, emit)
+				return r.runPlainChat(ctx, req, messages, req.NumCtx, options, emit)
 			}
 			return err
 		}
@@ -199,9 +199,12 @@ func (r *Runner) run(ctx context.Context, req Request, emit func(Msg)) error {
 	return fmt.Errorf("agent: maximum tool iterations (%d) reached", r.maxIterations)
 }
 
-func (r *Runner) runPlainChat(ctx context.Context, req Request, messages []ollama.ChatMessage, options *ollama.ChatOptions, emit func(Msg)) error {
+func (r *Runner) runPlainChat(ctx context.Context, req Request, messages []ollama.ChatMessage, numCtx int, options *ollama.ChatOptions, emit func(Msg)) error {
 	return r.client.ChatStream(ctx, ollama.ChatRequest{
-		Model: req.Model, Messages: messages, Stream: true, Options: options,
+		// The plain-chat fallback must honor the same context budget as the
+		// tool loop: a giant first message is truncated, never sent raw
+		// (M6 context-truncation edge).
+		Model: req.Model, Messages: BudgetMessages(messages, numCtx), Stream: true, Options: options,
 	}, func(ev ollama.ChatEvent) {
 		if ev.Message.Content != "" {
 			emit(TokenMsg{Text: ev.Message.Content})

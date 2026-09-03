@@ -5,7 +5,7 @@ models, with an embedded AI coding-agent chat and a settings panel. Runs
 identically on a PC (native terminal) and over SSH on a phone (Moshi;
 Blink/Termius similar) — layout adapts to narrow windows.
 
-**Status: M5 — responsive completion + iPhone path landed.** The Models tab lists live models from the Ollama host (`/api/tags`) with selection + an inspect pane (`/api/show`): key facts, parameters, template, modelfile, model info, license — scrollable, side-by-side on wide screens and stacked (enter-toggled) on the phone. **Delete with confirm (`x` → `y`/`esc`) and streaming pull (`p` → name → spinner + progress; `esc` cancels)** work live; pulls reload the list automatically. The Agent tab supports native or content-embedded tool calls, explicit plain-chat fallback, jailed read/write/edit tools, and a constrained confirmed command executor. It is a guardrail rather than an OS sandbox; general shell and interpreters remain disabled. The Settings tab (huh forms) edits the whole config surface and writes it back to the config file with in-session live apply. Golden render fixtures now pin the full shell at the two canonical geometries — the measured Moshi portrait device (72×30) and a wide PC window (120×40) — every frame is asserted to stay inside its terminal, dialogs (including long mutation approvals) are height-capped so decision keys stay on screen, and the light palette is verified across every tab.
+**Status: M6 — release acceptance done.** The Models tab lists live models from the Ollama host (`/api/tags`) with selection + an inspect pane (`/api/show`): key facts, parameters, template, modelfile, model info, license — scrollable, side-by-side on wide screens and stacked (enter-toggled) on the phone. **Delete with confirm (`x` → `y`/`esc`) and streaming pull (`p` → name → spinner + progress; `esc` cancels)** work live; pulls reload the list automatically. The Agent tab supports native or content-embedded tool calls, explicit plain-chat fallback, jailed read/write/edit tools, and a constrained confirmed command executor. It is a guardrail rather than an OS sandbox; general shell and interpreters remain disabled. The Settings tab (huh forms) edits the whole config surface and writes it back to the config file with in-session live apply. Golden render fixtures pin the full shell at the two canonical geometries — the measured Moshi portrait device (72×30) and a wide PC window (120×40) — every frame is asserted to stay inside its terminal, dialogs are height-capped, and the light palette is verified across every tab. **Auth/TLS**: https hosts (public CA, verified) + bearer token are covered by tests on every endpoint; a settings save failure surfaces inline with retry; the context budget bounds even a giant first message and the plain-chat fallback. `make smoke-reconnect` simulates an SSH drop mid-generation and verifies clean process death, Ollama host recovery, and a clean reconnect; the reconnect semantics (tmux reattach over SSH vs fresh SSH re-connect) were resolved live on the owner's Moshi/iPhone 16 Pro client — see `docs/reconnect.md`.
 
 ## Build & run
 
@@ -14,6 +14,7 @@ make build     # bin/selftui
 make run       # go run ./cmd/self-tui
 make test      # unit tests
 make lint      # go vet + gofmt check
+selftui -version  # print the build version
 ```
 
 Requires Go ≥ 1.25 (`GOTOOLCHAIN=auto` fetches it on demand). Logs go to
@@ -32,8 +33,10 @@ Resolution order: **flags > env > config file > defaults**.
 
 ## Navigation
 
-`tab` / `shift-tab` or `1`/`2`/`3` switch Models · Agent · Settings.
-`ctrl+c` quits.
+`tab` / `shift-tab`, or `1`/`2`/`3` from the Models tab, switch Models ·
+Agent · Settings. `1`/`2`/`3` also switch from an empty Agent chat input; once
+you start typing a prompt the digits become text (so “count to 300” never
+jumps tabs). `ctrl+c` quits.
 
 **Models tab (M1b)**: `j`/`k` or arrows select · `enter` opens the inspect
 pane (compact) or refreshes it (wide) · `esc` closes it · `u`/`d` scroll the
@@ -115,9 +118,26 @@ measured 72×30):
 
 The status bar shows the live `WxH` and the active layout
 (`compact`/`medium`/`wide`) — rotate or zoom the font and watch it adapt.
-Everything is keyboard-driven: `tab`/`shift-tab` or `1`/`2`/`3` switch tabs;
-`esc` lives on the iOS keyboard toolbar (or as a hardware key) in Blink and
-friends — it cancels pulls, stops agent turns, and discards settings edits.
+Everything is keyboard-driven: `tab`/`shift-tab` or `1`/`2`/`3` (Models tab,
+or empty chat input) switch tabs; `esc` lives on the iOS keyboard toolbar (or
+as a hardware key) in Blink and friends — it cancels pulls, stops agent
+turns, and discards settings edits.
+
+### If your SSH session drops
+
+SelfTUI keeps your **settings** in a config file, but the conversation lives
+in the running process. What survives a phone-side drop depends on the
+transport (verified live, `docs/reconnect.md`):
+
+- **Inside tmux (or mosh)** — the recommended setup — the app process
+  survives: reconnect and re-attach and you get the **same screen back**
+  (conversation + scroll intact).
+- **Plain SSH (no tmux)** — the drop kills the app; reconnect and relaunch:
+  clean boot at the negotiated geometry, config re-applied, and the aborted
+  model job is cleaned up by Ollama (nothing is left stuck).
+
+`make smoke-reconnect` exercises the plain-SSH path locally (SIGHUP on a
+mid-generation drop, host recovery, clean fresh reconnect).
 
 ## Project docs
 

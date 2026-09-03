@@ -21,6 +21,10 @@ import (
 	"selftui/internal/ui"
 )
 
+// Version identifies this build; it is logged at startup and printed by
+// selftui -version so release/smoke evidence is attributable (M6).
+const Version = "0.6.0-m6"
+
 func main() {
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, "selftui:", err)
@@ -42,7 +46,13 @@ func run() error {
 	flagMaxToolIterations := flag.String("max-tool-iterations", "", "max tool iterations")
 	flagSystemPrompt := flag.String("system-prompt", "", "agent system prompt")
 	flagVerbose := flag.Bool("verbose", false, "debug-level logging")
+	flagVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
+
+	if *flagVersion {
+		fmt.Printf("selftui %s\n", Version)
+		return nil
+	}
 
 	ov := config.Overrides{ConfigPath: flagConfig}
 	if *flagHost != "" {
@@ -111,7 +121,7 @@ func run() error {
 	if *flagVerbose {
 		rootLog.SetLevel(log.DebugLevel)
 	}
-	rootLog.Info("starting", "host", cfg.Host, "theme", cfg.Theme, "config", cfg.ConfigPath())
+	rootLog.Info("starting", "version", Version, "host", cfg.Host, "theme", cfg.Theme, "config", cfg.ConfigPath())
 
 	// --- cancellation plumbing: SIGINT/SIGTERM cancel a root context that
 	// the program and (from M1+) background jobs share ---

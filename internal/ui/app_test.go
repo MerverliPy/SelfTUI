@@ -98,6 +98,72 @@ func TestNumberKeysJump(t *testing.T) {
 	}
 }
 
+// TestAgentTabDigitsTypeNotJump: the Agent chat input is a text field, so
+// bare digits are prompt characters — typing "1 to 300" must never switch
+// tabs mid-prompt (M6 bug found by the reconnect smoke). Digit jumps only
+// act from the Models tab (and the Settings result panel).
+func TestAgentTabDigitsTypeNotJump(t *testing.T) {
+	cfg := config.Default()
+	cfg.DefaultModel = "qwen3:8b"
+	m := New(&cfg, NewStyles(cfg.Theme), ollama.New(cfg.Host, cfg.AuthToken))
+	m = updateTab(t, m, tea.WindowSizeMsg{Width: 100, Height: 40})
+	m = updateTab(t, m, tea.KeyPressMsg{Text: "2"}) // to Agent
+	if m.tab != 1 {
+		t.Fatalf("start tab = %d, want 1", m.tab)
+	}
+	// Resolve the model fetch deterministically (no live host in tests), then
+	// start composing so the digits below are prompt characters, not jumps.
+	m = updateTab(t, m, agentModelsLoadedMsg{models: sampleModels()})
+	m = updateTab(t, m, tea.KeyPressMsg{Text: "Count "})
+
+	for _, d := range []string{"1", "2", "3", "9", "0"} {
+		m = updateTab(t, m, tea.KeyPressMsg{Text: d})
+		if m.tab != 1 {
+			t.Fatalf("digit %q switched tab to %d while composing in Agent", d, m.tab)
+		}
+		if m.settings.Editing() {
+			t.Fatalf("digit %q opened the settings form while composing in Agent", d)
+		}
+	}
+
+	// The composing contract keeps digit jumps on an EMPTY Agent input (a
+	// fresh tab with no text still jumps, per the README's 1/2/3 nav).
+	m2 := newTestApp(t)
+	m2 = updateTab(t, m2, tea.WindowSizeMsg{Width: 100, Height: 40})
+	m2 = updateTab(t, m2, tea.KeyPressMsg{Text: "2"})
+	m2 = updateTab(t, m2, agentModelsLoadedMsg{models: sampleModels()})
+	m2 = updateTab(t, m2, tea.KeyPressMsg{Text: "3"})
+	if m2.tab != 2 || !m2.settings.Editing() {
+		t.Errorf("empty Agent input: '3' should jump to Settings, tab=%d editing=%v",
+			m2.tab, m2.settings.Editing())
+	}
+
+	// Digits must actually land in the conversation input: while composing,
+	// the hint legend hides the letter commands ("… · m model · …") and shows
+	// only "enter send · shift+enter newline" — visible proof the prompt text
+	// is buffered.
+	prompt := "from 1 to 300, then stop."
+	for _, ch := range prompt {
+		m = updateTab(t, m, tea.KeyPressMsg{Text: string(ch)})
+	}
+	if m.tab != 1 {
+		t.Fatalf("typing the prompt switched tab to %d", m.tab)
+	}
+	got := view(t, m)
+	if !strings.Contains(got, "enter send · shift+enter newline") ||
+		strings.Contains(got, "m model · r refresh") {
+		t.Errorf("input did not buffer the prompt (hint should be the composing "+
+			"legend without letter commands):\n%s", got)
+	}
+
+	// Enter sends (or is consumed by) the Agent view — never a tab jump.
+	m = updateTab(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if m.tab != 1 || m.settings.Editing() {
+		t.Errorf("enter while typing in Agent switched away: tab=%d editing=%v",
+			m.tab, m.settings.Editing())
+	}
+}
+
 func TestCtrlCQuits(t *testing.T) {
 	m := newTestApp(t)
 	_, cmd := m.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})

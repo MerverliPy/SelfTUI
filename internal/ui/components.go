@@ -35,7 +35,14 @@ func fitContent(lines []string, budget int) []string {
 // Tab labels in navigation order. <1>/<2>/<3> and tab/shift-tab cycle here.
 var tabLabels = []string{"Models", "Agent", "Settings"}
 
-const numTabs = 3
+const (
+	numTabs = 3
+	// agentTab is the Agent (chat) tab index. The shell's digit-key tab
+	// jumps are disabled while it is active: its input is a text field and
+	// bare digits are legitimate prompt characters (M6 fix, found by the
+	// reconnect smoke typing "1 to 300").
+	agentTab = 1
+)
 
 // TabBar renders the navigation tab row. Highlighting is purely presentational:
 // the root model owns the active index (single source of truth).

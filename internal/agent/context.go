@@ -1,8 +1,6 @@
 package agent
 
 import (
-	"strings"
-
 	"selftui/internal/ollama"
 )
 
@@ -13,7 +11,12 @@ const truncationNotice = "Earlier conversation omitted to fit the context window
 // quarters of numCtx are reserved for input so the model has room to reply.
 func BudgetMessages(messages []ollama.ChatMessage, numCtx int) []ollama.ChatMessage {
 	out := append([]ollama.ChatMessage(nil), messages...)
-	if numCtx <= 0 || len(out) < 3 {
+	// A zero/negative numCtx means "no budget" (leave the conversation
+	// alone); the runner always sends system + at least one turn, so any
+	// other shape is safe to budget. A brand-new chat whose first message is
+	// huge must be bounded too — that is what the truncateLatest fallback
+	// below handles when there is no older turn to drop.
+	if numCtx <= 0 || len(out) == 0 {
 		return out
 	}
 	limit := numCtx * 3 / 4
@@ -70,10 +73,4 @@ func maxInt(a, b int) int {
 		return a
 	}
 	return b
-}
-
-// compactToolResult prevents a full command transcript from consuming every
-// subsequent chat request while preserving an explicit truncation signal.
-func compactToolResult(text string) string {
-	return strings.TrimSpace(boundedResult(text))
 }

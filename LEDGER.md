@@ -629,3 +629,85 @@ Charm set pinned (v2 line), tests green.
   transport (mosh reattach vs SSH re-connect vs fresh client after a drop) — then
   verify geometry, scroll state, and in-flight cancellation recovery after reconnect.
 - Recorded in `PLAN.md` §10 under M6 so the roadmap carries it.
+### 2026-09-03 — M6: Release acceptance (DONE)
+**Milestone:** M6 · **Result:** ✅ done — reconnect semantics resolved LIVE on the
+owner's Moshi/iPhone 16 Pro client (tmux-over-SSH reattach is the real
+transport), `make smoke-reconnect` harness + size-probe instrumentation,
+auth/TLS + context-truncation + error-surfacing acceptance work, one real UI
+bug found by the smoke and fixed, release docs. `make check` and
+`go test -race ./...` green.
+
+**Work done**
+- **Reconnect semantics (owner decision, resolved live):** asked → owner runs
+  SelfTUI **inside tmux over SSH**; the live drop test showed the app process
+  **survives** (pid 881865 alive across the drop/reconnect, app log shows no
+  shutdown clean) with the same screen restored (owner observation) and host
+  Ollama healthy (tags HTTP 200 in 1.4 ms). Canonical live shape = **tmux
+  reattach**; the **fresh-SSH death** shape (SIGHUP → process dies, config
+  persists, chat is per-process) is covered by the local harness.
+  `docs/reconnect.md` records the resolution, instrument spec, both procedures,
+  and the evidence (local + live); README ships a user-facing "if your SSH
+  session drops" note.
+- **`cmd/size-probe` extension:** session headers `# size-probe start
+  session=<tag> pid=<pid> term=…` (new `-session` flag, default `pid-<pid>`),
+  checkpoints (`c` key in tui / SIGUSR1 in raw → `checkpoint` event line).
+  probe.txt is now attributable session blocks (verified at 72×30 in a pty).
+- **`scripts/reconnect-smoke.py` + `make smoke-reconnect`:** boots selftui in a
+  pty at 72×30 (child = own session with the pty as controlling terminal, so
+  closing the master delivers SIGHUP like sshd), starts a chat turn, drops
+  mid-generation, asserts SIGHUP death (rc=-1) + host recovery (fast tags +
+  complete short generation) + clean fresh reconnect at 72×30 with the config
+  file re-applied (light theme) + ctrl+c exit 0. **PASS ×4 runs** (~5–13 s).
+- **M6 acceptance test additions:** bearer token on the Pull stream endpoint;
+  real-TLS pair — trusted-cert https handshake carrying the token on a JSON +
+  a stream endpoint, and untrusted-cert rejection with a surfaced certificate
+  error; settings save-failure surfaced end-to-end (chmod 0500 dir → error
+  panel names the cause → fix + retry succeeds); context-truncation edges in
+  new `internal/agent/context_test.go`.
+- **Context-truncation fixes (found by the new tests):** (a) a giant *first*
+  message was sent raw past num_ctx — `BudgetMessages` early-returned on
+  `len<3`; now only degenerate/empty lists skip budgeting and `truncateLatest`
+  bounds a lone overflowing turn (marker-free, `[truncated]`-prefixed tail);
+  (b) the plain-chat fallback (`runPlainChat`) bypassed the budget — now calls
+  `BudgetMessages`; (c) repeated budgeting inserts the truncation marker
+  exactly once (idempotence pinned by test); (d) tool-call argument JSON is
+  counted toward the budget (tested). Dead `compactToolResult` helper removed
+  (per-stream caps already bound results).
+- **Real UI bug found by the smoke:** digits typed in the Agent chat input
+  switched tabs mid-prompt ("1 to 300" → 1 and 3 jump). Fixed in `app.go`:
+  digit tab-jumps are disabled while the Agent input is **composing** (empty
+  input still jumps; new `AgentView.composing()` helper); regression test
+  `TestAgentTabDigitsTypeNotJump` covers composing + empty-input + enter;
+  `TestAgentViewModalBlocksTabJump` still passes (empty input → digits jump
+  after esc).
+- **Release identity:** `selftui -version` → `selftui 0.6.0-m6`; version logged
+  at startup (app log evidence now attributable).
+- **PLAN/README:** §10 M6 ticked with the resolved semantics + evidence; §12
+  rolled to "v0.1 release"; README status → M6, nav note (digits = text while
+  composing), iPhone drop guidance, `-version`.
+
+**Commands + exit codes**
+- `make check` `0` (build + uncached tests + vet + gofmt)
+- `go test -race ./... -count=1 -timeout=240s` `0`
+- `make smoke-reconnect` `0` ×4 (PASS in 5–13 s; SIGHUP rc=-1; host recovery
+  round-trip 0.1–2.2 s)
+- `make probe-local` `0` (5/5 PASS incl. 88×44→100×50 mid-run resize)
+- `gofmt -l cmd internal` clean · `git diff --check` (below)
+- live evidence: probe.txt session blocks `m6-live-1a` at 72×30; app log
+  shows 0.6.0-m6 sessions; `ps` tree selftui → bash → tmux
+
+**Decisions / lines to respect**
+- Reconnect canonical for THIS owner = **tmux-over-SSH reattach** (process
+  survives; scroll/chat state preserved). Fresh-SSH death is the documented
+  no-tmux shape, covered by the local harness — not a separate live gate.
+- Chat/scroll state is per-process by design; session resume is out of v1.
+- `BudgetMessages` may now truncate a lone overflowing turn (tail kept,
+  `[truncated]` prefix) — never sends past the reserved 3/4·num_ctx budget.
+- Digit tab-jumps yield to chat composition; README nav updated.
+
+**Blockers / next action**
+- Residual (not blocking): no dedicated post-reconnect `-session m6-live-1b`
+  probe block was captured on the device this pass; one command fills it on a
+  future device run (documented in `docs/reconnect.md`). Per the session rule,
+  stop here. Next fresh session: **v0.1 release** (tag the M6 build, release
+  notes) or any owner-assigned follow-up.

@@ -17,6 +17,10 @@ coverage.html
 # Go workspace
 /vendor/
 
+# Python smoke tooling
+__pycache__/
+*.pyc
+
 # Editor / OS
 .idea/
 .vscode/

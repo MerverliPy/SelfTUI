@@ -102,11 +102,11 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.switchTab((a.tab + numTabs - 1) % numTabs)
 		case k.Code == tea.KeyTab:
 			a.switchTab((a.tab + 1) % numTabs)
-		case k.Text == "1" && !a.models.ModalOpen() && !a.agent.ModalOpen():
+		case k.Text == "1" && (a.tab != agentTab || !a.agent.composing()) && !a.models.ModalOpen() && !a.agent.ModalOpen():
 			a.switchTab(0)
-		case k.Text == "2" && !a.models.ModalOpen() && !a.agent.ModalOpen():
+		case k.Text == "2" && (a.tab != agentTab || !a.agent.composing()) && !a.models.ModalOpen() && !a.agent.ModalOpen():
 			a.switchTab(1)
-		case k.Text == "3" && !a.models.ModalOpen() && !a.agent.ModalOpen():
+		case k.Text == "3" && (a.tab != agentTab || !a.agent.composing()) && !a.models.ModalOpen() && !a.agent.ModalOpen():
 			a.switchTab(2)
 		default:
 			// Keys not claimed by the shell go to the active tab.
