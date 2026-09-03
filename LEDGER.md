@@ -361,3 +361,72 @@ Charm set pinned (v2 line), tests green.
 **Next action**
 - Fresh session: **M1b** — `DELETE /api/delete` w/ confirm + streaming `POST
   /api/pull` with bubbles spinner + progress; then ALPHA candidate 1.
+
+### 2026-09-04 — M1b (delete w/ confirm + streamed pull w/ spinner)
+**Milestone:** M1b · **Result:** ✅ done — exit criterion met live; **ALPHA candidate 1** ready.
+
+**Work done**
+- **`internal/ollama/delete.go`** — `Delete` → `DELETE /api/delete` with `{"name"}` body;
+  errors surface via the shared `apiError` path (verified live: 404 + `{"error":"model 'x' not found"}`).
+- **`internal/ollama/pull.go`** — `Pull(ctx, name, onProgress)` → streaming `POST /api/pull`
+  (NDJSON): per-line `{status,digest,total,completed}` → `PullProgress` callbacks; **in-band
+  `{"error":…}` with HTTP 200 is the error channel** (verified live); `success` line ends the
+  stream. Pull uses a new `Client.stream` http.Client **without the 30s request timeout** —
+  the caller's context is the deadline (cancellation, Ctrl+C). `Client` gains the `stream`
+  field (`client.go`).
+- **Models view (M1b UX)** — `internal/ui/models_view.go`:
+  - `x` → centered confirm dialog "Delete <name>? (size) · y confirm · esc cancel";
+    `y` runs the DELETE, failure keeps the dialog open with the error inline for retry,
+    success clears the stale detail + reloads the list, notice "deleted <name>".
+  - `p` → name-entry dialog (bubbles textinput, placeholder `qwen3:0.6b`); `enter` starts
+    the pull, `esc` aborts, empty name ignored.
+  - Pull dialog: bubbles spinner + phase status + progress bar (`progress.ViewAs`) + bytes
+    when the server reports a layer size; **`esc` cancels** the in-flight pull (context
+    cancel → surfaced "context canceled" error; stale `⚠ pull failed` clears on reload).
+  - Activity channel pattern (PLAN §8): pull goroutine → `pullCh chan tea.Msg` (buffered 64),
+    UI resubscribes `waitPullCmd` on every progress message; spinner tick keeps animating.
+  - **Modal guard:** open dialogs swallow every key (nav + global `1/2/3` tab jump via new
+    `ModelsView.ModalOpen()` on `App`) — otherwise typing a model name containing a digit
+    jumped tabs (found via smoke).
+  - Compact (no-pane) layout reserves a hint row: "x delete · p pull · r refresh" (or the
+    transient notice / pull error); wide/medium puts notice/error atop the detail pane.
+  - Empty state updated: "no models installed — press p to pull one".
+- **Tests (55 total, all green):** ollama +11 (delete posts name/surfaces err/rejects empty;
+  pull streams phases+layer totals/in-band error/empty-name/context-cancel). ui +17
+  (delete confirm flow, esc/n cancel, error-inline retry, empty-list x, modal swallows nav,
+  pull input→progress render→drain→reload, empty name ignored, esc-cancel, in-band error
+  surfaced, legend hint, ModalOpen blocks tab keys).
+- **`scripts/pull-delete-smoke.py` + `make smoke`** — pty-driven live harness: boots the
+  binary at 110x36, pulls a real model through the UI, waits for completion, navigates to
+  it, deletes it with confirm, verifies via `/api/tags`, quits on ctrl+c, always restores
+  the host. Also used at 72x30 (compact dialogs render, no panic).
+
+**Commands + exit codes**
+- `go build ./...` `0` · `go vet ./...` `0` · `gofmt -l .` empty `0` · `make check` `0`
+- `go test ./...` `0` — config cached, **ollama 15, ui 33** (+11/+17 this step)
+- Live smoke `make smoke` — **SMOKE PASS in 106s**: pulled qwen3:0.6b through the TUI
+  (~100s, rendered "pulling manifest"/"pulling 7f4030…", 102 %-frames, byte lines),
+  "pulled qwen3:0.6b" notice, dialog exit, delete confirm "Delete qwen3:0.6b?" + y,
+  model absent from `/api/tags` afterwards; host left with its original 10 models.
+
+**Decisions / findings (respect these)**
+- **Ollama registers a model in `/api/tags` at ~50% of the download**, long before the pull
+  stream ends — do NOT use tag-presence as a pull-completion signal; use the UI's own
+  completion (dialog exit / "pulled" notice) or the stream's `success` line.
+- **Ollama pull errors arrive in-band as `{"error":…}` lines with HTTP 200** — check the
+  stream, not just the status code (verified live).
+- **bubbletea v2 redraws incrementally (per-line diffs)** — unchanged lines are not
+  re-emitted, so "did the dialog close" cannot be inferred from the absence of its text in
+  a recent capture window; watch for the constant-update lines falling quiet instead.
+- Custom tags like `qwen3:0.6b:smoke123` are **invalid** (`:` is not allowed in a tag);
+  smoke harness therefore re-pulls the plain model and cleans up via the API before/after.
+- The 30s request timeout does NOT apply to pulls (multi-minute); `Client.stream` exists
+  for that. Deletes stay on the 30s client.
+- Oops + guardrail: my compact quick-check sent `y` on the selected (real) qwen3:8b and
+  deleted it; restored via API pull (5.23GB, confirmed). Smoke harness always targets the
+  model it pulled and API-cleans before/after — keep it that way.
+
+**Blockers / next action**
+- None blocking. README updated (M1b keys + `make smoke`). PLAN §10 M1b ticked; §12 next
+  step = M2. Next fresh session: **M2 — chat + plain-chat path** (streaming chat in the
+  Agent view, glamour markdown, input, graceful errors) → **Ship ALPHA**.

@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 
+	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
@@ -48,11 +49,11 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.tab = (a.tab + 1) % numTabs
 		case k.Mod.Contains(tea.ModShift) && k.Code == tea.KeyTab:
 			a.tab = (a.tab + numTabs - 1) % numTabs
-		case k.Text == "1":
+		case k.Text == "1" && !a.models.ModalOpen():
 			a.tab = 0
-		case k.Text == "2":
+		case k.Text == "2" && !a.models.ModalOpen():
 			a.tab = 1
-		case k.Text == "3":
+		case k.Text == "3" && !a.models.ModalOpen():
 			a.tab = 2
 		case k.Code == 'c' && k.Mod.Contains(tea.ModCtrl):
 			return a, func() tea.Msg { return tea.Quit() }
@@ -65,7 +66,8 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-	case modelsLoadedMsg, modelsLoadErrMsg, modelsShowMsg, modelsShowErrMsg:
+	case modelsLoadedMsg, modelsLoadErrMsg, modelsShowMsg, modelsShowErrMsg,
+		modelsDeleteDoneMsg, modelsPullMsg, modelsPullDoneMsg, spinner.TickMsg:
 		models, cmd := a.models.Update(msg)
 		a.models = models
 		return a, cmd

@@ -27,6 +27,7 @@ type Client struct {
 	baseURL string // no trailing slash
 	token   string // optional bearer token
 	http    *http.Client
+	stream  *http.Client // no request timeout: long pulls (context governs)
 }
 
 // New builds a client for an Ollama base URL (e.g. "http://localhost:11434").
@@ -37,6 +38,7 @@ func New(host, token string) *Client {
 		baseURL: strings.TrimRight(host, "/"),
 		token:   token,
 		http:    &http.Client{Timeout: requestTimeout},
+		stream:  &http.Client{},
 	}
 }
 

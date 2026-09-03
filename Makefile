@@ -28,6 +28,12 @@ probe-build: ## compile the size probe binary
 probe: probe-build ## interactive size probe (measure WindowSizeMsg live)
 	./bin/size-probe
 
+smoke: build ## live M1b smoke: pull + delete against the local Ollama host
+	python3 scripts/pull-delete-smoke.py
+
+smoke-model: build ## live smoke pulling a specific model instead of the default
+	python3 scripts/pull-delete-smoke.py $(MODEL)
+
 probe-raw: probe-build ## size probe as CSV lines (harness/script friendly)
 	./bin/size-probe -mode raw
 

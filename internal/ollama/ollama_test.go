@@ -3,6 +3,7 @@ package ollama
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -275,5 +276,168 @@ func TestHostTrailingSlashNormalized(t *testing.T) {
 	}
 	if path != "/api/tags" {
 		t.Errorf("path = %q, want /api/tags (no double slash)", path)
+	}
+}
+
+// --- M1b: DELETE + streaming pull -------------------------------------------
+
+func TestDeletePostsName(t *testing.T) {
+	got := struct{ method, path, name string }{}
+	c, _ := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got.method, got.path = r.Method, r.URL.Path
+		var req struct{ Name string }
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		got.name = req.Name
+		w.Write([]byte(`{"status":"success"}`))
+	}))
+
+	if err := c.Delete(context.Background(), "qwen3:8b"); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if got.method != http.MethodDelete || got.path != "/api/delete" {
+		t.Errorf("got %s %s, want DELETE /api/delete", got.method, got.path)
+	}
+	if got.name != "qwen3:8b" {
+		t.Errorf("request name = %q, want qwen3:8b", got.name)
+	}
+}
+
+func TestDeleteErrorSurfaced(t *testing.T) {
+	c, _ := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte(`{"error":"model 'nope' not found"}`))
+	}))
+
+	err := c.Delete(context.Background(), "nope")
+	if err == nil {
+		t.Fatal("want error, got nil")
+	}
+	if !strings.Contains(err.Error(), "model 'nope' not found") {
+		t.Errorf("error = %v, want surfaced API message", err)
+	}
+}
+
+func TestDeleteEmptyNameRejected(t *testing.T) {
+	c := New("http://localhost:11434", "")
+	if err := c.Delete(context.Background(), ""); err == nil {
+		t.Fatal("Delete with empty name: want error, got nil")
+	}
+}
+
+// pullStream mirrors a real POST /api/pull NDJSON response: manifest phase,
+// one layer with progress, final verification/write, success.
+const pullStream = `{"status":"pulling manifest"}
+` +
+	`{"status":"pulling 7f4030143c1c","digest":"sha256:7f4030143c1c477224c5434f8272c662a8b042079a0a584f0a27a1684fe2e1fa","total":522640096,"completed":0}
+` +
+	`{"status":"pulling 7f4030143c1c","digest":"sha256:7f4030143c1c477224c5434f8272c662a8b042079a0a584f0a27a1684fe2e1fa","total":522640096,"completed":522640096}
+` +
+	`{"status":"verifying sha256 digest"}
+` +
+	`{"status":"writing manifest"}
+` +
+	`{"status":"success"}
+`
+
+func TestPullStreamsProgress(t *testing.T) {
+	got := struct {
+		name   string
+		stream bool
+	}{}
+	c, _ := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/pull" {
+			t.Errorf("got %s %s, want POST /api/pull", r.Method, r.URL.Path)
+		}
+		var req map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		got.name, _ = req["name"].(string)
+		got.stream, _ = req["stream"].(bool)
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		io.WriteString(w, pullStream)
+	}))
+
+	var events []PullProgress
+	if err := c.Pull(context.Background(), "qwen3:0.6b", func(p PullProgress) {
+		events = append(events, p)
+	}); err != nil {
+		t.Fatalf("Pull: %v", err)
+	}
+	if got.name != "qwen3:0.6b" || !got.stream {
+		t.Errorf("request = name %q stream %v, want qwen3:0.6b stream=true", got.name, got.stream)
+	}
+	if len(events) != 6 {
+		t.Fatalf("got %d events, want 6: %+v", len(events), events)
+	}
+	if events[0].Status != "pulling manifest" || events[4].Status != "writing manifest" || events[5].Status != "success" {
+		t.Errorf("unexpected phase sequence: %q", events)
+	}
+	if events[1].Digest != "sha256:7f4030143c1c477224c5434f8272c662a8b042079a0a584f0a27a1684fe2e1fa" ||
+		events[1].Total != 522640096 || events[1].Completed != 0 {
+		t.Errorf("unexpected layer event: %+v", events[1])
+	}
+	if events[2].Completed != 522640096 {
+		t.Errorf("completed = %d, want layer size", events[2].Completed)
+	}
+	// Phase lines carry no digest/totals.
+	if events[0].Digest != "" || events[0].Total != 0 {
+		t.Errorf("manifest phase should have no layer fields: %+v", events[0])
+	}
+}
+
+func TestPullInbandError(t *testing.T) {
+	c, _ := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		io.WriteString(w, `{"status":"pulling manifest"}`+"\n"+`{"error":"pull model manifest: file does not exist"}`+"\n")
+	}))
+
+	calls := 0
+	err := c.Pull(context.Background(), "nope", func(PullProgress) { calls++ })
+	if err == nil {
+		t.Fatal("want error, got nil")
+	}
+	if !strings.Contains(err.Error(), "pull model manifest: file does not exist") {
+		t.Errorf("error = %v, want surfaced in-band API message", err)
+	}
+	if calls != 1 {
+		t.Errorf("onProgress called %d times, want 1 (manifest line only)", calls)
+	}
+}
+
+func TestPullEmptyNameRejected(t *testing.T) {
+	c := New("http://localhost:11434", "")
+	if err := c.Pull(context.Background(), "", nil); err == nil {
+		t.Fatal("Pull with empty name: want error, got nil")
+	}
+}
+
+func TestPullContextCancelled(t *testing.T) {
+	// The server streams one line then stalls until the client disconnects.
+	c, _ := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		io.WriteString(w, `{"status":"pulling manifest"}`+"\n")
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		<-r.Context().Done()
+	}))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- c.Pull(ctx, "big-model", nil) }()
+
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("want cancellation error, got nil")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Pull did not return after context cancellation")
 	}
 }

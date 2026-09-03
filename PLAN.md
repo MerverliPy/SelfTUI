@@ -322,8 +322,7 @@ geometry, reconnect, height-aware layout, scrolling.
 
 **M1a — Model list/show.** ✅ *done 2026-09-03 — live smoke on the local host (qwen3:8b et al.):* ollama client `tags`/`show`; `internal/ollama` (client.go/tags.go/show.go + 11 tests); Models view selection + inspect pane in `internal/ui/models_view.go` (bubbles v2 list, theme-matched), stacked on compact (enter-toggled, u/d scroll) and auto-inspect side-by-side on wide; `charm.land/bubbles/v2` added to the pinned set. ✅ *Exit: list + inspect models live.*
 
-**M1b — Delete + streamed pull.** `DELETE` w/ confirm; streaming `pull` w/ spinner +
-progress. ✅ *Exit: delete & pull work live. → **ALPHA candidate 1.***
+**M1b — Delete + streamed pull.** ✅ *done 2026-09-04 — live smoke on the local host:* `DELETE` w/ confirm (x → y/esc, error-inline retry); streaming `POST /api/pull` (in-band errors, context-cancel via esc) with bubbles spinner + progress bar + name input; activity-channel plumbing (resubscribed `waitPullCmd`); modal guard so digits in names can't trigger tab jumps; `scripts/pull-delete-smoke.py` + `make smoke` pty harness; 55 tests green. ✅ *Exit: delete & pull work live. → **ALPHA candidate 1.***
 
 **M2 — Chat + plain-chat path.** non-tool streaming chat in Agent view, glamour markdown
 rendering + syntax-highlight code blocks, input, model selector, graceful errors;
@@ -374,12 +373,12 @@ first safety gate.)*
 
 ## 12. Next step
 
-**M1a — model list/show landed 2026-09-03** (live list + inspect on the local
-host; compact 72x30 and wide 120x40 smokes).
-Next milestone: **M1b — delete + streamed pull**: `DELETE /api/delete` with a
-confirmation; streaming `POST /api/pull` (`{status,digest,total,completed}`
-progress events) with a spinner + progress bar in the Models tab; spinner
-component; errors and cancellation surfaced. → **ALPHA candidate 1** after M1b.
+**M1a — model list/show landed 2026-09-03** and **M1b — delete + streamed pull landed
+2026-09-04** (live pull/delete round-trip on the local host; `make smoke` harness;
+compact 72x30 and wide 110x36 verified). **ALPHA candidate 1** is reachable.
+Next milestone: **M2 — chat + plain-chat path**: non-tool streaming chat in the Agent
+view, glamour markdown rendering + syntax-highlight code blocks, input, model selector,
+graceful errors; no-tool-model → explicit fallback (never silent). → **Ship ALPHA** after M2.
 
 ---
 
