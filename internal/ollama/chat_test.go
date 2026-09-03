@@ -252,6 +252,50 @@ func TestChatContextCancelled(t *testing.T) {
 	}
 }
 
+func TestChatStreamDecodesThinkingAndToolCalls(t *testing.T) {
+	c, _ := fakeChatServer(t, `{"message":{"role":"assistant","thinking":"reason","tool_calls":[{"function":{"name":"read_file","arguments":{"path":"README.md"}}}]},"done":true,"done_reason":"tool_calls"}`)
+	var got ChatEvent
+	err := c.ChatStream(context.Background(), ChatRequest{
+		Model: "qwen3:8b", Messages: []ChatMessage{{Role: RoleUser, Content: "inspect"}},
+		Tools: []ToolDefinition{{Type: "function", Function: ToolFunction{Name: "read_file"}}},
+	}, func(ev ChatEvent) { got = ev })
+	if err != nil {
+		t.Fatalf("ChatStream: %v", err)
+	}
+	if !got.Done || got.DoneReason != "tool_calls" || got.Thinking != "" {
+		t.Errorf("event = %+v, want terminal tool event", got)
+	}
+	if got.Message.Thinking != "reason" || len(got.Message.ToolCalls) != 1 {
+		t.Errorf("message = %+v, want thinking and one tool call", got.Message)
+	}
+	if got.Message.ToolCalls[0].Function.Name != "read_file" {
+		t.Errorf("tool = %+v", got.Message.ToolCalls[0])
+	}
+}
+
+func TestChatSendsTools(t *testing.T) {
+	var got []ToolDefinition
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req ChatRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		got = req.Tools
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		io.WriteString(w, `{"message":{"role":"assistant","content":"ok"},"done":true}`+"\n")
+	}))
+	t.Cleanup(srv.Close)
+	if err := New(srv.URL, "").Chat(context.Background(), ChatRequest{
+		Model: "qwen3:8b", Messages: []ChatMessage{{Role: RoleUser, Content: "hi"}},
+		Tools: []ToolDefinition{{Type: "function", Function: ToolFunction{Name: "read_file", Parameters: map[string]any{"type": "object"}}}},
+	}, nil); err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	if len(got) != 1 || got[0].Function.Name != "read_file" {
+		t.Errorf("tools = %+v", got)
+	}
+}
+
 func TestChatSendsBearerToken(t *testing.T) {
 	var gotAuth string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

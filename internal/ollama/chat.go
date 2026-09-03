@@ -19,12 +19,42 @@ const (
 	RoleSystem    Role = "system"
 	RoleUser      Role = "user"
 	RoleAssistant Role = "assistant"
+	RoleTool      Role = "tool"
 )
 
 // ChatMessage is one exchange in a /api/chat conversation.
 type ChatMessage struct {
-	Role    Role   `json:"role"`
-	Content string `json:"content"`
+	Role      Role       `json:"role"`
+	Content   string     `json:"content"`
+	Thinking  string     `json:"thinking,omitempty"`
+	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
+	ToolName  string     `json:"tool_name,omitempty"`
+}
+
+// ToolCall is a model-requested function invocation. Arguments are kept as
+// raw JSON so the agent can validate the concrete schema at the execution
+// boundary rather than trusting the model's types.
+type ToolCall struct {
+	ID       string           `json:"id,omitempty"`
+	Type     string           `json:"type,omitempty"`
+	Function ToolCallFunction `json:"function"`
+}
+
+type ToolCallFunction struct {
+	Name      string          `json:"name"`
+	Arguments json.RawMessage `json:"arguments"`
+}
+
+// ToolDefinition describes one function exposed to Ollama's chat endpoint.
+type ToolDefinition struct {
+	Type     string       `json:"type"`
+	Function ToolFunction `json:"function"`
+}
+
+type ToolFunction struct {
+	Name        string         `json:"name"`
+	Description string         `json:"description"`
+	Parameters  map[string]any `json:"parameters"`
 }
 
 // ChatOptions are the sampling / context controls sent under "options".
@@ -35,15 +65,27 @@ type ChatOptions struct {
 	NumCtx      int     `json:"num_ctx,omitempty"`
 }
 
-// ChatRequest is the POST /api/chat body. Tools are wired in the agent
-// milestone (M3); M2 plain chat sends none.
+// ChatRequest is the POST /api/chat body. M2 plain chat leaves Tools empty;
+// M3a supplies the explicit read-only tool definitions.
 type ChatRequest struct {
-	Model    string        `json:"model"`
-	Messages []ChatMessage `json:"messages"`
-	Stream   bool          `json:"stream"`
+	Model    string           `json:"model"`
+	Messages []ChatMessage    `json:"messages"`
+	Stream   bool             `json:"stream"`
+	Tools    []ToolDefinition `json:"tools,omitempty"`
 	// Options is a pointer so that an all-zero options block is omitted from
 	// the wire (Go's omitempty does not apply to structs).
 	Options *ChatOptions `json:"options,omitempty"`
+}
+
+// ChatEvent is one decoded NDJSON response from /api/chat. Thinking is
+// deliberately separate from Content: qwen3 may stream reasoning that must
+// not be shown as the assistant's final answer or fed to a tool parser.
+type ChatEvent struct {
+	Message    ChatMessage
+	Thinking   string
+	Done       bool
+	DoneReason string
+	Error      string
 }
 
 // Chat streams POST /api/chat. The response is NDJSON: every event carries a
@@ -56,6 +98,18 @@ type ChatRequest struct {
 // can cancel mid-generation. Mirroring pull streams, an {"error": ...} line
 // inside the stream (HTTP 200) is the in-band error channel.
 func (c *Client) Chat(ctx context.Context, req ChatRequest, onContent func(string)) error {
+	return c.ChatStream(ctx, req, func(ev ChatEvent) {
+		if ev.Message.Content != "" && onContent != nil {
+			onContent(ev.Message.Content)
+		}
+	})
+}
+
+// ChatStream streams and decodes POST /api/chat. The callback runs in arrival
+// order for every NDJSON event, including the terminal done event. It is the
+// caller's responsibility to keep the callback non-blocking when ChatStream
+// is running in a producer goroutine.
+func (c *Client) ChatStream(ctx context.Context, req ChatRequest, onEvent func(ChatEvent)) error {
 	const path = "/api/chat"
 	if req.Model == "" {
 		return fmt.Errorf("ollama POST %s: empty model name", path)
@@ -90,25 +144,40 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest, onContent func(strin
 
 	dec := json.NewDecoder(resp.Body)
 	for {
-		var ev struct {
+		var wire struct {
 			Message struct {
-				Role    string `json:"role"`
-				Content string `json:"content"`
+				Role      Role       `json:"role"`
+				Content   string     `json:"content"`
+				Thinking  string     `json:"thinking"`
+				ToolCalls []ToolCall `json:"tool_calls"`
 			} `json:"message"`
-			Done  bool   `json:"done"`
-			Error string `json:"error"`
+			Done       bool   `json:"done"`
+			DoneReason string `json:"done_reason"`
+			Thinking   string `json:"thinking"`
+			Error      string `json:"error"`
 		}
-		if err := dec.Decode(&ev); err != nil {
+		if err := dec.Decode(&wire); err != nil {
 			if errors.Is(err, io.EOF) {
 				return fmt.Errorf("ollama POST %s: stream ended without done", path)
 			}
 			return fmt.Errorf("ollama POST %s: decode stream: %w", path, err)
 		}
-		if ev.Error != "" {
-			return fmt.Errorf("ollama POST %s: %s", path, ev.Error)
+		if wire.Error != "" {
+			return fmt.Errorf("ollama POST %s: %s", path, wire.Error)
 		}
-		if ev.Message.Content != "" && onContent != nil {
-			onContent(ev.Message.Content)
+		ev := ChatEvent{
+			Message: ChatMessage{
+				Role:      wire.Message.Role,
+				Content:   wire.Message.Content,
+				Thinking:  wire.Message.Thinking,
+				ToolCalls: wire.Message.ToolCalls,
+			},
+			Thinking:   wire.Thinking,
+			Done:       wire.Done,
+			DoneReason: wire.DoneReason,
+		}
+		if onEvent != nil {
+			onEvent(ev)
 		}
 		if ev.Done {
 			return nil

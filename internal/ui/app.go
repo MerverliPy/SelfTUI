@@ -7,6 +7,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"selftui/internal/agent"
 	"selftui/internal/config"
 	"selftui/internal/ollama"
 )
@@ -30,7 +31,7 @@ func New(cfg *config.Config, styles Styles, client *ollama.Client) App {
 		cfg:    cfg,
 		styles: styles,
 		models: NewModelsView(client, styles, cfg.Theme),
-		agent:  NewAgentView(client, styles, cfg.Theme, cfg.DefaultModel, cfg.Agent),
+		agent:  NewAgentViewWithWorkspace(client, styles, cfg.Theme, cfg.DefaultModel, cfg.WorkspaceRoot, cfg.Agent),
 	}
 }
 
@@ -80,7 +81,8 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.models = models
 		return a, cmd
 
-	case agentModelsLoadedMsg, agentModelsErrMsg, agentTokenMsg, agentDoneMsg:
+	case agentModelsLoadedMsg, agentModelsErrMsg, agentTokenMsg, agentDoneMsg,
+		agent.TokenMsg, agent.ToolStartMsg, agent.ToolResultMsg, agent.FallbackMsg, agent.AgentDoneMsg:
 		agent, cmd := a.agent.Update(msg)
 		a.agent = agent
 		return a, cmd

@@ -337,9 +337,11 @@ rendering + syntax-highlight code blocks, input, model selector, graceful errors
 no-tool-model → explicit fallback (never silent). ✅ *Exit: chat renders nicely.*
 → **Ship ALPHA** (reliable model mgmt + plain chat) at both narrow & wide geometries.
 
-**M3a — Read-only agent.** the tool-loop state machine; capability check;
-read_file/list_dir/grep; bounded loop; streaming `Msg`s; cancellation. ✅ *Exit: agent
-reads/lists/greps a project live; no mutation surfaced.*
+**M3a — Read-only agent.** ✅ *done 2026-09-03:* tool-loop state machine with
+capability probe + explicit plain-chat fallback; native and content-embedded tool
+calls; qwen3 thinking suppression; jailed read_file/list_dir/grep; bounded loop;
+streaming `Msg`s; cancellation. **Exit: agent reads/lists/greps a project live; no
+mutation surfaced.**
 
 **M3b — Mutation agent (jailed).** write_file/edit_file + `run_command` per constrained
 design (argv-allowlist, no shell) with **jail + confirm + timeout + cancel + tests
@@ -381,12 +383,11 @@ first safety gate.)*
 
 ## 12. Next step
 
-**M1a — model list/show landed 2026-09-03** and **M1b — delete + streamed pull landed
-2026-09-04** (live pull/delete round-trip on the local host; `make smoke` harness;
-compact 72x30 and wide 110x36 verified). **ALPHA candidate 1** is reachable.
-Next milestone: **M2 — chat + plain-chat path**: non-tool streaming chat in the Agent
-view, glamour markdown rendering + syntax-highlight code blocks, input, model selector,
-graceful errors; no-tool-model → explicit fallback (never silent). → **Ship ALPHA** after M2.
+**M1a — model list/show landed 2026-09-03**, **M1b — delete + streamed pull landed
+2026-09-04**, **M2 — chat + plain-chat landed 2026-09-03**, and **M3a — read-only
+agent landed 2026-09-05**. `make check` is green with focused filesystem, dual
+transport, loop-bound, fallback, and cancellation tests. Next milestone: **M3b —
+mutation agent**, with jailed write/edit/run_command controls shipped inline.
 
 ---
 

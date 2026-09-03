@@ -6,6 +6,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -113,6 +115,49 @@ func drainChat(t *testing.T, v *AgentView) {
 		case <-time.After(3 * time.Second):
 			t.Fatal("chat stream stalled")
 		}
+	}
+}
+
+func TestAgentViewReadOnlyToolLoop(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "note.txt"), []byte("agent note\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/tags":
+			w.Header().Set("Content-Type", "application/json")
+			io.WriteString(w, uiTagsBody)
+		case "/api/chat":
+			calls++
+			w.Header().Set("Content-Type", "application/x-ndjson")
+			if calls == 1 {
+				io.WriteString(w, `{"message":{"role":"assistant","tool_calls":[{"function":{"name":"read_file","arguments":{"path":"note.txt"}}}]},"done":true}`+"\n")
+			} else {
+				io.WriteString(w, chatEvent("read-only answer", true)+"\n")
+			}
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	cfg := config.Default()
+	v := NewAgentViewWithWorkspace(ollama.New(srv.URL, ""), NewStyles("dark"), "dark", "", root, cfg.Agent)
+	v, _ = v.Update(tea.WindowSizeMsg{Width: 88, Height: 40})
+	v, _ = v.Update(agentModelsLoadedMsg{models: sampleModels()})
+	typeText(t, &v, "read note")
+	v, _ = v.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	drainChat(t, &v)
+	if calls != 2 || len(v.history) != 2 {
+		t.Fatalf("chat calls=%d history=%d, want tool turn plus final", calls, len(v.history))
+	}
+	if !strings.Contains(v.history[1].Content, "read-only answer") {
+		t.Errorf("assistant history = %+v", v.history[1])
+	}
+	out := stripANSI(v.View())
+	if !strings.Contains(out, "read-only answer") {
+		t.Errorf("final answer missing from view:\n%s", out)
 	}
 }
 

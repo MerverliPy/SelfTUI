@@ -5,7 +5,7 @@ models, with an embedded AI coding-agent chat and a settings panel. Runs
 identically on a PC (native terminal) and over SSH on a phone (Moshi;
 Blink/Termius similar) — layout adapts to narrow windows.
 
-**Status: M1b — delete + streamed pull landed.** The Models tab lists live models from the Ollama host (`/api/tags`) with selection + an inspect pane (`/api/show`): key facts, parameters, template, modelfile, model info, license — scrollable, side-by-side on wide screens and stacked (enter-toggled) on the phone. **Delete with confirm (`x` → `y`/`esc`) and streaming pull (`p` → name → spinner + progress; `esc` cancels)** work live; pulls reload the list automatically. Chat/agent and settings land in later milestones (see `PLAN.md` §10).
+**Status: M3a — read-only agent landed.** The Models tab lists live models from the Ollama host (`/api/tags`) with selection + an inspect pane (`/api/show`): key facts, parameters, template, modelfile, model info, license — scrollable, side-by-side on wide screens and stacked (enter-toggled) on the phone. **Delete with confirm (`x` → `y`/`esc`) and streaming pull (`p` → name → spinner + progress; `esc` cancels)** work live; pulls reload the list automatically. The Agent tab now probes tool support, streams native or content-embedded read-only tool calls, and exposes `read_file`, `list_dir`, and `grep` inside the configured workspace; unsupported models explicitly fall back to plain chat. Mutation tools and settings land in later milestones (see `PLAN.md` §10).
 
 ## Build & run
 
@@ -42,6 +42,12 @@ inspect pane · `r` reloads the model list · `x` deletes the selected model
 like `qwen3:0.6b`, `enter` starts, `esc` cancels; progress + spinner show
 while it streams, and the list reloads when it lands). Wide screens
 auto-inspect the selected model.
+
+**Agent tab (M2/M3a)**: type a prompt · `enter` sends · `shift+enter` inserts a
+newline · `m` selects a model · `esc` cancels a turn. Tool-capable models may
+read `read_file`, `list_dir`, or `grep` within the workspace; the hint row
+shows tool activity. Models that reject tools or return no tool call show an
+explicit plain-chat fallback.
 
 Live behavior check: `make smoke` drives a real pull + delete against your
 local Ollama host over a pty (leaves the host exactly as it was).

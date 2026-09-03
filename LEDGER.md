@@ -483,3 +483,44 @@ Charm set pinned (v2 line), tests green.
 
 **Next action**
 - Fresh session: begin **M3a — Read-only agent tool loop** (state machine + `read_file` / `list_dir` / `grep` path).
+
+### 2026-09-03 — M3a — Read-only agent tool loop (DONE)
+**Milestone:** M3a · **Result:** ✅ done — read-only agent loop and explicit fallback path implemented and tested.
+
+**Work done**
+- Added `internal/agent/runner.go`: bounded 12-iteration state machine, ordered
+  streaming `Msg`s (`TokenMsg`, `ToolStartMsg`, `ToolResultMsg`, `AgentDoneMsg`), native
+  `message.tool_calls` dispatch, content-embedded JSON dispatch, streamed argument
+  assembly, qwen3 thinking suppression, context cancellation, and HTTP-400 explicit
+  plain-chat fallback.
+- Added `internal/agent/tools.go`: only `read_file`, `list_dir`, and pure-Go `grep`;
+  canonical workspace/symlink jail, regular-file checks, and bounded read/search/list
+  results. No mutation or command tool is exposed.
+- Extended `internal/ollama/chat.go` with typed tool definitions/messages and `ChatStream`
+  event decoding while preserving the M2 `Chat` callback API.
+- Wired `AgentView` to the runner and activity channel; tool activity is shown in the
+  hint row, unsupported/no-tool models announce their plain-chat fallback, and the root
+  App routes all agent events.
+- Added focused filesystem, symlink, native/content dispatch, thinking/fallback,
+  iteration-bound, cancellation, API transport, and UI tool-loop tests.
+- Updated `README.md` and ticked M3a in `PLAN.md`; next milestone remains M3b, where
+  mutation tools ship with jail/confirmation/timeout/cancel controls.
+
+**Commands + exit codes**
+- `go test ./... -count=1 -timeout=60s` `0`
+- `go test -race ./... -count=1 -timeout=120s` `0`
+- `make check` `0` (build + tests + vet + gofmt)
+- `ollama list | head -8` `0` — local release model `qwen3:8b` present; no destructive
+  live mutation smoke was run in this milestone.
+
+**Decisions / findings**
+- Capability probing uses the actual `/api/chat` tool request, matching the observed
+  Ollama behavior: native tool support, content-embedded calls, and HTTP-400 rejection.
+- The compatibility constructor used by legacy M2 tests omits the system prompt;
+  production `NewAgentViewWithWorkspace` supplies the configured workspace and prompt.
+- `grep` is pure Go to preserve the single-binary claim; `.git` directories and symlink
+  entries are skipped during recursive search.
+
+**Blockers / next action**
+- None. Next fresh session: **M3b — mutation agent**, with write/edit and constrained
+  `run_command` safety controls implemented inline and tested before exposure.

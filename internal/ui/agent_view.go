@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"os"
 	"strings"
 	"time"
 
@@ -10,18 +11,19 @@ import (
 	"charm.land/glamour/v2"
 	"charm.land/lipgloss/v2"
 
+	"selftui/internal/agent"
 	"selftui/internal/config"
 	"selftui/internal/ollama"
 )
 
-// AgentView is the Agent tab (PLAN.md §7): a streaming plain-chat transcript
-// rendered with glamour markdown (syntax-highlighted code blocks), a
-// multi-line input, a model selector (m), graceful errors, and cancellation
-// (esc). The tool loop lands in M3; M2's chat sends no tools, so any
-// chat-capable model — tool-capable or not — works here: that is the
-// explicit no-tool fallback (PLAN §6, never silent).
+// AgentView is the Agent tab (PLAN.md §7): a streaming transcript rendered
+// with glamour markdown (syntax-highlighted code blocks), a multi-line input,
+// model selector (m), graceful errors, and cancellation (esc). M3a probes
+// read-only tool support and explicitly falls back to plain chat when a model
+// rejects tools or returns no tool call.
 type AgentView struct {
 	client *ollama.Client
+	runner *agent.Runner
 	styles Styles
 	dark   bool
 
@@ -45,6 +47,7 @@ type AgentView struct {
 	stopRequest bool         // esc asked to stop; treat stream end as a stop
 	stopCancel  func()       // cancels the in-flight chat context
 	chatCh      chan tea.Msg // activity channel (PLAN §8), one stream owner
+	toolStatus  string       // latest read-only tool activity for the hint row
 
 	// Chat parameters (from config until M4).
 	temperature float64
@@ -73,8 +76,24 @@ type AgentView struct {
 	w, h       int
 }
 
-// NewAgentView builds the Agent tab.
+// NewAgentView builds the Agent tab using the current directory as its
+// workspace. It remains as a small compatibility constructor for tests and
+// callers that predate workspace configuration.
 func NewAgentView(client *ollama.Client, styles Styles, theme, defaultModel string, agentCfg config.AgentConfig) AgentView {
+	root, _ := os.Getwd()
+	return newAgentView(client, styles, theme, defaultModel, root, "", agentCfg)
+}
+
+// NewAgentViewWithWorkspace builds the Agent tab with the configured project
+// root and system prompt.
+func NewAgentViewWithWorkspace(client *ollama.Client, styles Styles, theme, defaultModel, workspaceRoot string, agentCfg config.AgentConfig) AgentView {
+	if workspaceRoot == "" {
+		workspaceRoot, _ = os.Getwd()
+	}
+	return newAgentView(client, styles, theme, defaultModel, workspaceRoot, agentCfg.SystemPrompt, agentCfg)
+}
+
+func newAgentView(client *ollama.Client, styles Styles, theme, defaultModel, workspaceRoot, systemPrompt string, agentCfg config.AgentConfig) AgentView {
 	ta := textarea.New()
 	ta.Prompt = "❯ "
 	ta.Placeholder = "chat with the selected model…"
@@ -82,6 +101,7 @@ func NewAgentView(client *ollama.Client, styles Styles, theme, defaultModel stri
 	ta.Focus()                 // the input is the Agent tab's primary surface
 	return AgentView{
 		client:       client,
+		runner:       agent.NewRunner(client, workspaceRoot, systemPrompt, agentCfg.MaxToolIterations),
 		styles:       styles,
 		dark:         theme != "light",
 		loading:      true,
@@ -121,8 +141,9 @@ func (v AgentView) loadModelsCmd() tea.Cmd {
 	}
 }
 
-// startChat begins a streaming chat turn in a background goroutine.
-// Tokens arrive as agentTokenMsg; the trailing result as one agentDoneMsg.
+// startChat begins a streaming agent turn in a background goroutine. The
+// activity channel carries read-only tool events, token deltas, and one final
+// agentDoneMsg.
 func (v AgentView) startChat() (AgentView, tea.Cmd) {
 	ch := make(chan tea.Msg, 64)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -138,20 +159,16 @@ func (v AgentView) startChat() (AgentView, tea.Cmd) {
 
 	model := v.model
 	history := append([]ollama.ChatMessage(nil), v.history...)
-	opts := &ollama.ChatOptions{Temperature: v.temperature, TopP: v.topP, NumCtx: v.numCtx}
 
 	go func() {
 		defer close(ch)
 		defer cancel()
-		req := ollama.ChatRequest{Model: model, Messages: history, Stream: true, Options: opts}
-		err := v.client.Chat(ctx, req, func(delta string) {
-			ch <- agentTokenMsg{text: delta}
+		v.runner.Run(ctx, agent.Request{
+			Model: model, Messages: history,
+			Temperature: v.temperature, TopP: v.topP, NumCtx: v.numCtx,
+		}, func(msg agent.Msg) {
+			ch <- msg
 		})
-		if err != nil {
-			ch <- agentDoneMsg{err: err.Error()}
-			return
-		}
-		ch <- agentDoneMsg{}
 	}()
 
 	return v, v.waitChatCmd()
@@ -194,15 +211,45 @@ func (v AgentView) Update(msg tea.Msg) (AgentView, tea.Cmd) {
 		v.modelsErr = msg.err
 		return v, nil
 
-	case agentTokenMsg:
+	case agentTokenMsg: // retained for focused M2/UI tests
 		if v.streaming {
 			v.streamText += msg.text
 			v.follow = true
 		}
 		return v, v.waitChatCmd()
 
+	case agent.TokenMsg:
+		if v.streaming {
+			v.streamText += msg.Text
+			v.follow = true
+		}
+		return v, v.waitChatCmd()
+
+	case agent.ToolStartMsg:
+		if v.streaming {
+			v.toolStatus = "⚙ " + msg.Name + " " + msg.Input
+		}
+		return v, v.waitChatCmd()
+
+	case agent.ToolResultMsg:
+		if v.streaming {
+			prefix := "✓ "
+			if !msg.OK {
+				prefix = "⚠ "
+			}
+			v.toolStatus = prefix + msg.Name + ": " + firstLine(msg.Summary)
+		}
+		return v, v.waitChatCmd()
+
+	case agent.FallbackMsg:
+		v.notice = msg.Reason
+		return v, v.waitChatCmd()
+
 	case agentDoneMsg:
 		return v.onChatDone(msg)
+
+	case agent.AgentDoneMsg:
+		return v.onChatDone(agentDoneMsg{err: msg.Err})
 
 	case tea.KeyMsg:
 		v, cmd = v.handleKey(msg)
@@ -262,6 +309,7 @@ func (v AgentView) onChatDone(m agentDoneMsg) (AgentView, tea.Cmd) {
 	v.streaming = false
 	v.stopCancel = nil
 	v.chatCh = nil
+	v.toolStatus = ""
 
 	if v.streamText != "" {
 		v.history = append(v.history, ollama.ChatMessage{Role: ollama.RoleAssistant, Content: v.streamText})
@@ -570,6 +618,9 @@ func (v AgentView) hintLine() string {
 	case v.chatErr != "":
 		return v.styles.Error.Render("⚠ " + v.chatErr + " — press enter to retry")
 	case v.streaming:
+		if v.toolStatus != "" {
+			return v.styles.Placeholder.Render(v.toolStatus + " · esc stop")
+		}
 		model := v.model
 		if model == "" {
 			model = "?"
@@ -587,6 +638,13 @@ func (v AgentView) hintLine() string {
 }
 
 // fullSizePane renders the loading / error / empty model-list states.
+func firstLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return s[:i]
+	}
+	return s
+}
+
 func (v AgentView) fullSizePane(bodyH int) string {
 	pane := v.styles.Pane.Width(v.w).Height(maxInt(bodyH-2, 1))
 	var content string
