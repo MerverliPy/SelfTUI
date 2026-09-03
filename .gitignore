@@ -1,0 +1,28 @@
+# SelfTUI — build artifacts
+/bin/
+/dist/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binaries & coverage
+*.test
+*.out
+coverage/
+coverage.html
+*.prof
+
+# Go workspace
+/vendor/
+
+# Editor / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Local runtime
+config.toml
+*.log
