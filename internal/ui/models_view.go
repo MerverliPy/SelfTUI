@@ -697,10 +697,12 @@ func (v ModelsView) detailPrefix() string {
 
 // renderOverlay centers a bordered dialog over the whole Models body and
 // returns a body-height string, so the app's header/body/status stack stays
-// exactly h rows.
+// exactly h rows. Content is capped at bodyH-4 rows (see fitContent) so a
+// dialog can never overflow the terminal height on a phone.
 func (v ModelsView) renderOverlay(bodyH int, title string, lines []string) string {
 	innerW := maxInt(v.w-6, 16)
 	wrapped := wrapLines(lines, innerW)
+	wrapped = fitContent(wrapped, maxInt(bodyH-4, 4))
 	padded := make([]string, len(wrapped))
 	for i, l := range wrapped {
 		padded[i] = l + strings.Repeat(" ", maxInt(0, innerW-lipgloss.Width(l)))

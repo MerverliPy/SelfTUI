@@ -5,7 +5,7 @@ models, with an embedded AI coding-agent chat and a settings panel. Runs
 identically on a PC (native terminal) and over SSH on a phone (Moshi;
 Blink/Termius similar) — layout adapts to narrow windows.
 
-**Status: M4 — Settings & persistence landed.** The Models tab lists live models from the Ollama host (`/api/tags`) with selection + an inspect pane (`/api/show`): key facts, parameters, template, modelfile, model info, license — scrollable, side-by-side on wide screens and stacked (enter-toggled) on the phone. **Delete with confirm (`x` → `y`/`esc`) and streaming pull (`p` → name → spinner + progress; `esc` cancels)** work live; pulls reload the list automatically. The Agent tab supports native or content-embedded tool calls, explicit plain-chat fallback, jailed read/write/edit tools, and a constrained confirmed command executor. It is a guardrail rather than an OS sandbox; general shell and interpreters remain disabled. The Settings tab (huh forms) edits the whole config surface and writes it back to the config file with in-session live apply.
+**Status: M5 — responsive completion + iPhone path landed.** The Models tab lists live models from the Ollama host (`/api/tags`) with selection + an inspect pane (`/api/show`): key facts, parameters, template, modelfile, model info, license — scrollable, side-by-side on wide screens and stacked (enter-toggled) on the phone. **Delete with confirm (`x` → `y`/`esc`) and streaming pull (`p` → name → spinner + progress; `esc` cancels)** work live; pulls reload the list automatically. The Agent tab supports native or content-embedded tool calls, explicit plain-chat fallback, jailed read/write/edit tools, and a constrained confirmed command executor. It is a guardrail rather than an OS sandbox; general shell and interpreters remain disabled. The Settings tab (huh forms) edits the whole config surface and writes it back to the config file with in-session live apply. Golden render fixtures now pin the full shell at the two canonical geometries — the measured Moshi portrait device (72×30) and a wide PC window (120×40) — every frame is asserted to stay inside its terminal, dialogs (including long mutation approvals) are height-capped so decision keys stay on screen, and the light palette is verified across every tab.
 
 ## Build & run
 
@@ -67,11 +67,61 @@ discarded; `ctrl+c` still quits.
 Live behavior check: `make smoke` drives a real pull + delete against your
 local Ollama host over a pty (leaves the host exactly as it was).
 
+The layout reference geometry was measured on the real client (Moshi on an
+iPhone 16 Pro, portrait, default font): **72 columns × 30 rows** — see
+`docs/m0a-gate-evidence.md`. Golden render tests enforce this exact frame.
+
+## Using SelfTUI from an iPhone (SSH)
+
+SelfTUI is a plain TUI over SSH — nothing runs on the phone itself.
+
+### On the computer (the host)
+
+1. Install **Ollama** and SelfTUI (`make build` → `bin/selftui`, or run from
+   source with `make run`).
+2. Make sure your SSH server is enabled and reachable from the phone
+   (`systemctl status ssh`, or macOS → System Settings → Sharing → Remote
+   Login). Key-based login is easiest on a phone.
+3. SelfTUI talks to Ollama on the **same machine** (`http://localhost:11434`
+   default) — nothing else needs exposing to the network. For a *remote*
+   Ollama, point at it with `-host http://…` plus `-auth-token` (or
+   `SELFTUI_HOST`/`SELFTUI_AUTH_TOKEN`), and set the same in Settings →
+   Connection.
+
+### On the iPhone
+
+1. Install an SSH client: **Blink Shell**, **Termius**, or similar (Moshi is
+   the client SelfTUI was measured on).
+2. Add your computer as a host (`user@ip-or-name`) and connect. SSH key auth
+   avoids typing passwords on the soft keyboard.
+3. Run `selftui` (or `make run`). Optionally pass `-theme light` for bright
+   rooms — or switch it live later in Settings → Theme (arrow over Light and
+   watch it restyle; submit to keep).
+
+### What you get on the small screen
+
+Portrait with the default font lands in the **compact** layout (≤ 79 cols,
+measured 72×30):
+
+- **Models** — the list fills the screen; `enter` stacks the inspect pane
+  below (the list shrinks to the top 40%), `esc` closes it, `u`/`d` scroll
+  it. Wide-enough windows (≥ 90 cols) split list + detail side by side.
+- **Agent** — chat fills the width, input sits at the bottom; `m` selects a
+  model, `esc` stops a turn. Mutation approvals (`y`/`enter` approve,
+  `n`/`esc` decline) are height-capped so the decision row is always on
+  screen, even for a huge payload.
+- **Settings** — one form page per section (`enter` next); ≥ 120 cols turns
+  it into two columns.
+
+The status bar shows the live `WxH` and the active layout
+(`compact`/`medium`/`wide`) — rotate or zoom the font and watch it adapt.
+Everything is keyboard-driven: `tab`/`shift-tab` or `1`/`2`/`3` switch tabs;
+`esc` lives on the iOS keyboard toolbar (or as a hardware key) in Blink and
+friends — it cancels pulls, stops agent turns, and discards settings edits.
+
 ## Project docs
 
 - `PLAN.md` — architecture, decisions, roadmap §10, risks §11
 - `LEDGER.md` — chronological work/decision log
 - `COUNCIL-MEMO.md` — advisory audit that re-cut the roadmap
 - `AGENTS.md` — repo rules for agent sessions
-
-The SSH-on-iPhone guide (Blink/Termius) ships with M5 acceptance.

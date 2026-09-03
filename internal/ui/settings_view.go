@@ -303,7 +303,11 @@ func (s SettingsView) buildForm() *huh.Form {
 	if s.w > 0 {
 		form.WithWidth(s.w)
 	}
-	if bodyH := maxInt(s.h-2, 8); s.h > 0 {
+	// huh draws a footer (scroll/next hints) below the field area when a
+	// group overflows the given height, so the budget must leave that row
+	// inside the body: h-2 rows are available, of which one goes to the
+	// footer (measured at the 72x30 device geometry in M5).
+	if bodyH := maxInt(s.h-3, 8); s.h > 0 {
 		form.WithHeight(bodyH)
 	}
 	return form
@@ -395,7 +399,8 @@ func (s SettingsView) resize(w, h int) SettingsView {
 	if w > 0 {
 		s.form.WithWidth(w)
 	}
-	if bodyH := maxInt(h-2, 8); h > 0 {
+	if bodyH := maxInt(h-3, 8); h > 0 {
+		// h-3 reserves huh's footer row inside the body (see buildForm).
 		s.form.WithHeight(bodyH)
 	}
 	return s

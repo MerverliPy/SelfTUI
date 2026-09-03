@@ -1,0 +1,22 @@
+  Models    Agent    Settings                                                                                           
+Connection                                                                                                              
+Which Ollama host SelfTUI talks to; applied to new requests                                                             
+on save.                                                                                                                
+┃ Host                                                        Default model                                             
+┃ Ollama base URL — must include http:// or https://.         Auto-selected for Agent chat when nothing is picked. Empty
+┃ > http://localhost:11434                                    = first installed model.                                  
+                                                              > qwen3:8b                                                
+  Auth token                                                                                                            
+  Optional bearer token for remote hosts. Empty = none.       Temperature                                               
+  > unset                                                     Sampling randomness; 0 = deterministic.                   
+                                                              > 0.7                                                     
+                                                                                                                        
+                                                              Top-p                                                     
+                                                              Nucleus sampling cutoff.                                  
+                                                              > 0.9                                                     
+                                                                                                                        
+                                                              Context window                                            
+                                                              num_ctx sent per request.                                 
+                                                              > 4096                                                    
+enter next                                                                                                              
+ ⏻ http://localhost:11434                                                                      Settings · 120x40 · wide 

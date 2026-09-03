@@ -587,3 +587,35 @@ Charm set pinned (v2 line), tests green.
 
 **Blockers / next action**
 - None. M4 is committed; per the session rule, stop. Next fresh session: **M5 — Responsive completion + iPhone path** (golden render tests at two widths, SSH-on-iPhone guide, light theme polish, mobile approval ergonomics).
+
+### 2026-09-06 — M5 — Responsive completion + iPhone path (DONE)
+**Milestone:** M5 · **Result:** ✅ done — golden render tests at the two canonical geometries, height-capped approval dialogs, light-theme verification, and the README SSH-on-iPhone guide.
+
+**Work done**
+- **Golden render harness (`internal/ui/golden_test.go`, new):** renders the full shell (tab bar + body + status bar) in seven deterministic scenarios at the two canonical geometries — the measured Moshi portrait device **72×30** (`docs/m0a-gate-evidence.md`) and a wide PC window **120×40** — and compares each against a checked-in ANSI-stripped fixture under `testdata/golden/` (`go test ./internal/ui -run TestGoldenRender -update` regenerates). Scenarios: models list (compact), models stacked inspect (compact), models side-by-side inspect (wide), agent (compact + wide), settings editing single-column (compact) and two-column (wide).
+- **Frame-fit guards (`TestGoldenFramesFitTerminal`):** no rendered row wider than the terminal, no view taller than the screen, frame-filling views land on exactly `h` rows (models/agent/settings-compact), every scenario non-empty.
+- **Mobile approval ergonomics:** every overlay body (agent confirm/selector via `renderOverlayTitle`, models delete/pull/input via `renderOverlay`) is now capped at `bodyH-4` rows through a shared `fitContent` helper that keeps the head and the final action legend and replaces the dropped middle with a “… (N more lines)” marker. Verified by `TestApprovalOverlayFitsDevice`, which drives a real `write_file` approval with a >3 KiB payload at 72×30 and 120×40 — before the fix that dialog rendered 40 rows in a 30-row terminal and hid the `y / enter approve` row.
+- **Settings 1-row overflow fix:** the huh form’s height budget now reserves its footer row (`h-3`, was `h-2`), which rendered the compact Settings form one row too tall at 72×30 (measured with a probe; frame now lands on exactly 30 rows). Same budget in `buildForm` and `resize`.
+- **Light theme:** verified as a genuinely distinct palette (`TestThemePalettesDiffer`: fg/bg/muted/accent/error all differ), light renders of every populated tab at both geometries inside the frame (`TestLightThemeRendersEveryTab`), and one markdown chat round-trip through the light glamour renderer at 72×30 (`TestLightThemeAgentChatRenders`). Light active-tab chip now uses light text on the violet accent (the body-black foreground vanished on it).
+- **README:** M5 status line plus “Using SelfTUI from an iPhone (SSH)” — host setup (SSH server, local Ollama default; remote host/token flags for a remote Ollama), client setup (Blink/Termius/Moshi), measured geometry, per-tab compact behavior, esc/key/theme tips, live width/breakpoint readout.
+- **Makefile:** `make test` now runs `go test -count=1` so the golden fixture compare can never be masked by a stale test cache.
+- Ticked M5 in `PLAN.md` §10 and rolled §12 to **M6 — Release acceptance**.
+
+**Commands + exit codes**
+- probe (temporary, removed) measured: settings compact overflow 31/30 rows → fixed to 30; agent/models frames exact at both geometries `0`
+- `go test ./... -count=1 -timeout=180s` `0`
+- `go test -race ./... -count=1 -timeout=240s` `0`
+- `go test ./internal/ui -run TestGoldenRender -count=3` `0` (fixtures deterministic)
+- `go test ./internal/ui -run TestGoldenRender -update` `0` (fixture generation; second run compares clean)
+- `make check` `0` (build + uncached tests + vet + gofmt)
+- `gofmt -l cmd internal` clean · `git diff --check` `0`
+
+**Decisions / lines to respect**
+- Golden fixtures store ANSI-stripped text: layout/geometry/content drift fails the compare; palette drift is covered by the dedicated theme tests (a color-only change never churns fixtures). Regeneration is `go test ./internal/ui -run TestGoldenRender -update`.
+- `fitContent` semantics: keep the head and the last two wrapped lines (the decision legend is always last, so approve/cancel keys stay on screen), replace the dropped middle with one marker row. Overlays never exceed the body height.
+- The huh form height budget is `h-3` (not `h-2`) because huh draws a footer row below the field area when a group overflows (measured at 72×30).
+- Settings-wide renders shorter than the screen by design (two-column content is ~22 rows at 40); the frame-fit guard allows it, all other scenarios must fill exactly `h` rows.
+- No palette/ANSI changes landed that affect dark fixtures; fixtures are environment-stable because compares run in the same env that generated them.
+
+**Blockers / next action**
+- None. M5 is committed; per the session rule, stop. Next fresh session: **M6 — Release acceptance** (unit+golden tests throughout; auth/TLS; error surfacing; context-truncation edges; binary/reconnect smoke test; docs; release acceptance).

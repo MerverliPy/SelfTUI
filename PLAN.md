@@ -352,9 +352,7 @@ and runs allowed commands, all gated + tested.*
 
 **M4 — Settings & persistence.** ✅ *done 2026-09-06:* huh (v2-aligned `charm.land/huh/v2 v2.0.3`) forms over the full config surface in four sections (Connection / Model defaults / Theme / Agent), two-column on wide screens (LayoutColumns), single-column pages otherwise; field validation (http(s) host, numeric ranges); esc-discard = nothing written (revert); submit writes the config file off-loop (`config.Save`, 0600 perms) and live-applies in-session — theme swap restyles the whole shell, host/token rebuild the Ollama client and reload both model lists, and agent params/default model/workspace/system prompt apply to the next agent run; Theme select previews live while arrowing (rolls back on discard). New flags/env for every config key. **Exit: settings persist & revert.**
 
-**M5 — Responsive completion + iPhone path.** golden render tests at two widths; README
-SSH-on-iPhone guide (Blink/Termius); light theme; mobile approval ergonomics. (Much
-responsive shell already landed in M0.)
+**M5 — Responsive completion + iPhone path.** ✅ *done 2026-09-06:* golden render tests pin the full shell at the two canonical geometries — the measured Moshi portrait device (72×30, `docs/m0a-gate-evidence.md`) and a wide PC window (120×40) — across seven scenarios (models list/inspect compact & wide, agent, settings editing single- & two-column), fixtures in `internal/ui/testdata/golden/` (regenerate with `go test ./internal/ui -run TestGoldenRender -update`); every frame is guard-asserted to stay inside its terminal (no row wider than the terminal, no view taller than the screen, frame-filling views land on exactly h rows). Approval ergonomics: every overlay body (agent confirm, models delete/pull/input) is height-capped via `fitContent` so a multi-KB mutation payload can no longer push the `y/enter approve` decision row — or the status bar — off a 30-row phone screen; a middle “… (N more lines)” marker shows what was cut. Settings form height budget reserves huh's footer row (was 1 row over at 72×30). Light theme: verified as a genuinely different palette (fg/bg/accent/error) with light renders across every tab at both geometries and a light-glamour chat round-trip; active-tab chip in light now uses light text on the violet accent for contrast. README ships the SSH-on-iPhone guide (Blink/Termius; measured geometry, compact behaviors, esc/key tips, remote-host config). ✅ *Exit: golden renders at both widths; README iPhone guide; light theme contrast-checked; approval dialogs bounded.*
 
 **M6 — Release acceptance.** unit+golden tests throughout; auth/TLS; error surfacing;
 context-truncation edges; binary/reconnect smoke test; docs; release acceptance.
@@ -386,13 +384,14 @@ first safety gate.)*
 
 **M1a — model list/show landed 2026-09-03**, **M1b — delete + streamed pull landed
 2026-09-04**, **M2 — chat + plain-chat landed 2026-09-03**, **M3a — read-only agent
-landed 2026-09-05**, **M3b — jailed mutation agent landed 2026-09-05**, and
-**M4 — Settings & persistence landed 2026-09-06**. `make check` is green with
-focused filesystem, confirmation, argv validation, environment, output-cap,
-cancellation, dual transport, loop-bound, fallback, context-budget, settings
-form/preview/submit/apply, and config round-trip tests. Next milestone:
-**M5 — Responsive completion + iPhone path** (golden render tests at two widths;
-README SSH-on-iPhone guide; light theme polish; mobile approval ergonomics).
+landed 2026-09-05**, **M3b — jailed mutation agent landed 2026-09-05**,
+**M4 — Settings & persistence landed 2026-09-06**, and
+**M5 — Responsive completion + iPhone path landed 2026-09-06** (golden render
+fixtures at 72×30 and 120×40 across all three tabs, height-capped approval
+dialogs, light-theme verification, README SSH-on-iPhone guide). `make check`
+is green. Next milestone: **M6 — Release acceptance** (unit+golden tests
+throughout; auth/TLS; error surfacing; context-truncation edges;
+binary/reconnect smoke test; docs; release acceptance).
 
 ---
 

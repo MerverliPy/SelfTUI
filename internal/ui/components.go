@@ -1,10 +1,36 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 
 	"charm.land/lipgloss/v2"
 )
+
+// fitContent caps a wrapped dialog body to budget rows while keeping its
+// head and its tail (the action/decision legend is always the last line, so
+// approve/cancel keys stay on screen). Dropped middle lines become one
+// marker row. Used by every overlay so a long payload can never push a
+// dialog past the terminal height — on the measured iPhone geometry
+// (72x30) that would hide the decision row and the status bar.
+func fitContent(lines []string, budget int) []string {
+	if len(lines) <= budget {
+		return lines
+	}
+	tailKeep := 2
+	if budget < 4 {
+		tailKeep = 1
+	}
+	headKeep := budget - 1 - tailKeep // marker row + tail
+	if headKeep < 1 {
+		headKeep = 1
+	}
+	out := make([]string, 0, budget)
+	out = append(out, lines[:headKeep]...)
+	out = append(out, fmt.Sprintf("… (%d more lines)", len(lines)-headKeep-tailKeep))
+	out = append(out, lines[len(lines)-tailKeep:]...)
+	return out
+}
 
 // Tab labels in navigation order. <1>/<2>/<3> and tab/shift-tab cycle here.
 var tabLabels = []string{"Models", "Agent", "Settings"}

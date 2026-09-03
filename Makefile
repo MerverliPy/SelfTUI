@@ -7,8 +7,8 @@ BIN     := bin/selftui
 build: ## compile the self-tui binary
 	$(GO) build -o $(BIN) ./cmd/self-tui
 
-test: ## run all unit tests
-	$(GO) test ./...
+test: ## run all unit tests (uncached: golden fixture compares must always execute)
+	$(GO) test -count=1 ./...
 
 vet: ## static analysis
 	$(GO) vet ./...

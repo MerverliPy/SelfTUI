@@ -1,0 +1,40 @@
+  Models    Agent    Settings                                                                                           
+╭──────────────────────────────────────────────╮╭──────────────────────────────────────────────────────────────────────╮
+│   Models                                     ││qwen3:8b                                                              │
+│                                              ││size 4.8 GB · modified 2026-09-03 08:00                               │
+│  2 models                                    ││caps tools, vision                                                    │
+│                                              ││                                                                      │
+││ qwen3:8b                                    ││── PARAMETERS                                                         │
+││ qwen3 · 8.2B · Q4_K_M                       ││num_ctx 4096                                                          │
+│  gemma3:12b                                  ││num_predict 2048                                                      │
+│  gemma3 · 12B · Q4_K_M                       ││temperature 0.6                                                       │
+│                                              ││── TEMPLATE                                                           │
+│                                              ││{{ if .System }}<system>{{ .System }}</system>{{ end }}{{ .Prompt }}  │
+│                                              ││── MODEL FILE                                                         │
+│                                              ││FROM qwen3:8b                                                         │
+│                                              ││# generated for golden tests                                          │
+│                                              ││── MODEL INFO                                                         │
+│                                              ││general.architecture = qwen3                                          │
+│                                              ││general.file_type = 15                                                │
+│                                              ││general.parameter_size = 8.2B                                         │
+│                                              ││vision.enabled = true                                                 │
+│                                              ││── LICENSE                                                            │
+│                                              ││Apache-2.0                                                            │
+│                                              ││                                                                      │
+│                                              ││Licensed under the Apache License, Version 2.0 (the "License");       │
+│                                              ││you may not use this file except in compliance with the License.      │
+│                                              ││                                                                      │
+│                                              ││                                                                      │
+│                                              ││                                                                      │
+│                                              ││                                                                      │
+│                                              ││                                                                      │
+│                                              ││                                                                      │
+│                                              ││                                                                      │
+│                                              ││                                                                      │
+│                                              ││                                                                      │
+│                                              ││                                                                      │
+│                                              ││                                                                      │
+│                                              ││                                                                      │
+│                                              ││                                                                      │
+╰──────────────────────────────────────────────╯╰──────────────────────────────────────────────────────────────────────╯
+ ⏻ http://localhost:11434                                                                        Models · 120x40 · wide 

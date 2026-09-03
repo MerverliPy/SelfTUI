@@ -49,6 +49,11 @@ func NewStyles(theme string) Styles {
 
 	s.Tab = lipgloss.NewStyle().Padding(0, 1).Foreground(s.muted)
 	s.TabActive = lipgloss.NewStyle().Padding(0, 1).Background(s.accent).Foreground(s.fg).Bold(true)
+	if !dark {
+		// Light theme: the accent chip is a dark violet, so the active tab
+		// label needs light text (the body black would vanish on it).
+		s.TabActive = s.TabActive.Foreground(lipgloss.Color("15"))
+	}
 	s.Status = lipgloss.NewStyle().Padding(0, 1).Foreground(s.muted).Border(lipgloss.RoundedBorder(), false).
 		BorderForeground(s.muted)
 	s.Body = lipgloss.NewStyle().Padding(1).Foreground(s.fg)

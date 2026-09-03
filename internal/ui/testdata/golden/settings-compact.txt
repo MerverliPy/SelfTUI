@@ -1,0 +1,30 @@
+  Models    Agent    Settings                                           
+Connection                                                              
+Which Ollama host SelfTUI talks to; applied to new requests on save.    
+┃ Host                                                                  
+┃ Ollama base URL — must include http:// or https://.                   
+┃ > http://localhost:11434                                              
+                                                                        
+  Auth token                                                            
+  Optional bearer token for remote hosts. Empty = none.                 
+  > unset                                                               
+                                                                        
+                                                                        
+                                                                        
+                                                                        
+                                                                        
+                                                                        
+                                                                        
+                                                                        
+                                                                        
+                                                                        
+                                                                        
+                                                                        
+                                                                        
+                                                                        
+                                                                        
+                                                                        
+                                                                        
+                                                                        
+enter next                                                              
+ ⏻ http://localhost:11434                    Settings · 72x30 · compact 

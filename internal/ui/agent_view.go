@@ -739,9 +739,14 @@ func (v AgentView) renderSelectorOverlay(bodyH int) string {
 }
 
 // renderOverlayTitle centers a bordered dialog over the whole Agent body.
+// The body is capped at bodyH-4 rows so a long payload (a multi-line tool
+// input, a long model list) can never push the box past the terminal
+// height: on a 30-row phone the decision legend and status bar must stay
+// on screen (see fitContent).
 func (v AgentView) renderOverlayTitle(bodyH int, title string, lines []string) string {
 	innerW := maxInt(v.w-6, 16)
 	wrapped := wrapLines(lines, innerW)
+	wrapped = fitContent(wrapped, maxInt(bodyH-4, 4))
 	padded := make([]string, len(wrapped))
 	for i, l := range wrapped {
 		padded[i] = l + strings.Repeat(" ", maxInt(0, innerW-lipgloss.Width(l)))
