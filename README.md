@@ -5,10 +5,7 @@ models, with an embedded AI coding-agent chat and a settings panel. Runs
 identically on a PC (native terminal) and over SSH on a phone (Moshi;
 Blink/Termius similar) — layout adapts to narrow windows.
 
-**Status: M0 — skeleton.** The app boots, tabs work, the responsive layout
-system and cancellation plumbing are in place, and the Charm dependency set is
-pinned (v2 line). Models list, chat/agent, and settings land in later
-milestones (see `PLAN.md` §10).
+**Status: M1a — model list/show landed.** The Models tab lists live models from the Ollama host (`/api/tags`) with selection + an inspect pane (`/api/show`): key facts, parameters, template, modelfile, model info, license — scrollable, side-by-side on wide screens and stacked (enter-toggled) on the phone. Chat/agent and settings land in later milestones (see `PLAN.md` §10).
 
 ## Build & run
 
@@ -36,7 +33,12 @@ Resolution order: **flags > env > config file > defaults**.
 ## Navigation
 
 `tab` / `shift-tab` or `1`/`2`/`3` switch Models · Agent · Settings.
-`ctrl+c` quits. (Full key map lands with the real views.)
+`ctrl+c` quits.
+
+**Models tab (M1a)**: `j`/`k` or arrows select · `enter` opens the inspect
+pane (compact) or refreshes it (wide) · `esc` closes it · `u`/`d` scroll the
+inspect pane · `r` reloads the model list. Wide screens auto-inspect the
+selected model.
 
 ## Project docs
 

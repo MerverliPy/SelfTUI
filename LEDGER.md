@@ -294,3 +294,70 @@ Charm set pinned (v2 line), tests green.
 **Next action**
 - Fresh session: **M1a** — ollama client `tags`/`show` + Models view selection &
   inspect pane (exit: list + inspect models live).
+
+### 2026-09-03 — M1a: Model list/show — ollama tags/show + Models list/inspect pane (DONE)
+**Milestone:** M1a · **Result:** done — list + inspect **live** (local host smoke; wide + compact). Next is M1b.
+
+**Work done**
+- **`internal/ollama/`** — thin typed client (PLAN §4 tree): `client.go` (base URL
+  trim, optional Bearer token, 30s timeout, body cap, `{"error":…}` surfacing on
+  non-2xx), `tags.go` (`List` → GET /api/tags → []Model per §5 domain struct),
+  `show.go` (`Show` → POST /api/show → Details incl. license/modelfile/parameters/
+  template/capabilities/model_info), `types.go`. **11 tests**: parse, bearer header,
+  no-token, show request body + mixed-type model_info, empty-name reject, API error
+  surfaced, HTTP status fallback, refused connect, timeout, context cancel,
+  trailing-slash normalization (all httptest-based, no live server).
+- **`internal/ui/models_view.go`** — the Models tab: **bubbles list** component
+  (`charm.land/bubbles/v2 v2.2.1` added to the pinned set; needs bubbletea ≥2.0.8,
+  we hold 2.0.9) with theme-matched delegate (violet accent selection), filtering
+  off, quit keybindings off (default binds `v`→quit — must disable!), `u`/`d`
+  unbound from paging so they scroll the inspect pane. Stacked on compact
+  (enter opens/closes pane, esc closes), auto-inspect on wide/medium-split when the
+  pane is persistently visible. Detail = key facts + sections (parameters,
+  template, modelfile, model info, license), word-wrapped, scroll-clamped both in
+  the handler and at render. `humanBytes`, `wrapLines` helpers.
+- **App wiring** — `App` owns `ModelsView`; `Init` fetches tags at boot; keys go to
+  the Models tab only when active; async msgs always routed; `main.go` builds
+  `ollama.New(cfg.Host, cfg.AuthToken)`; `Styles` gained `Pane` + `Error`.
+- **Live smokes (exit criterion — list + inspect live):** local Ollama running
+  `qwen3:8b`/`qwen2`×3/`qwen3vl`/`gemma3`. Wide 120x40 pty capture: list rendered +
+  **auto-inspect populated live** (family/param/quant, `caps completion, tools,
+  thinking`, PARAMETERS incl. temperature 0.6, template). Compact **72x30** (the
+  measured Moshi geometry): stacked list, no detail pane, no panic.
+
+**Commands + exit codes**
+- `go get charm.land/bubbles/v2@v2.2.1` `0` (go.mod MVS: bubbles pulls
+  x/ansi v0.11.7/runewidth v0.0.27→v0.0.24 net upgrade but still ≥ pins)
+- `make check` (build+test+vet+fmt) `0` — all green; `gofmt -l` empty
+- `go test ./...` `0` (config cached, ollama 11, ui 16 incl. wrap/bytes units)
+- wide smoke `script … cols 120 rows 40; timeout 4 ./bin/selftui` → 124 (timeout
+  kill as designed), capture greps: live list + inspect text present
+- compact smoke 72x30 → app data captured cleanly (wrapper script lingered on the
+  small pty — harness quirk, not app); list + description rows present
+
+**Decisions / lines to respect**
+- **`GET /api/show` in PLAN §5 is wrong — the API is POST.** Client + §5 table
+  corrected; Evidence = the running server + API docs.
+- **bubbles default KeyMap claims `v` (quit), `u`/`d` (paging), `/` (filter).**
+  Disabled quit + filtering, removed `u`/`d` from paging. `DisableQuitKeybindings`
+  is mandatory or the app quits on `v`.
+- Delegate height must be ≥2 for the description line to render (desc loop is
+  `i < height-1`); SetHeight(1)+ShowDescription=true renders zero desc lines.
+- List scroll state: clamped in the key handler AND at render via shared
+  `detailPaneDims`/`maxScroll`; `SetSize` happens on WindowSizeMsg (+ the render
+  copy), paginator sizes stay coherent.
+- Errors surface inline (red) with an `r` retry hint; loading/empty states render
+  as hints — never silent.
+- Auto-inspect triggers once per selection change (dedup via `detailName`) and on
+  load for side-by-side only (compact stays quiet until enter).
+
+**Blockers / open decisions (carry to next session)**
+- None blocking. **Residuals for M1b/M5:** spinner component (bubbles ships one —
+  reuse for pull progress); pull/delete confirmation UX; height-aware layout
+  already exercised (detail scroll); landscape/reconnect still unmeasured (M5).
+  Bubbles list brings `textinput`/`key`/`paginator` deps into go.mod (fine — one
+  aligned set, M6 audit).
+
+**Next action**
+- Fresh session: **M1b** — `DELETE /api/delete` w/ confirm + streaming `POST
+  /api/pull` with bubbles spinner + progress; then ALPHA candidate 1.

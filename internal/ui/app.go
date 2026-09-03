@@ -7,31 +7,40 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"selftui/internal/config"
+	"selftui/internal/ollama"
 )
 
 // App is the root Bubble Tea model: owns tab state, geometry, and the
-// responsive shell. Per-tab views land with their milestones (M1, M2, M4);
-// M0 renders placeholders that still exercise the breakpoint system.
+// responsive shell. Each tab's view lives in its own file (models_view.go
+// since M1a; agent/settings land with M2/M4).
 type App struct {
 	cfg    *config.Config
 	styles Styles
 	tab    int
 	w, h   int
+	models ModelsView
 }
 
-// New builds the root model.
-func New(cfg *config.Config, styles Styles) App {
-	return App{cfg: cfg, styles: styles}
+// New builds the root model. client is the Ollama connection used by the
+// Models tab (M1a); later tabs share it.
+func New(cfg *config.Config, styles Styles, client *ollama.Client) App {
+	return App{
+		cfg:    cfg,
+		styles: styles,
+		models: NewModelsView(client, styles, cfg.Theme),
+	}
 }
 
-// Init satisfies tea.Model. No startup command in M0.
-func (a App) Init() tea.Cmd { return nil }
+// Init starts the Models list fetch.
+func (a App) Init() tea.Cmd { return a.models.Init() }
 
-// Update handles window geometry, navigation keys, and quit.
+// Update handles window geometry, navigation keys, Models-tab keys and async
+// model/detail results.
 func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		a.w, a.h = msg.Width, msg.Height
+		a.models, _ = a.models.Update(msg)
 
 	case tea.KeyMsg:
 		switch k := msg.Key(); {
@@ -47,7 +56,19 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.tab = 2
 		case k.Code == 'c' && k.Mod.Contains(tea.ModCtrl):
 			return a, func() tea.Msg { return tea.Quit() }
+		default:
+			// Keys not claimed by the shell go to the active tab.
+			if a.tab == 0 {
+				models, cmd := a.models.Update(msg)
+				a.models = models
+				return a, cmd
+			}
 		}
+
+	case modelsLoadedMsg, modelsLoadErrMsg, modelsShowMsg, modelsShowErrMsg:
+		models, cmd := a.models.Update(msg)
+		a.models = models
+		return a, cmd
 	}
 	return a, nil
 }
@@ -59,7 +80,7 @@ func (a App) View() tea.View {
 	var body string
 	switch a.tab {
 	case 0:
-		body = a.modelsView()
+		body = a.models.View()
 	case 1:
 		body = a.agentView()
 	default:
@@ -74,25 +95,6 @@ func (a App) View() tea.View {
 	}.Render()
 
 	return tea.NewView(lipgloss.JoinVertical(lipgloss.Left, header, body, status))
-}
-
-// modelsView is the M0 placeholder that proves the breakpoint system: list +
-// detail side-by-side on wide/medium screens, stacked on compact ones.
-func (a App) modelsView() string {
-	layout := ForModels(a.w)
-	detail := a.styles.Body.Render("detail pane — model info lands in M1a")
-	if layout.SideBySide {
-		list := lipgloss.NewStyle().
-			Width(layout.ListWidth).
-			Border(lipgloss.RoundedBorder()).
-			Render("Models list (M1a)")
-		return lipgloss.JoinHorizontal(lipgloss.Top, list, detail)
-	}
-	return lipgloss.JoinVertical(
-		lipgloss.Left,
-		a.styles.Body.Render("Models list (M1a)"),
-		detail,
-	)
 }
 
 func (a App) agentView() string {

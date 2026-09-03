@@ -16,6 +16,7 @@ import (
 	"github.com/charmbracelet/log"
 
 	"selftui/internal/config"
+	"selftui/internal/ollama"
 	"selftui/internal/ui"
 )
 
@@ -69,7 +70,8 @@ func run() error {
 	defer cancel()
 
 	// --- bootstrap the program ---
-	m := ui.New(&cfg, ui.NewStyles(cfg.Theme))
+	client := ollama.New(cfg.Host, cfg.AuthToken)
+	m := ui.New(&cfg, ui.NewStyles(cfg.Theme), client)
 	p := tea.NewProgram(m, tea.WithContext(ctx))
 	rootLog.Info("program running")
 	if _, err := p.Run(); err != nil {

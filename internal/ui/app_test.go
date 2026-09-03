@@ -7,12 +7,13 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"selftui/internal/config"
+	"selftui/internal/ollama"
 )
 
 func newTestApp(t *testing.T) App {
 	t.Helper()
 	cfg := config.Default()
-	return New(&cfg, NewStyles(cfg.Theme))
+	return New(&cfg, NewStyles(cfg.Theme), ollama.New(cfg.Host, cfg.AuthToken))
 }
 
 func updateTab(t *testing.T, m tea.Model, msg tea.Msg) App {
@@ -37,8 +38,8 @@ func TestBootsAndRendersTabs(t *testing.T) {
 			t.Errorf("rendered view missing tab %q:\n%s", label, v)
 		}
 	}
-	if !strings.Contains(v, "Models list") {
-		t.Errorf("expected Models placeholder body, got:\n%s", v)
+	if !strings.Contains(v, "no models installed") {
+		t.Errorf("expected Models empty-state hint, got:\n%s", v)
 	}
 }
 

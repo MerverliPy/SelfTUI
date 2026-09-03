@@ -151,7 +151,8 @@ Resolved in priority order: **flags > env vars > config file (`~/.config/selftui
 ### Ollama client (`internal/ollama`)
 Thin typed wrapper over the REST API:
 - `GET /api/tags` → model list (name, size, digest, parameter_size, quantization_level, modified_at)
-- `GET /api/show` → full model/params/options/template details
+- `POST /api/show` → full model/params/options/template details *(POST, not
+  GET — the actual API; see LEDGER 2026-09-03)*
 - `POST /api/pull` (stream) → `{status, digest, total, completed}` progress events
 - `DELETE /api/delete` → remove a model
 - `POST /api/chat` → supports `tools`, `stream` for the agent tool loop
@@ -319,8 +320,7 @@ truecolor / key delivery (`cmd/size-probe` + `scripts/probe-local.sh` harness 5/
 `docs/run-command-containment.md`; verdict **GO**. Residuals carried: landscape
 geometry, reconnect, height-aware layout, scrolling.
 
-**M1a — Model list/show.** ollama client tags/show; Models view selection + inspect pane.
-✅ *Exit: list + inspect models live.*
+**M1a — Model list/show.** ✅ *done 2026-09-03 — live smoke on the local host (qwen3:8b et al.):* ollama client `tags`/`show`; `internal/ollama` (client.go/tags.go/show.go + 11 tests); Models view selection + inspect pane in `internal/ui/models_view.go` (bubbles v2 list, theme-matched), stacked on compact (enter-toggled, u/d scroll) and auto-inspect side-by-side on wide; `charm.land/bubbles/v2` added to the pinned set. ✅ *Exit: list + inspect models live.*
 
 **M1b — Delete + streamed pull.** `DELETE` w/ confirm; streaming `pull` w/ spinner +
 progress. ✅ *Exit: delete & pull work live. → **ALPHA candidate 1.***
@@ -374,11 +374,12 @@ first safety gate.)*
 
 ## 12. Next step
 
-**M0 (repo skeleton + pinned Charm v2 set + responsive shell) landed, and the M0a gate
-PASSED 2026-09-03 (GO — `docs/m0a-gate-evidence.md`).** Agent work is now un-gated.
-Next milestone: **M1a — model list/show**: ollama client `tags`/`show`; Models view
-selection + inspect pane; breakpoints already measurement-anchored (compact ≤79 /
-medium 80–119 / wide ≥120). Landscapes/reconnect measurement residues await M5.
+**M1a — model list/show landed 2026-09-03** (live list + inspect on the local
+host; compact 72x30 and wide 120x40 smokes).
+Next milestone: **M1b — delete + streamed pull**: `DELETE /api/delete` with a
+confirmation; streaming `POST /api/pull` (`{status,digest,total,completed}`
+progress events) with a spinner + progress bar in the Models tab; spinner
+component; errors and cancellation surfaced. → **ALPHA candidate 1** after M1b.
 
 ---
 

@@ -24,6 +24,8 @@ type Styles struct {
 	Status      lipgloss.Style
 	Body        lipgloss.Style
 	Placeholder lipgloss.Style
+	Pane        lipgloss.Style
+	Error       lipgloss.Style
 }
 
 // NewStyles builds the theme for "dark" or "light" (any other value → dark).
@@ -51,5 +53,11 @@ func NewStyles(theme string) Styles {
 		BorderForeground(s.muted)
 	s.Body = lipgloss.NewStyle().Padding(1).Foreground(s.fg)
 	s.Placeholder = lipgloss.NewStyle().Foreground(s.muted).Italic(true)
+	s.Pane = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(s.muted)
+	if dark {
+		s.Error = lipgloss.NewStyle().Foreground(lipgloss.Color("9")) // red
+	} else {
+		s.Error = lipgloss.NewStyle().Foreground(lipgloss.Color("88")) // dark red
+	}
 	return s
 }
