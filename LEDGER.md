@@ -74,6 +74,27 @@ decisions/blockers → next action).
 
 ---
 
+### 2026-09-03 — Session infra diagnosis (tooling, not project code)
+**Milestone:** n/a · **Result:** both flagged issues diagnosed; Flag 2 remediated.
+
+**Flag 1 — cwd stub:** renaming `TUI`→`SelfTUI` mid-session stranded the session cwd, breaking
+bash. Re-created `/home/calvin/TUI/REDIRECT-NOTE.md` stub to satisfy the cwd pointer. **Fix:**
+open a new session with cwd `/home/calvin/SelfTUI`, then `rm -r /home/calvin/TUI`. (Owner chose
+to keep the stub for this session.)
+
+**Flag 2 — subagent "Insufficient Balance":** `deepseek/*` provider credits exhausted (HTTP 402).
+`settings.json` pinned worker/delegate/scout/researcher/polisher to it, so those failed. Also
+found: `oracle`/`council-architect` pinned nonexistent `grok-4.5`.
+
+**Commands + exit codes:** diagnosis via `git status`, `subagent models`, `rg` (hidden). `0`
+
+**Fix applied (owner approved):** `~/.pi/agent/settings.json` overrides → `opencode-go/*`;
+`council-architect.md` `grok-4.5`→`opencode-go/grok-4.6`; `council-operator.md`
+`deepseek/*`→`opencode-go/deepseek-v4-pro`. Verified: settings.json valid JSON; `subagent`
+`models` resolves all to opencode-go. `deepseek` still listed in registry but unfunded — avoid it.
+
+---
+
 ## Appendix — canonical commands (update as build grows)
 
 | Task | Command |
