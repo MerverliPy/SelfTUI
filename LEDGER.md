@@ -59,9 +59,8 @@ decisions/blockers → next action).
 - Buy into `LEDGER.md` (this file) for all future session handoffs.
 
 **Blockers / open owner decisions (carry to next session)**
-- ✅ **Repo setup done** — dir renamed `/home/calvin/TUI` → `/home/calvin/SelfTUI`; `git init` run;
-  dotfiles ignores it automatically (its `.gitignore` uses `*` default-ignore, so the `/TUI`
-  entry was unnecessary).
+- ✅ **Repo setup done** — dir renamed `/home/calvin/TUI` → `/home/calvin/SelfTUI`; `git init` run; initial commit `dda790a` on `main`; dotfiles ignores it automatically (its `.gitignore` uses `*` default-ignore, so a `/TUI` entry was unnecessary).
+  - *Harness note:* the old session cwd `/home/calvin/TUI` was re-created as a thin `REDIRECT-NOTE.md` stub so the shell tool works; delete it once a new session opens on `/home/calvin/SelfTUI`.
 - 6 owner decisions still unresolved: Charm v1 vs v2; concurrency primitive (channel vs
   `tea.Program.Send`) + nested models vs god `Update`; no-tool-model behavior; `rg` vs
   pure-Go grep; serialize Ollama jobs; M0a go/no-go gate criteria.
