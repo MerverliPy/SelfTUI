@@ -977,3 +977,25 @@ with no way to approve.
 
 **Next action**
 - Fresh session: v0.1 tag + release notes (unchanged).
+
+### 2026-09-06 — Remote repo created (owner task)
+**Milestone:** owner task · **Result:** done — private GitHub remote, main pushed.
+
+**Work done**
+- Created **https://github.com/MerverliPy/SelfTUI** (PRIVATE, account MerverliPy —
+  no orgs; verified via `gh auth status`). Branch: `main` at `b6bd9a0`.
+- `origin` = https fetch/push, tracking set, HEAD pushed.
+- Hygiene checked before push: 78 tracked files; no config.toml/*.log/bin/
+  sessions/probe.txt tracked (all ignored); no secrets.
+- Owner decided: private, and keep the internal docs (PLAN/LEDGER/COUNCIL-MEMO/
+  AGENTS) in the remote as-is.
+- Note: LEDGER is a personal session journal — it is now in the private
+  remote; flip visibility (`gh repo edit --visibility public`) only after
+  deciding whether to keep it there.
+
+**Commands + exit codes**
+- `gh repo create SelfTUI --private --source . --remote origin --push` `0`
+- verified: `git ls-remote --heads origin` shows main at b6bd9a0
+
+**Next action**
+- Fresh session: v0.1 tag + release notes (unchanged).
