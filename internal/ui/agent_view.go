@@ -25,6 +25,12 @@ import (
 // rejects tools or returns no tool call.
 type AgentView struct {
 	client *ollama.Client
+
+	// ctx is the parent context every operation this view starts (model-list
+	// fetches, chat streams) derives from. NewWithContext binds it to the
+	// process root; the compatibility constructors leave it at Background.
+	ctx context.Context
+
 	runner *agent.Runner
 	styles Styles
 	dark   bool
@@ -119,23 +125,28 @@ type AgentView struct {
 }
 
 // NewAgentView builds the Agent tab using the current directory as its
-// workspace. It remains as a small compatibility constructor for tests and
-// callers that predate workspace configuration.
+// workspace, with a background parent context. It remains a compatibility
+// constructor for tests and callers that predate root-context wiring; new
+// code should go through the App's NewWithContext (or newAgentView with the
+// real parent) so operations cancel with the process.
 func NewAgentView(client *ollama.Client, styles Styles, theme, defaultModel string, agentCfg config.AgentConfig) AgentView {
-	root, _ := os.Getwd()
-	return newAgentView(client, styles, theme, defaultModel, root, "", agentCfg)
+	return newAgentView(nil, client, styles, theme, defaultModel, "", "", agentCfg)
 }
 
 // NewAgentViewWithWorkspace builds the Agent tab with the configured project
-// root and system prompt.
+// root and system prompt (background parent context; see NewAgentView).
 func NewAgentViewWithWorkspace(client *ollama.Client, styles Styles, theme, defaultModel, workspaceRoot string, agentCfg config.AgentConfig) AgentView {
+	return newAgentView(nil, client, styles, theme, defaultModel, workspaceRoot, agentCfg.SystemPrompt, agentCfg)
+}
+
+// newAgentView is the private constructor: it stores ctx as the parent every
+// operation this view starts derives from. Public constructors pass nil (→ a
+// background root); the App's NewWithContext passes the process root.
+func newAgentView(ctx context.Context, client *ollama.Client, styles Styles, theme, defaultModel, workspaceRoot, systemPrompt string, agentCfg config.AgentConfig) AgentView {
+	ctx = normalizeCtx(ctx)
 	if workspaceRoot == "" {
 		workspaceRoot, _ = os.Getwd()
 	}
-	return newAgentView(client, styles, theme, defaultModel, workspaceRoot, agentCfg.SystemPrompt, agentCfg)
-}
-
-func newAgentView(client *ollama.Client, styles Styles, theme, defaultModel, workspaceRoot, systemPrompt string, agentCfg config.AgentConfig) AgentView {
 	ta := textarea.New()
 	ta.Prompt = "❯ "
 	ta.Placeholder = "/ for commands, or chat with the selected model…"
@@ -143,6 +154,7 @@ func newAgentView(client *ollama.Client, styles Styles, theme, defaultModel, wor
 	ta.Focus()                 // the input is the Agent tab's primary surface
 	return AgentView{
 		client:       client,
+		ctx:          ctx,
 		runner:       agent.NewRunner(client, workspaceRoot, systemPrompt, agentCfg.MaxToolIterations),
 		styles:       styles,
 		dark:         theme != "light",
@@ -183,7 +195,7 @@ func (v AgentView) Init() tea.Cmd {
 
 func (v AgentView) loadModelsCmd() tea.Cmd {
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		ctx, cancel := context.WithTimeout(v.ctx, 60*time.Second)
 		defer cancel()
 		models, err := v.client.List(ctx)
 		if err != nil {
@@ -198,7 +210,7 @@ func (v AgentView) loadModelsCmd() tea.Cmd {
 // agentDoneMsg. turnStart anchors the per-turn elapsed footer (M7-B).
 func (v AgentView) startChat() (AgentView, tea.Cmd) {
 	ch := make(chan tea.Msg, 64)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(v.ctx)
 
 	v.chatCh = ch
 	v.stopCancel = cancel

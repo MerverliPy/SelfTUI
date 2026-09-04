@@ -25,6 +25,12 @@ import (
 // shared breakpoint system; theme comes from the shared Styles.
 type ModelsView struct {
 	client *ollama.Client
+
+	// ctx is the parent context every operation this view starts (list/show/
+	// delete fetches, pull streams) derives from. NewWithContext binds it to
+	// the process root; the compatibility constructor leaves it at Background.
+	ctx context.Context
+
 	styles Styles
 
 	// List state.
@@ -72,8 +78,20 @@ type ModelsView struct {
 	w, h int
 }
 
-// NewModelsView builds the Models tab.
+// NewModelsView builds the Models tab with a background parent context. It
+// is the compatibility constructor for tests and callers that predate
+// root-context wiring; new code should go through the App's NewWithContext
+// (or newModelsView with the real parent) so operations cancel with the
+// process.
 func NewModelsView(client *ollama.Client, styles Styles, theme string) ModelsView {
+	return newModelsView(nil, client, styles, theme)
+}
+
+// newModelsView is the private constructor: it stores ctx as the parent
+// every operation this view starts derives from. nil is normalized to a
+// background root (see NewModelsView).
+func newModelsView(ctx context.Context, client *ollama.Client, styles Styles, theme string) ModelsView {
+	ctx = normalizeCtx(ctx)
 	dark := theme != "light"
 
 	l := list.New(nil, modelsDelegate(styles, dark), 0, 0)
@@ -102,6 +120,7 @@ func NewModelsView(client *ollama.Client, styles Styles, theme string) ModelsVie
 
 	return ModelsView{
 		client:   client,
+		ctx:      ctx,
 		styles:   styles,
 		spinner:  sp,
 		progress: progress.New(),
@@ -181,7 +200,7 @@ func (v ModelsView) Init() tea.Cmd {
 
 func (v ModelsView) loadCmd() tea.Cmd {
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		ctx, cancel := context.WithTimeout(v.ctx, 60*time.Second)
 		defer cancel()
 		models, err := v.client.List(ctx)
 		if err != nil {
@@ -193,7 +212,7 @@ func (v ModelsView) loadCmd() tea.Cmd {
 
 func (v ModelsView) showCmd(name string) tea.Cmd {
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		ctx, cancel := context.WithTimeout(v.ctx, 60*time.Second)
 		defer cancel()
 		details, err := v.client.Show(ctx, name)
 		if err != nil {
@@ -205,7 +224,7 @@ func (v ModelsView) showCmd(name string) tea.Cmd {
 
 func (v ModelsView) deleteCmd(name string) tea.Cmd {
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		ctx, cancel := context.WithTimeout(v.ctx, 60*time.Second)
 		defer cancel()
 		if err := v.client.Delete(ctx, name); err != nil {
 			return modelsDeleteDoneMsg{name: name, err: err.Error()}
@@ -230,7 +249,7 @@ func (v ModelsView) waitPullCmd() tea.Cmd {
 // modelsPullMsg; the trailing result as one modelsPullDoneMsg.
 func (v ModelsView) startPull(name string) (ModelsView, tea.Cmd) {
 	ch := make(chan tea.Msg, 64)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(v.ctx)
 
 	v.pullCh = ch
 	v.pullCancel = cancel

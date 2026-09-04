@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"fmt"
 
 	"charm.land/bubbles/v2/spinner"
@@ -43,18 +44,42 @@ type App struct {
 	note string
 }
 
-// New builds the root model. client is the Ollama connection shared by the
-// Models and Agent tabs. cfg is the live session config (settings edits and
-// env/flag overrides all resolve onto it).
+// New builds the root model with a background parent context. It is the
+// compatibility entry point (tests, legacy callers): main wires the real
+// signal-derived context through NewWithContext so every Models/Agent
+// operation derives from the process root. client is the Ollama connection
+// shared by the Models and Agent tabs; cfg is the live session config
+// (settings edits and env/flag overrides all resolve onto it).
 func New(cfg *config.Config, styles Styles, client *ollama.Client) App {
+	return NewWithContext(context.Background(), cfg, styles, client)
+}
+
+// NewWithContext builds the root model exactly like New but binds the parent
+// context: every operation the Models and Agent tabs start (list/show/delete
+// fetches, chat and pull streams) derives from ctx, so canceling the process
+// root aborts in-flight background work. A nil ctx is treated as a background
+// root (see normalizeCtx).
+func NewWithContext(ctx context.Context, cfg *config.Config, styles Styles, client *ollama.Client) App {
+	ctx = normalizeCtx(ctx)
 	return App{
 		cfg:      cfg,
 		styles:   styles,
 		curTheme: cfg.Theme,
-		models:   NewModelsView(client, styles, cfg.Theme),
-		agent:    NewAgentViewWithWorkspace(client, styles, cfg.Theme, cfg.DefaultModel, cfg.WorkspaceRoot, cfg.Agent),
+		models:   newModelsView(ctx, client, styles, cfg.Theme),
+		agent:    newAgentView(ctx, client, styles, cfg.Theme, cfg.DefaultModel, cfg.WorkspaceRoot, cfg.Agent.SystemPrompt, cfg.Agent),
 		settings: NewSettingsView(cfg, styles),
 	}
+}
+
+// normalizeCtx returns ctx, or a background root when ctx is nil, so a
+// caller that omits a parent (the compatibility constructors, tests) still
+// gets a live root. Shared by NewWithContext and the view constructors; the
+// package's background-root literals live only here and in New's call.
+func normalizeCtx(ctx context.Context) context.Context {
+	if ctx == nil {
+		return context.Background()
+	}
+	return ctx
 }
 
 // Init starts the Models list and Agent model-list fetches.

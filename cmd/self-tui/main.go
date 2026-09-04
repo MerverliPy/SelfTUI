@@ -129,13 +129,16 @@ func run() error {
 	rootLog.Info("session dir", "path", sessionDirForRun())
 
 	// --- cancellation plumbing: SIGINT/SIGTERM cancel a root context that
-	// the program and (from M1+) background jobs share ---
+	// the tea runtime (tea.WithContext below) and every Models/Agent
+	// operation — list/show/delete fetches, chat and pull streams — derive
+	// from, so a Ctrl+C aborts in-flight background work instead of
+	// stranding it. Constructed before the App so NewWithContext can bind it.
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
 	// --- bootstrap the program ---
 	client := ollama.New(cfg.Host, cfg.AuthToken)
-	m := ui.New(&cfg, ui.NewStyles(cfg.Theme), client)
+	m := ui.NewWithContext(ctx, &cfg, ui.NewStyles(cfg.Theme), client)
 	m = m.WithSessionDir(sessionDirForRun(), cfg.Host)
 	p := tea.NewProgram(m, tea.WithContext(ctx))
 	rootLog.Info("program running")
