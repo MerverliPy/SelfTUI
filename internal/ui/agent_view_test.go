@@ -393,8 +393,17 @@ func TestAgentViewEnterWhileStreamingIgnored(t *testing.T) {
 		t.Errorf("enter while streaming returned command %v, want nil", cmd)
 	}
 
-	// esc stops the stream; the partial content is committed, no error.
+	// esc is an armed interrupt: the first press only arms (the statusline
+	// flips to "esc again to interrupt"), the second cancels. The partial
+	// content is committed, no error.
 	v, _ = v.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+	if !v.stopArmed || v.stopRequest {
+		t.Errorf("first esc should arm the interrupt (armed=%v request=%v)", v.stopArmed, v.stopRequest)
+	}
+	v, _ = v.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+	if !v.stopRequest {
+		t.Error("second esc should cancel the stream")
+	}
 	drainChat(t, &v)
 	if v.chatErr != "" {
 		t.Errorf("chatErr = %q, want empty (user stop)", v.chatErr)
@@ -433,8 +442,15 @@ func TestAgentViewEscCancelsStream(t *testing.T) {
 		t.Fatal("first token never arrived")
 	}
 	v, _ = v.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+	if !v.stopArmed {
+		t.Error("first esc should arm the interrupt")
+	}
+	if v.stopRequest {
+		t.Error("armed esc must not cancel yet")
+	}
+	v, _ = v.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	if !v.stopRequest {
-		t.Error("esc should mark the stop request")
+		t.Error("second esc should mark the stop request")
 	}
 	if v.stopCancel == nil {
 		t.Fatal("stopCancel missing during stream")

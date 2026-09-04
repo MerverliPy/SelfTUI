@@ -808,3 +808,61 @@ golden frames (17 total) at 72×30/120×40; README/PLAN updated; v0.1 is next.
 **Next action**
 - Fresh session: tag v0.1.0 + release notes (PLAN §10 says "tag + release
   notes"; decide version string behavior — `-version` prints 0.6.0-m6 today).
+
+### 2026-09-06 — M7 follow-up: opencode-style chat box (owner task)
+**Milestone:** owner task on top of M7 · **Result:** done — composer block +
+statusline, auto-growing prompt, numeric ctx usage, armed interrupt,
+header-right turn meta; 19 golden frames; `make check` + `go test -race` green.
+
+**Work done** (scope decided with the owner: "Whole Agent tab"; layout =
+composer block + statusline; behaviors = auto-grow + numeric usage + armed
+interrupt; model chip as a display chip, picker trigger stays `m`)
+- Grounded the reference by reading opencode's own footer source
+  (`footer.view.tsx`/`footer.prompt.tsx`): composer on top, a one-row
+  statusline under it — mode/status · interrupt · usage · model.
+- **Composer block** replaces the old hint row + input box: one bordered
+  pane whose header row shows the model chip left and the live ctx meter +
+  numeric token usage right (`ctx ▓▓░░ 38% · 1.2k/3.1k`; red "ctx full —
+  /clear" at 100%). The prompt textarea auto-grows 1→4 rows as multi-line
+  text is drafted (`composerRowsFor` counts wrapped rows at the pane width;
+  capped, re-fit on every keystroke/resize/reset). Idle-empty still shows
+  the full usage row (opencode keeps activity visible).
+- **Statusline** under the composer: error (red, "enter to retry"), running
+  state (`running…`/tool status + `esc interrupt`), transient notice, else
+  the width-fitted key legend (composing vs idle). The slash menu keeps
+  floating between transcript and composer; statusline row counts are
+  dynamic so the chat pane always absorbs the composer's growth.
+- **Armed interrupt**: while running the first `esc` only arms (statusline
+  flips to `esc again to interrupt` in red); the second cancels — a stray
+  esc can no longer kill a long run. `stopArmed` resets on start/done.
+  Existing stop tests updated to the two-press contract.
+- **Transcript**: per-turn meta (elapsed + reason) moved from a separate
+  muted footer row onto the assistant header line, right-aligned to the pane
+  margin (`assistantHeaderRow`); saves a row per turn and reads like
+  opencode's part headers. `turnMeta` stays parallel for geometry re-renders.
+- New golden frames: `agent-turn-*` (committed turn with meta header) — 19
+  total. `/help` + README updated for the composer/statusline/armed-esc.
+
+**Commands + exit codes**
+- `go build ./...` `0` · `go vet ./...` `0` · `gofmt -l .` empty
+- `make check` `0` · `go test -race ./...` `0`
+- `go test ./internal/ui -run TestGoldenRender -update` `0` (19 frames)
+- one expected mid-work hang traced to the old single-esc stop tests under
+  the new armed semantics (tests updated, not the code)
+
+**Decisions / lines to respect**
+- Follow-up overrides two M7 details: turn meta now lives on the assistant
+  header's right side (not a footer row), and `esc` while running is an
+  armed interrupt (first press warns, second cancels). Idle esc still clears
+  a drafted prompt; esc never quits.
+- The ctx meter + usage live in the composer header (conversation-local);
+  the app status bar below remains host/geometry shell chrome.
+- Composer auto-grow caps at 4 rows; wrapping math treats the first line as
+  shortened by the "❯ " prompt.
+
+**Blockers / open decisions**
+- None. v0.1 release (tag + release notes; `-version` still prints 0.6.0-m6)
+  is next.
+
+**Next action**
+- Fresh session: tag v0.1.0 + release notes.

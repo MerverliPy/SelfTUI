@@ -89,6 +89,24 @@ func buildAgent(t *testing.T, w, h int) App {
 	return updateTab(t, m, agentModelsLoadedMsg{models: sampleModels()})
 }
 
+// buildAgentTurn seeds one committed turn (user + assistant with a
+// right-aligned meta header) so the transcript layout is pinned too.
+func buildAgentTurn(t *testing.T, w, h int) App {
+	m := buildAgent(t, w, h)
+	m.agent.history = append(m.agent.history,
+		ollama.ChatMessage{Role: ollama.RoleUser, Content: "explain this repo"},
+		ollama.ChatMessage{Role: ollama.RoleAssistant, Content: "It is a mobile-first terminal UI for Ollama, styled like the opencode.ai TUI."},
+	)
+	m.agent.turnModel = []string{"qwen3:8b", "qwen3:8b"}
+	m.agent.turnMeta = []string{"", "0.4s · stop"}
+	m.agent.render = []string{
+		m.agent.renderBlock(m.agent.userHeader(), "explain this repo"),
+		m.agent.renderBlock(m.agent.assistantHeaderRow("qwen3:8b", "0.4s · stop"),
+			"It is a mobile-first terminal UI for Ollama, styled like the opencode.ai TUI."),
+	}
+	return m
+}
+
 // buildAgentModal frames the Agent tab with the given overlay open: each M7
 // overlay must render inside the terminal at both canonical geometries.
 func buildAgentModal(t *testing.T, w, h int, open func(t *testing.T, m App) App) App {
@@ -142,6 +160,7 @@ var goldenFrames = []goldenFrame{
 	{"models-compact", 72, 30, buildModelsCompact},
 	{"models-compact-inspect", 72, 30, buildModelsCompactInspect},
 	{"agent-compact", 72, 30, buildAgent},
+	{"agent-turn-compact", 72, 30, buildAgentTurn},
 	{"agent-picker-compact", 72, 30, func(t *testing.T, w, h int) App { return buildAgentModal(t, w, h, openModelPicker) }},
 	{"agent-slash-compact", 72, 30, func(t *testing.T, w, h int) App { return buildAgentModal(t, w, h, openSlashMenu) }},
 	{"agent-help-compact", 72, 30, func(t *testing.T, w, h int) App { return buildAgentModal(t, w, h, openHelp) }},
@@ -151,6 +170,7 @@ var goldenFrames = []goldenFrame{
 	// Wide: PC window.
 	{"models-wide-inspect", 120, 40, buildModelsWideInspect},
 	{"agent-wide", 120, 40, buildAgent},
+	{"agent-turn-wide", 120, 40, buildAgentTurn},
 	{"agent-picker-wide", 120, 40, func(t *testing.T, w, h int) App { return buildAgentModal(t, w, h, openModelPicker) }},
 	{"agent-slash-wide", 120, 40, func(t *testing.T, w, h int) App { return buildAgentModal(t, w, h, openSlashMenu) }},
 	{"agent-help-wide", 120, 40, func(t *testing.T, w, h int) App { return buildAgentModal(t, w, h, openHelp) }},

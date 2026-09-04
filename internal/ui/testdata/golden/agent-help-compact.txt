@@ -1,7 +1,5 @@
   Models    Agent    Settings                                           
                                                                         
-                                                                        
-                                                                        
   ╭──────────────────────────────────────────────────────────────────╮  
   │Help                                                              │  
   │                                                                  │  
@@ -12,8 +10,12 @@
   │ /help     show this reference                                    │  
   │ /refresh  reload the model list                                  │  
   │                                                                  │  
-  │composing                                                         │  
+  │composer                                                          │  
   │ enter send · shift+enter newline · esc clear draft               │  
+  │ the header row: model chip + live ctx usage                      │  
+  │                                                                  │  
+  │running                                                           │  
+  │ esc arms the interrupt · esc again cancels                       │  
   │                                                                  │  
   │transcript (empty input)                                          │  
   │ m model · r refresh · u/d scroll · f auto-follow                 │  
@@ -24,7 +26,5 @@
   │                                                                  │  
   │y / enter approve · n / esc decline                               │  
   ╰──────────────────────────────────────────────────────────────────╯  
-                                                                        
-                                                                        
                                                                         
  ⏻ http://localhost:11434                       Agent · 72x30 · compact 

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"selftui/internal/agent"
 	"selftui/internal/config"
@@ -352,7 +353,9 @@ func TestStreamingCaretAppearsAndDisappears(t *testing.T) {
 		t.Errorf("caret missing while streaming:\n%s", out)
 	}
 
-	// Stop the stream: the partial text commits and the caret disappears.
+	// Stop the stream (armed interrupt: two esc presses) — the partial text
+	// commits and the caret disappears.
+	v, _ = v.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	v, _ = v.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	drainChat(t, &v)
 	if out := stripANSI(v.View()); strings.Contains(out, "▍") {
@@ -458,14 +461,51 @@ func TestPageScrollAndFollowToggle(t *testing.T) {
 func TestContextMeterShowsWhileComposing(t *testing.T) {
 	v := testAgent(t, nil)
 	v, _ = v.Update(agentModelsLoadedMsg{models: sampleModels()})
+	// The composer header always carries the meter + numeric usage
+	// (opencode-style activity meta), idle and composing alike.
 	out := stripANSI(v.View())
-	if strings.Contains(out, "ctx ") {
-		t.Errorf("no meter expected on an idle empty conversation:\n%s", out)
+	for _, want := range []string{"◈ qwen3:8b", "ctx ", "%", "k/"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("composer header missing %q:\n%s", want, out)
+		}
 	}
 	typeText(t, &v, "hello model")
 	out = stripANSI(v.View())
-	if !strings.Contains(out, "ctx ") || !strings.Contains(out, "%") {
+	if !strings.Contains(out, "ctx ") {
 		t.Errorf("meter missing while composing:\n%s", out)
+	}
+}
+
+func TestComposerAutoGrowsWithPrompt(t *testing.T) {
+	v := testAgent(t, nil)
+	v, _ = v.Update(agentModelsLoadedMsg{models: sampleModels()})
+	if rows := v.composerRows(); rows != 1 {
+		t.Fatalf("empty composer should be 1 row, got %d", rows)
+	}
+	typeText(t, &v, "line one")
+	v, _ = v.Update(tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModShift})
+	typeText(t, &v, "line two")
+	v, _ = v.Update(tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModShift})
+	typeText(t, &v, "line three")
+	if rows := v.composerRows(); rows != 3 {
+		t.Errorf("three prompt lines should need 3 rows, got %d", rows)
+	}
+	// The composer caps out instead of eating the whole terminal.
+	for i := 0; i < 12; i++ {
+		v, _ = v.Update(tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModShift})
+		typeText(t, &v, "more")
+	}
+	if rows := v.composerRows(); rows > composerMaxRows {
+		t.Errorf("composer grew to %d rows, cap is %d", rows, composerMaxRows)
+	}
+	// A grown composer still renders inside both canonical geometries.
+	for _, geom := range [][2]int{{72, 30}, {120, 40}} {
+		v, _ = v.Update(tea.WindowSizeMsg{Width: geom[0], Height: geom[1]})
+		for _, r := range frameRows(v.View()) {
+			if lipgloss.Width(r) > geom[0] {
+				t.Errorf("%dx%d: composer row %d wide %d", geom[0], geom[1], lipgloss.Width(r), geom[0])
+			}
+		}
 	}
 }
 
@@ -580,5 +620,43 @@ func TestContextMeterMathMirrorsAgentEstimator(t *testing.T) {
 	}
 	if agent.ApproxTokens(msgs) != v.ctxTokens() {
 		t.Errorf("estimator mismatch: agent=%d ui=%d", agent.ApproxTokens(msgs), v.ctxTokens())
+	}
+}
+
+func TestAssistantHeaderCarriesRightAlignedMeta(t *testing.T) {
+	v := testAgent(t, nil) // 88x40: chat inner width is 86
+	h := v.assistantHeaderRow("qwen3:8b", "0.4s · stop")
+	plain := strings.TrimSpace(stripANSI(h))
+	if !strings.HasPrefix(plain, "◈ qwen3:8b") {
+		t.Errorf("header should lead with the model chip: %q", plain)
+	}
+	if !strings.HasSuffix(plain, "0.4s · stop") {
+		t.Errorf("header should end with right-aligned meta: %q", plain)
+	}
+	if w := lipgloss.Width(h); w != v.w-2 {
+		t.Errorf("header width = %d, want chat inner width %d", w, v.w-2)
+	}
+	// A header without meta stays short (no right-padding noise).
+	plain = strings.TrimSpace(stripANSI(v.assistantHeaderRow("qwen3:8b", "")))
+	if plain != "◈ qwen3:8b" {
+		t.Errorf("no-meta header = %q, want just the chip", plain)
+	}
+}
+
+func TestStreamingStatusLineArmsInterrupt(t *testing.T) {
+	v := testAgent(t, nil)
+	v, _ = v.Update(agentModelsLoadedMsg{models: sampleModels()})
+	// Simulate a running turn with state (no live server needed for the row).
+	v.streaming = true
+	v.streamText = "partial"
+	v.follow = true
+	out := stripANSI(v.View())
+	if !strings.Contains(out, "running…") || !strings.Contains(out, "esc interrupt") {
+		t.Errorf("busy statusline missing run/interrupt hints:\n%s", out)
+	}
+	v.stopArmed = true
+	out = stripANSI(v.View())
+	if !strings.Contains(out, "esc again to interrupt") {
+		t.Errorf("armed statusline missing the second-esc warning:\n%s", out)
 	}
 }

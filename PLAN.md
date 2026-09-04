@@ -397,10 +397,11 @@ reference for feel).** ✅ *done 2026-09-06 — evidence: 40+ new M7 tests in
   key. `esc`-while-draft, palette modal guard, and composer empty-input
   letter-command rules all preserved (digit typing tests still pass).
 - **B — Transcript feel:** stable per-block headers with the model chip,
-  streaming caret “▍” that disappears at rest, per-turn footers with elapsed
-  time + terminal reason (`· stop`/`· length`/`· stopped`) surfaced through
-  `AgentDoneMsg.Reason`, `pgup`/`pgdn` paging, and an `f` auto-follow toggle
-  (d/pgdn back to the tail re-engages follow).
+  streaming caret “▍” that disappears at rest, per-turn meta right-aligned on
+  the assistant header (elapsed + terminal reason — `· stop`/`· length`/
+  `· stopped` — surfaced through `AgentDoneMsg.Reason`), `pgup`/`pgdn`
+  paging, and an `f` auto-follow toggle (d/pgdn back to the tail re-engages
+  follow).
 - **C — Context meter + picker upgrade:** live meter (`ctx ▓▓░░░ 38%`) in the
   Agent hint row over system+history+draft, reusing `agent.ApproxTokens`;
   red at 100% with a visible truncation marker in the transcript head until
@@ -413,6 +414,17 @@ only, digits are text while composing, phone-first compact geometry held.
 *Owner decisions recorded in LEDGER: palette/slash keybind set (ctrl+p on
 any tab + “/” menu as the phone path) and the meter lives in the Agent hint
 row, not the shared status bar.* → **v0.1 next (tag + release notes).**
+
+**M7 follow-up — opencode composer (owner task 2026-09-06, after M7).**
+Re-shaped the Agent tab's chat box toward the opencode.ai TUI after a live
+reference pass over its footer source: the bottom is now one **composer
+block** (header row: model chip left, live ctx meter + numeric token usage
+right; auto-growing prompt 1–4 rows) with an opencode-style **statusline**
+under it (running state · armed interrupt, key legend); per-turn meta moved
+from a footer row onto the assistant header's right side; `esc` while
+running is now an **armed interrupt** (first esc warns “esc again to
+interrupt”, second cancels). Goldens grew to 19 frames; `make check` +
+`go test -race` green. *Still next: v0.1 (tag + release notes).*
 
 ---
 
@@ -455,7 +467,9 @@ release docs (`docs/reconnect.md`, README). `make check` and `go test -race`
 green.
 **M7 — UX polish landed 2026-09-06** (opencode.ai TUI as the feel reference):
 slash-command menu + `ctrl+p` palette (A), transcript feel — caret, turn
-footers with elapsed + stop reason, pgup/pgdn + `f` follow (B), context meter
+footers with elapsed + stop reason — later moved onto the assistant header's
+right side when the opencode-composer follow-up landed (see §10 M7 note),
+pgup/pgdn + `f` follow (B), context meter
 + filter-as-you-type model picker with the default starred (C); `make check`
 and `go test -race` green, 10 new golden frames (17 total) at 72×30/120×40.
 Next: **v0.1 release** (tag `v0.1.0` + release notes) in a fresh session.

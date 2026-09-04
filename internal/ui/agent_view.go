@@ -61,6 +61,7 @@ type AgentView struct {
 	streaming    bool                  // generation in flight
 	streamText   string                // in-flight assistant content (deltas appended)
 	stopRequest  bool                  // esc asked to stop; treat stream end as a stop
+	stopArmed    bool                  // M7: first esc while running arms the interrupt (opencode-style)
 	stopCancel   func()                // cancels the in-flight chat context
 	chatCh       chan tea.Msg          // activity channel (PLAN §8), one stream owner
 	toolStatus   string                // latest agent-tool activity for the hint row
@@ -194,6 +195,7 @@ func (v AgentView) startChat() (AgentView, tea.Cmd) {
 	v.streaming = true
 	v.streamText = ""
 	v.stopRequest = false
+	v.stopArmed = false
 	v.chatErr = ""
 	v.notice = ""
 	v.follow = true
@@ -241,7 +243,9 @@ func (v AgentView) Update(msg tea.Msg) (AgentView, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		v.w, v.h = msg.Width, msg.Height
-		// Wrap width changed: force a renderer + cache rebuild at the new width.
+		// Wrap width changed: recompose the textarea fit and force a renderer
+		// + cache rebuild at the new width.
+		v = v.fitComposer()
 		v.renderW = -1
 		v.rebuildRenderer()
 		v.rebuildRenderCache()
@@ -358,12 +362,13 @@ func (v AgentView) onModelsLoaded(models []ollama.Model) (AgentView, tea.Cmd) {
 }
 
 // onChatDone finalizes a turn: commits the streamed text as an assistant
-// message (when non-empty) with a footer of elapsed time + the terminal
-// reason (M7-B), then surfaces an error unless the user stopped the stream
-// with esc (a stop is not an error).
+// message whose header carries elapsed + terminal reason right-aligned
+// (M7-B/opencode-style), then surfaces an error unless the user stopped the
+// stream with esc (a stop is not an error).
 func (v AgentView) onChatDone(m agentDoneMsg) (AgentView, tea.Cmd) {
 	v.streaming = false
 	v.stopCancel = nil
+	v.stopArmed = false
 	v.chatCh = nil
 	v.toolStatus = ""
 	v.confirmation = nil
@@ -373,7 +378,7 @@ func (v AgentView) onChatDone(m agentDoneMsg) (AgentView, tea.Cmd) {
 		v.history = append(v.history, ollama.ChatMessage{Role: ollama.RoleAssistant, Content: v.streamText})
 		v.turnModel = append(v.turnModel, v.model)
 		v.turnMeta = append(v.turnMeta, meta)
-		v.render = append(v.render, v.renderBlock(v.assistantHeader(v.model), v.streamText))
+		v.render = append(v.render, v.renderBlock(v.assistantHeaderRow(v.model, meta), v.streamText))
 		v.streamText = ""
 	}
 
@@ -437,7 +442,7 @@ func (v AgentView) handleKey(msg tea.KeyMsg) (AgentView, tea.Cmd) {
 			v.input = ti
 			v.slashQuery = ""
 			v.slashIdx = 0
-			return v, nil
+			return v.fitComposer(), nil
 		case k.Code == tea.KeyEnter && !k.Mod.Contains(tea.ModShift):
 			return v.runSlashCommand()
 		case k.Code == tea.KeyUp:
@@ -476,8 +481,16 @@ func (v AgentView) handleKey(msg tea.KeyMsg) (AgentView, tea.Cmd) {
 	case k.Code == tea.KeyEsc:
 		switch {
 		case v.streaming && v.stopCancel != nil:
-			v.stopRequest = true
-			v.stopCancel()
+			// Armed interrupt (opencode-style): the first esc while running
+			// only warns — the statusline flips to "esc again to interrupt" —
+			// and only the second cancels, so a stray esc can't kill a long
+			// generation.
+			if v.stopArmed {
+				v.stopRequest = true
+				v.stopCancel()
+			} else {
+				v.stopArmed = true
+			}
 		case v.input.Value() != "":
 			// Idle with a drafted prompt: esc clears it (M7-A). A second esc
 			// on an already-empty input is a no-op.
@@ -486,6 +499,7 @@ func (v AgentView) handleKey(msg tea.KeyMsg) (AgentView, tea.Cmd) {
 			v.input = ti
 			v.slashQuery = ""
 			v.slashIdx = 0
+			return v.fitComposer(), nil
 		}
 		return v, nil
 	case (k.Code == tea.KeyPgUp || k.Code == tea.KeyPgDown) && v.input.Value() == "" && !v.streaming:
@@ -525,7 +539,47 @@ func (v AgentView) handleKey(msg tea.KeyMsg) (AgentView, tea.Cmd) {
 
 	ta, cmd := v.input.Update(msg)
 	v.input = ta
-	return v, cmd
+	return v.fitComposer(), cmd
+}
+
+// fitComposer re-sizes the prompt textarea to the current width and content
+// height. The composer grows from one to composerMaxRows rows as a
+// multi-line prompt is typed (opencode-style auto-grow); sizing happens on
+// every text change, geometry change, and reset so wrapping and the pane
+// height stay correct.
+func (v AgentView) fitComposer() AgentView {
+	ta := v.input
+	ta.SetWidth(maxInt(v.w-2, 10))
+	ta.SetHeight(composerRowsFor(ta.Value(), maxInt(v.w-2, 10)))
+	v.input = ta
+	return v
+}
+
+// composerMaxRows caps the auto-growing composer prompt.
+const composerMaxRows = 4
+
+// composerRowsFor counts how many terminal rows a prompt occupies in a
+// textarea taW columns wide: one per physical line plus extra rows for
+// wrapping (the prompt glyph shortens the first line).
+func composerRowsFor(value string, taW int) int {
+	if taW < 1 {
+		taW = 1
+	}
+	lines := strings.Split(value, "\n")
+	n := 0
+	for j, l := range lines {
+		w := lipgloss.Width(l)
+		if w == 0 {
+			n++
+			continue
+		}
+		usable := taW
+		if j == 0 {
+			usable = maxInt(taW-2, 1) // the "❯ " prompt shares the first row
+		}
+		n += 1 + (w-1)/usable
+	}
+	return clampInt(n, 1, composerMaxRows)
 }
 
 // pageScroll moves the transcript window one visible page (pgup up, pgdn
@@ -549,10 +603,11 @@ func (v AgentView) pageScroll(up bool) (AgentView, tea.Cmd) {
 }
 
 // pageHeight is the number of visible transcript rows used as the pgup/pgdn
-// page size — the same accounting renderChatPane uses for its window.
+// page size — the same accounting renderChatPane uses for its window
+// (composer height is dynamic: it grows with the prompt).
 func (v AgentView) pageHeight() int {
 	bodyH := maxInt(v.h-2, 1)
-	chatH := maxInt(bodyH-4-1, 1)
+	chatH := maxInt(bodyH-v.composerRows()-3-1, 1)
 	return maxInt(chatH-2, 1)
 }
 
@@ -569,6 +624,7 @@ func (v AgentView) sendInput() (AgentView, tea.Cmd) {
 	ti := v.input
 	ti.Reset()
 	v.input = ti
+	v = v.fitComposer()
 
 	v.history = append(v.history, ollama.ChatMessage{Role: ollama.RoleUser, Content: text})
 	v.turnModel = append(v.turnModel, v.model)
@@ -641,6 +697,7 @@ func (v AgentView) runSlashCommand() (AgentView, tea.Cmd) {
 	v.input = ti
 	v.slashQuery = ""
 	v.slashIdx = 0
+	v = v.fitComposer() // the draft was consumed; shrink the composer back
 
 	switch name {
 	case "clear":
@@ -841,7 +898,7 @@ func (v AgentView) ctxPct() int {
 }
 
 // ctxMeterPlain renders the plain (unstyled) live context meter, e.g.
-// "ctx ▓▓░░░ 38%", used for width fitting; ctxMeterStyled restyles it.
+// "ctx ▓▓░░░ 38%", shown on the composer header's right side.
 func (v AgentView) ctxMeterPlain() string {
 	limit := v.ctxLimit()
 	if limit <= 0 {
@@ -856,19 +913,10 @@ func (v AgentView) ctxMeterPlain() string {
 	return "ctx " + bar + " " + fmt.Sprintf("%d%%", pct)
 }
 
-// ctxMeterStyled colors the meter: muted below full, error (red) at 100% —
-// the truncation point the runner enforces.
-func (v AgentView) ctxMeterStyled(plain string) string {
-	var pct int
-	if n, err := fmt.Sscanf(plain, "ctx %*s %d%%", &pct); n == 1 && err == nil && pct >= 100 {
-		return v.styles.Error.Render(plain)
-	}
-	return v.styles.mutedText().Render(plain)
-}
-
 // --- rendering ------------------------------------------------------------
 
-// assistantHeader is the "who replied" line shown above each assistant block.
+// assistantHeader is the "who replied" chip shown at the left of each
+// assistant block header line (streaming and committed).
 func (v AgentView) assistantHeader(model string) string {
 	if model == "" {
 		model = "assistant"
@@ -876,16 +924,34 @@ func (v AgentView) assistantHeader(model string) string {
 	return v.styles.agentAccent().Render("◈ " + model)
 }
 
+// assistantHeaderRow is a full-width header line: the model chip on the left
+// and, when the turn finished, elapsed + reason meta right-aligned on the
+// same row (opencode session headers carry time/status on the right). The
+// pad uses the chat pane's inner width so meta always lands at the margin.
+func (v AgentView) assistantHeaderRow(model, meta string) string {
+	left := v.assistantHeader(model)
+	if meta == "" {
+		return left
+	}
+	inner := maxInt(v.w-2, 10)
+	pad := inner - lipgloss.Width(left) - lipgloss.Width(meta)
+	if pad < 1 {
+		return left + "  " + v.styles.mutedText().Render(meta)
+	}
+	return left + strings.Repeat(" ", pad) + v.styles.mutedText().Render(meta)
+}
+
 // userHeader is the marker above each user block.
 func (v AgentView) userHeader() string {
 	return v.styles.agentAccent().Render("❯ you")
 }
 
-// turnFooter renders the per-turn transcript footer (M7-B): elapsed wall time
-// plus the terminal reason — the model's ollama done_reason ("stop"/"length")
-// or "stopped" when the user cut the stream with esc. Returns "" when no
-// start time was recorded (an assistant block committed without startChat),
-// so hand-constructed transcripts in tests render no footer.
+// turnFooter renders the per-turn meta (M7-B): elapsed wall time plus the
+// terminal reason — the model's ollama done_reason ("stop"/"length") or
+// "stopped" when the user cut the stream with esc. Returns "" when no start
+// time was recorded (an assistant block committed without startChat), so
+// hand-constructed transcripts in tests render no meta. Displayed on the
+// assistant header's right side.
 func turnFooter(start time.Time, reason string, stopped bool) string {
 	elapsed := ""
 	if !start.IsZero() {
@@ -946,13 +1012,20 @@ func (v *AgentView) rebuildRenderCache() {
 	}
 }
 
-// headerFor returns the role header for a committed message index.
+// headerFor returns the role header line for a committed message index.
+// Assistant rows carry their model chip (and right-aligned meta when the
+// turn recorded one); user rows keep the plain "❯ you" marker.
 func (v AgentView) headerFor(i int) string {
-	if i < len(v.turnModel) && v.turnModel[i] != "" && v.history[i].Role == ollama.RoleAssistant {
-		return v.assistantHeader(v.turnModel[i])
+	model := ""
+	if i < len(v.turnModel) {
+		model = v.turnModel[i]
 	}
 	if v.history[i].Role == ollama.RoleAssistant {
-		return v.assistantHeader("")
+		meta := ""
+		if i < len(v.turnMeta) {
+			meta = v.turnMeta[i]
+		}
+		return v.assistantHeaderRow(model, meta)
 	}
 	return v.userHeader()
 }
@@ -989,8 +1062,8 @@ func (v AgentView) chatLines() []string {
 		lines = append(lines, v.styles.mutedText().Render("… "+agent.TruncationNotice))
 		lines = append(lines, "")
 	}
-	for i, m := range v.history {
-		block := m.Content
+	for i := range v.history {
+		block := v.history[i].Content
 		if i < len(v.render) && v.render[i] != "" {
 			block = v.render[i]
 		}
@@ -998,12 +1071,6 @@ func (v AgentView) chatLines() []string {
 			continue
 		}
 		lines = append(lines, strings.Split(block, "\n")...)
-		if m.Role == ollama.RoleAssistant && i < len(v.turnMeta) && v.turnMeta[i] != "" {
-			// Turn footer: elapsed + terminal reason (M7-B). It lives between
-			// the block and the separator so geometry re-renders of render
-			// never need to reproduce it.
-			lines = append(lines, v.styles.mutedText().Render(v.turnMeta[i]))
-		}
 		lines = append(lines, "") // separator after each message
 	}
 	if v.streaming || v.streamText != "" {
@@ -1061,22 +1128,26 @@ func (v AgentView) View() string {
 		return v.fullSizePane(bodyH)
 	}
 
-	inputOuter, hintH := 4, 1
+	// Bottom region (opencode footer anatomy): the composer pane (a header
+	// row with model chip + context usage, then the auto-growing prompt),
+	// below it a one-row statusline (spinner/status · interrupt, legend).
+	// The slash menu floats between the transcript and the composer.
 	menuH := 0
 	if v.slashMenu() {
 		menuH = v.slashMenuHeight()
 	}
-	chatH := maxInt(bodyH-inputOuter-hintH-menuH, 1)
+	composerH := v.composerRows() + 3
+	chatH := maxInt(bodyH-composerH-1-menuH, 1)
 
 	chatPane := v.renderChatPane(chatH)
-	hint := v.hintLine()
-	input := v.renderInput()
+	composer := v.renderComposer()
+	status := v.statusLine()
 
 	out := chatPane
 	if menuH > 0 {
 		out += "\n" + v.renderSlashMenu()
 	}
-	return out + "\n" + hint + "\n" + input
+	return out + "\n" + composer + "\n" + status
 }
 
 // renderChatPane windows the transcript into the scroll region.
@@ -1100,14 +1171,60 @@ func (v AgentView) renderChatPane(h int) string {
 	return pane.Render(lipgloss.JoinVertical(lipgloss.Left, window...))
 }
 
-// renderInput draws the bordered textarea at the bottom of the tab.
-func (v AgentView) renderInput() string {
-	w := maxInt(v.w-2, 10)
+// composerRows is the current prompt height in terminal rows (1..4).
+func (v AgentView) composerRows() int {
+	return composerRowsFor(v.input.Value(), maxInt(v.w-2, 10))
+}
+
+// renderComposer draws the composer block: a header row (model chip left,
+// context meter + token usage right) above the growing prompt textarea, all
+// inside one bordered pane (opencode footer anatomy).
+func (v AgentView) renderComposer() string {
+	innerW := maxInt(v.w-2, 10)
 	ta := v.input
-	ta.SetWidth(w)
-	ta.SetHeight(2)
-	v.input = ta
-	return v.styles.Pane.Width(v.w).Height(4).Render(v.input.View())
+	rows := composerRowsFor(ta.Value(), innerW)
+	ta.SetWidth(innerW)
+	ta.SetHeight(rows)
+	content := v.composerHeader() + "\n" + ta.View()
+	return v.styles.Pane.Width(v.w).Height(rows + 3).Render(content)
+}
+
+// composerHeader is the composer's top row: model chip on the left, context
+// usage (bar + percent + k-tokens) on the right — identity left, activity
+// right, like opencode's footer.
+func (v AgentView) composerHeader() string {
+	innerW := maxInt(v.w-2, 10)
+	left := v.assistantHeader(v.model)
+	right := ""
+	if pct := v.ctxPct(); pct >= 100 {
+		right = v.styles.Error.Render("ctx full — /clear")
+	} else {
+		plain := v.ctxMeterPlain()
+		if usage := v.ctxUsage(); usage != "" {
+			plain += " · " + usage
+		}
+		right = v.styles.mutedText().Render(plain)
+	}
+	pad := innerW - lipgloss.Width(left) - lipgloss.Width(right)
+	if pad >= 1 {
+		return left + strings.Repeat(" ", pad) + right
+	}
+	// Very narrow: keep the identity, drop the activity rather than wrap.
+	room := innerW - lipgloss.Width(right) - 1
+	if room > 0 {
+		return truncateToWidth(left, room) + " " + right
+	}
+	return truncateToWidth(left, innerW)
+}
+
+// ctxUsage renders the approximate payload tokens as "1.2k/3.1k" against the
+// input budget, mirroring opencode's token usage meta.
+func (v AgentView) ctxUsage() string {
+	limit := v.ctxLimit()
+	if limit <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("%.1fk/%.1fk", float64(v.ctxTokens())/1000, float64(limit)/1000)
 }
 
 // composing reports whether the chat input holds text. The shell's digit-key
@@ -1118,73 +1235,59 @@ func (v AgentView) composing() bool {
 	return v.input.Value() != ""
 }
 
-// hintLine is the one-row strip between transcript and input: an error, the
-// streaming state, a transient notice, or a width-fitted legend carrying the
-// context meter (M7-C) so the row can never wrap on a phone.
-func (v AgentView) hintLine() string {
+// statusLine is the one-row strip under the composer (opencode footer
+// anatomy): an error, the running state with its interrupt hint, a transient
+// notice, or the width-fitted key legend. Context usage lives in the
+// composer header above, so this row stays a status/legend only.
+func (v AgentView) statusLine() string {
 	maxW := maxInt(v.w-2, 24)
 
 	switch {
 	case v.chatErr != "":
-		return v.styles.Error.Render("⚠ " + v.chatErr + " — press enter to retry")
+		return v.styles.Error.Render(truncateToWidth("⚠ "+v.chatErr+" — enter to retry", maxW))
 	case v.streaming:
-		base := []string{"⏳ " + v.model, "esc stop"}
-		if v.model == "" {
-			base[0] = "⏳ ?"
-		}
+		left := "running…"
 		if v.toolStatus != "" {
-			base = []string{v.toolStatus, "esc stop"}
+			left = firstLine(v.toolStatus)
 		}
-		return v.renderHintParts(maxW, base, v.ctxMeterPlain())
+		right := "esc interrupt"
+		if v.stopArmed {
+			right = "esc again to interrupt"
+		}
+		return v.statusRow(maxW, []string{left}, right, v.stopArmed)
 	case v.notice != "":
-		return v.styles.Placeholder.Render(v.notice)
+		return v.styles.Placeholder.Render(truncateToWidth(v.notice, maxW))
 	}
 
-	// Legend. While composing, the letter commands (m/r/u/d/f) are off and the
-	// meter shows the draft eating the context budget; idle, the legend shows
-	// the meter once a conversation has real weight (or a "ctx full" warning
-	// once a send overflowed the budget — the marker is in the transcript
-	// head).
+	// Legend. While composing, the letter commands (m/r/u/d/f) are off; with
+	// an empty input they are advertised (the interrupt/stop hint only shows
+	// while running).
 	if v.input.Value() != "" {
-		return v.renderHintParts(maxW,
-			[]string{"enter send", "shift+enter newline", "esc clear draft"},
-			v.ctxMeterPlain())
+		return v.statusRow(maxW, []string{"enter send", "shift+enter newline", "esc clear draft"}, "", false)
 	}
-	suffix := ""
-	switch pct := v.ctxPct(); {
-	case pct >= 100:
-		suffix = "ctx full — /clear"
-	case pct >= 1:
-		suffix = v.ctxMeterPlain()
-	}
-	return v.renderHintParts(maxW,
-		[]string{"enter send", "/ commands", "m model", "r refresh", "shift+enter newline", "esc stop"},
-		suffix)
+	segs := []string{"enter send", "/ commands", "m model", "r refresh", "shift+enter newline"}
+	return v.statusRow(maxW, segs, "", false)
 }
 
-// renderHintParts styles one hint row: the leading segments (Placeholder,
-// ordered most-important first) joined with " · ", then an optional styled
-// suffix (the context meter). Segments drop from the tail until the whole
-// row fits maxW, so the row never wraps on a narrow phone. suffix is plain
-// text; ctxMeter suffixes are restyled by ctxMeterStyled.
-func (v AgentView) renderHintParts(maxW int, segments []string, suffix string) string {
+// statusRow styles one statusline: Placeholder legend segments joined with
+// " · " plus an optional right chip (warn=true renders it red). Segments
+// drop from the tail until the row fits maxW so it never wraps on a phone.
+func (v AgentView) statusRow(maxW int, segments []string, right string, warn bool) string {
 	plain := strings.Join(segments, " · ")
-	if suffix != "" {
-		plain += " · " + suffix
+	if right != "" {
+		plain += " · " + right
 	}
 	for lipgloss.Width(plain) > maxW && len(segments) > 1 {
 		segments = segments[:len(segments)-1]
 		plain = strings.Join(segments, " · ")
-		if suffix != "" {
-			plain += " · " + suffix
+		if right != "" {
+			plain += " · " + right
 		}
 	}
 	if lipgloss.Width(plain) > maxW {
-		// Even the first segment plus a mandatory suffix overflows (a very
-		// long tool-status line): trim the segment itself to make room.
 		room := maxW
-		if suffix != "" {
-			room -= lipgloss.Width(suffix) + 3 // " · "
+		if right != "" {
+			room -= lipgloss.Width(right) + 3 // " · "
 		}
 		if room > 0 {
 			segments[0] = truncateToWidth(segments[0], room)
@@ -1192,16 +1295,13 @@ func (v AgentView) renderHintParts(maxW int, segments []string, suffix string) s
 	}
 
 	styled := v.styles.Placeholder.Render(strings.Join(segments, " · "))
-	if suffix == "" {
+	if right == "" {
 		return styled
 	}
-	if strings.HasPrefix(suffix, "ctx ") && strings.HasSuffix(suffix, "%") {
-		return styled + " · " + v.ctxMeterStyled(suffix)
+	if warn {
+		return styled + " · " + v.styles.Error.Render(right)
 	}
-	if suffix == "ctx full — /clear" {
-		return styled + " · " + v.styles.Error.Render(suffix)
-	}
-	return styled + " · " + suffix
+	return styled + " · " + v.styles.mutedText().Render(right)
 }
 
 // truncateToWidth trims s to at most maxW visible columns, appending "…"
@@ -1338,8 +1438,12 @@ func (v AgentView) renderHelpOverlay(bodyH int) string {
 		" /help     show this reference",
 		" /refresh  reload the model list",
 		"",
-		"composing",
+		"composer",
 		" enter send · shift+enter newline · esc clear draft",
+		" the header row: model chip + live ctx usage",
+		"",
+		"running",
+		" esc arms the interrupt · esc again cancels",
 		"",
 		"transcript (empty input)",
 		" m model · r refresh · u/d scroll · f auto-follow",
@@ -1417,11 +1521,13 @@ func (v AgentView) renderOverlayTitle(bodyH int, title string, lines []string) s
 	return renderCenteredOverlay(v.w, bodyH, v.styles, title, lines)
 }
 
-// clampScroll bounds the stored scroll offset by the currently visible window.
+// clampScroll bounds the stored scroll offset by the currently visible window
+// (composer height is dynamic — same accounting as View()).
 func (v *AgentView) clampScroll() {
-	h := maxInt(v.h-2, 1) - 4 - 1 // same accounting as View()
+	bodyH := maxInt(v.h-2, 1)
+	chatH := maxInt(bodyH-v.composerRows()-3-1, 1)
 	lines := len(v.chatLines())
-	maxScroll := maxInt(0, lines-maxInt(h-2, 1))
+	maxScroll := maxInt(0, lines-maxInt(chatH-2, 1))
 	if v.scroll > maxScroll {
 		v.scroll = maxScroll
 	}

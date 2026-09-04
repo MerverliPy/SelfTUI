@@ -1,7 +1,14 @@
   Models    Agent    Settings                                           
 ╭──────────────────────────────────────────────────────────────────────╮
+│❯ you                                                                 │
+│                                                                      │
+│  explain this repo                                                   │
 │                                                                      │
 │                                                                      │
+│◈ qwen3:8b                                                 0.4s · stop│
+│                                                                      │
+│  It is a mobile-first terminal UI for Ollama, styled like the        │
+│  opencode.ai TUI.                                                    │
 │                                                                      │
 │                                                                      │
 │                                                                      │
@@ -16,15 +23,8 @@
 │                                                                      │
 ╰──────────────────────────────────────────────────────────────────────╯
 ╭──────────────────────────────────────────────────────────────────────╮
-│❯ /clear  clear the conversation (asks first)                         │
-│  /model  pick a model (m)                                            │
-│  /theme  toggle dark/light for this session                          │
-│  /help  list slash commands and keys                                 │
-│  /refresh  reload the model list (r)                                 │
+│◈ qwen3:8b                                    ctx ░░░░░ 1% · 0.0k/3.1k│
+│❯ / for commands, or chat with the selected model…                    │
 ╰──────────────────────────────────────────────────────────────────────╯
-╭──────────────────────────────────────────────────────────────────────╮
-│◈ qwen3:8b                                    ctx ░░░░░ 0% · 0.0k/3.1k│
-│❯ /                                                                   │
-╰──────────────────────────────────────────────────────────────────────╯
-enter send · shift+enter newline · esc clear draft                      
+enter send · / commands · m model · r refresh · shift+enter newline     
  ⏻ http://localhost:11434                       Agent · 72x30 · compact 

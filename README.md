@@ -5,7 +5,18 @@ models, with an embedded AI coding-agent chat and a settings panel. Runs
 identically on a PC (native terminal) and over SSH on a phone (Moshi;
 Blink/Termius similar) — layout adapts to narrow windows.
 
-**Status: M7 — pre-v0.1 UX polish done.** The Models tab lists live models from the Ollama host (`/api/tags`) with selection + an inspect pane (`/api/show`): key facts, parameters, template, modelfile, model info, license — scrollable, side-by-side on wide screens and stacked (enter-toggled) on the phone. **Delete with confirm (`x` → `y`/`esc`) and streaming pull (`p` → name → spinner + progress; `esc` cancels)** work live; pulls reload the list automatically. The Agent tab supports native or content-embedded tool calls, explicit plain-chat fallback, jailed read/write/edit tools, and a constrained confirmed command executor. It is a guardrail rather than an OS sandbox; general shell and interpreters remain disabled. M7 polished the feel (opencode.ai TUI as reference): a slash-command menu over the Agent input (`/clear`, `/model`, `/theme`, `/help`, `/refresh`) and a `ctrl+p` command palette reachable from any tab; stable per-turn headers, a streaming caret (`▍`) that disappears at rest, elapsed + stop-reason footers, `pgup`/`pgdn` paging and an `f` auto-follow toggle; and a live context meter (`ctx ▓▓░░░ 38%`) that goes red at the truncation point and surfaces the omission marker in the transcript. The model picker filters as you type and stars the configured default. The Settings tab (huh forms) edits the whole config surface and writes it back to the config file with in-session live apply. Golden render fixtures pin the shell — including every M7 overlay — at the two canonical geometries, the measured Moshi portrait device (72×30) and a wide PC window (120×40). **Auth/TLS**: https hosts (public CA, verified) + bearer token are covered by tests on every endpoint; a settings save failure surfaces inline with retry. `make smoke-reconnect` simulates an SSH drop mid-generation and verifies clean process death, Ollama host recovery, and a clean reconnect — see `docs/reconnect.md`.
+**Status: M7 — pre-v0.1 UX polish done.** The Models tab lists live models from the Ollama host (`/api/tags`) with selection + an inspect pane (`/api/show`): key facts, parameters, template, modelfile, model info, license — scrollable, side-by-side on wide screens and stacked (enter-toggled) on the phone. **Delete with confirm (`x` → `y`/`esc`) and streaming pull (`p` → name → spinner + progress; `esc` cancels)** work live; pulls reload the list automatically. The Agent tab supports native or content-embedded tool calls, explicit plain-chat fallback, jailed read/write/edit tools, and a constrained confirmed command executor. It is a guardrail rather than an OS sandbox; general shell and interpreters remain disabled. M7 polished the feel (opencode.ai TUI as reference): a slash-command menu over the Agent input (`/clear`, `/model`, `/theme`, `/help`, `/refresh`) and a `ctrl+p` command palette reachable from any tab; stable per-turn headers, a streaming caret (`▍`) that disappears at rest,
+elapsed + stop-reason meta right-aligned on each assistant header, `pgup`/
+`pgdn` paging and an `f` auto-follow toggle; the composer is opencode-style —
+a header row with the model chip and a live context meter plus token usage
+(`ctx ▓▓░░ 38% · 1.2k/3.1k`), an auto-growing prompt, and a statusline under
+it that turns red at the truncation point and surfaces the omission marker in
+the transcript. The model picker filters as you type and stars the configured
+default. The Settings tab (huh forms) edits the whole config surface and
+writes it back to the config file with in-session live apply. Golden render
+fixtures pin the shell — including every M7 overlay and the composer layout
+— at the two canonical geometries, the measured Moshi portrait device
+(72×30) and a wide PC window (120×40). **Auth/TLS**: https hosts (public CA, verified) + bearer token are covered by tests on every endpoint; a settings save failure surfaces inline with retry. `make smoke-reconnect` simulates an SSH drop mid-generation and verifies clean process death, Ollama host recovery, and a clean reconnect — see `docs/reconnect.md`.
 
 ## Build & run
 
@@ -47,18 +58,23 @@ while it streams, and the list reloads when it lands). Wide screens
 auto-inspect the selected model.
 
 **Agent tab (M2/M3b/M7)**: type a prompt · `enter` sends · `shift+enter` inserts a
-newline · `esc` stops a turn or clears a drafted prompt · `m` opens the model
-picker (filter as you type; the configured default is starred) · `r` reloads
-models · `u`/`d` scroll the transcript, `pgup`/`pgdn` page it, and `f`
-toggles auto-follow (the stream auto-tails by default; `d`/`pgdn` to the
-tail re-engages it). A **`/`** in the input opens the command menu — `/clear`
-(asks first), `/model`, `/theme` (session toggle; save in Settings to keep it),
-`/help` (command reference), `/refresh` — filtered as you type; arrows move
-and `enter` runs. Every finished turn gets a footer with its elapsed time and
-why it stopped (`· stop` / `· length` / `· stopped`); while a turn streams a
-`▍` caret rides the last line and vanishes at rest. The hint row carries a
-live context meter (`ctx ▓▓░░░ 38%`) that turns red at the truncation point
-and leaves the omission marker visible in the transcript until `/clear`.
+newline · `m` opens the model picker (filter as you type; the configured
+default is starred) · `r` reloads models · `u`/`d` scroll the transcript,
+`pgup`/`pgdn` page it, and `f` toggles auto-follow (the stream auto-tails by
+default; `d`/`pgdn` to the tail re-engages it). The bottom region is an
+opencode-style composer: a header row showing the model chip and a live
+context meter with token usage (`ctx ▓▓░░ 38% · 1.2k/3.1k`), an auto-growing
+prompt (up to four rows), and below the box a statusline that shows the
+running state with an **armed interrupt** (`esc` arms, `esc` again cancels —
+a stray esc can't kill a run) or the key legend. A **`/`** in the prompt opens
+the command menu — `/clear` (asks first), `/model`, `/theme` (session toggle;
+save in Settings to keep it), `/help` (command reference), `/refresh` —
+filtered as you type; arrows move and `enter` runs. Idle `esc` clears a
+drafted prompt. Every finished assistant message shows elapsed time and why
+it stopped (`· stop` / `· length` / `· stopped`) right-aligned on its header;
+while a turn streams a `▍` caret rides the last line and vanishes at rest.
+Once the conversation fills the context budget the meter turns red and a
+visible truncation marker stays in the transcript until `/clear`.
 Tool-capable models may use jailed `read_file`, `list_dir`, `grep`,
 `write_file`, and `edit_file`; every mutation opens a `y`/`enter` approve or
 `n`/`esc` decline dialog. The only command executor accepts a fixed argv for
@@ -128,8 +144,10 @@ measured 72×30):
 - **Models** — the list fills the screen; `enter` stacks the inspect pane
   below (the list shrinks to the top 40%), `esc` closes it, `u`/`d` scroll
   it. Wide-enough windows (≥ 90 cols) split list + detail side by side.
-- **Agent** — chat fills the width, input sits at the bottom; `m` selects a
-  model, `esc` stops a turn. Mutation approvals (`y`/`enter` approve,
+- **Agent** — chat fills the width, the opencode-style composer sits at the
+  bottom (model chip + live ctx usage header, auto-growing prompt, statusline
+  beneath); `m` selects a model, `esc` while running is an armed interrupt
+  (`esc` again cancels). Mutation approvals (`y`/`enter` approve,
   `n`/`esc` decline) are height-capped so the decision row is always on
   screen, even for a huge payload.
 - **Settings** — one form page per section (`enter` next); ≥ 120 cols turns
