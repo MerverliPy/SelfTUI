@@ -34,6 +34,23 @@ func printVersion(w io.Writer) {
 	fmt.Fprintf(w, "selftui %s\n", Version)
 }
 
+// configPathOverride maps the parsed -config flag pointer onto the
+// config.Overrides.ConfigPath field. flag.String returns a non-nil *string
+// even when the flag is omitted (value ""); forwarding that pointer made
+// config.Load treat "" as the config file path, silently skip the default XDG
+// file, and leave ConfigPath() empty (audit H-01). An empty flag value
+// therefore maps to nil — which Load interprets as "use
+// $XDG_CONFIG_HOME/selftui/config.toml" — while a non-empty explicit path
+// stays a non-nil override so -config keeps its documented precedence. Kept
+// pure so the entrypoint boundary is deterministically testable without
+// re-parsing the process-global flag set that run() owns.
+func configPathOverride(flagConfig *string) *string {
+	if flagConfig != nil && *flagConfig == "" {
+		return nil
+	}
+	return flagConfig
+}
+
 func main() {
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, "selftui:", err)
@@ -63,7 +80,7 @@ func run() error {
 		return nil
 	}
 
-	ov := config.Overrides{ConfigPath: flagConfig}
+	ov := config.Overrides{ConfigPath: configPathOverride(flagConfig)}
 	if *flagHost != "" {
 		ov.Host = flagHost
 	}
