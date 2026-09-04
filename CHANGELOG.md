@@ -35,9 +35,6 @@ for tagged releases.
 - `LICENSE` (Apache-2.0), `SECURITY.md` (private vulnerability reporting via
   GitHub's Security tab), `CONTRIBUTING.md`, and this changelog with an
   Unreleased section.
-
-### Added
-
 - **Reproducible CI + release gates (v0.1 hardening phase 8, 2026-09-04).**
   New Makefile targets: `race` (full suite under the race detector), `vuln`
   (`govulncheck ./...`), `build-linux-amd64`/`build-linux-arm64` (CGO-disabled

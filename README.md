@@ -117,12 +117,13 @@ Artifacts (all under the gitignored `dist/`):
   with `sha256sum -c dist/SHA256SUMS`
 
 CI and releases run on GitHub Actions (`.github/workflows/`): `ci.yml` runs
-the same checks as the local gate on every pull request and push to `main`;
-`release.yml` runs only on a pushed `v*` tag — it re-runs the complete
-release gate, verifies the tag is exactly the version stamped into both
-binaries, uploads the two archives + `SHA256SUMS`, and publishes release
-notes generated from `CHANGELOG.md`. Both workflows pin **Go 1.27.1** and
-govulncheck **v1.7.0** and use only GitHub's default `GITHUB_TOKEN` with
+the local gate's checks minus the release-only steps (per-binary
+version-stamp, archives, `SHA256SUMS`) on every pull request and push to
+`main`; `release.yml` runs only on a pushed `v*` tag — it re-runs the
+complete release gate, verifies the tag is exactly the version stamped into
+both binaries, uploads the two archives + `SHA256SUMS`, and publishes
+release notes generated from `CHANGELOG.md`. Both workflows pin **Go 1.27.1**
+and govulncheck **v1.7.0** and use only GitHub's default `GITHUB_TOKEN` with
 least-privilege permissions — no secrets.
 
 ## Config
