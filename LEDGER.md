@@ -1924,3 +1924,90 @@ gate** on a rare test-harness deadlock; root cause fixed in **PR #3** (merged
   then whatever the runbook's public step requires. v0.1.1-era follow-ups
   queued: changelog cut, actionlint in the gate, Node-20 action bumps,
   signed-tag decision.
+
+### 2026-09-04 — v0.1 runbook step 6: gitleaks history audit — SECRET_HISTORY_SCAN resolved (clean) (owner task)
+**Milestone:** owner-assigned step (release runbook §6 "history audit before
+any public-visibility change" — resolve `SECRET_HISTORY_SCAN=UNRESOLVED`, the
+last outstanding release-gate item; the repo stays private until then). No §10
+row to tick (owner-assigned step); §12 tail updated. **Result:** done —
+**`SECRET_HISTORY_SCAN=RESOLVED`**, audit clean: gitleaks v8.30.1 over the
+full reachable history and the working tree found **0 leaks**; unreachable
+objects scanned as supplementary evidence (also 0). No remediation needed; no
+code or workflow files changed.
+
+**Work done**
+- **Installed gitleaks pinned v8.30.1** (official release binary, not
+  `go install` — the Go proxy's module path for v8.30.1 declares
+  `github.com/zricethezav/gitleaks/v8` while required as
+  `github.com/gitleaks/gitleaks/v8`, a constraint conflict). Downloaded
+  `gitleaks_8.30.1_linux_x64.tar.gz` + `gitleaks_8.30.1_checksums.txt` from
+  the v8.30.1 GitHub release, verified the checksum (sha256
+  `551f6fc8…`, OK), extracted to `~/go/bin/gitleaks` (on PATH; same
+  GOPATH convention as govulncheck v1.7.0). `gitleaks version` → `8.30.1`.
+- **Full reachable-history scan (the gate):** `gitleaks git --log-opts="--all
+  --full-history" --redact` with a JSON report → **45 commits scanned,
+  ~962 KB, no leaks found** (exit 0). Scope covered every ref:
+  `refs/heads/main`, `refs/heads/hardening/v0.1`, both `origin/*` refs, and
+  tag `v0.1.0`. 49 reachable commits = 45 scanned + 4 merge commits (merges
+  carry no independent diff; their content was scanned in the source
+  commits). `--redact` kept any potential match out of stdout.
+- **Working-tree scan:** `gitleaks detect --source . --redact` → **no leaks
+  found** (exit 0).
+- **Supplementary completeness — unreachable objects** (never transmitted by
+  a push, scanned anyway as evidence): `git fsck --unreachable --no-reflogs`
+  lists 3 blobs / 4 commits / 10 trees / 1 tag — the 4 commits are two
+  pre-merge duplicates of the phase-8 CI commit (`a367327d`, `9f5f2cde`), the
+  two `git stash` entries from the command-execution removal
+  (`6309bcec` WIP, `5b9f5f97` index on `hardening/v0.1`), and the tag is the
+  superseded pre-move `v0.1.0` object at `1bf98bb` (its target content is in
+  main's history and was scanned there). Extracted each snapshot
+  (`git archive`) + the 3 orphan blobs to `/tmp/gl-unreach` and ran
+  `gitleaks detect` on each: **no leaks found** (exit 0 ×6). These objects
+  are unreachable garbage (tag move + stash) and are not sent on any push;
+  `git gc` will collect them — no action taken.
+- Cross-checked against the earlier manual `git log --all -p` high-signal
+  pattern scan (step-4 entry, 0 matches): two independent methods agree.
+  Default gitleaks ruleset used (no custom `.gitleaks.toml`); the repo has
+  no pre-existing gitleaks config, Makefile target, or CI job.
+
+**Commands + exit codes**
+- `go install github.com/gitleaks/gitleaks/v8@v8.30.1` → 1 (module-path
+  mismatch, see above) · `gh release download v8.30.1 -R gitleaks/gitleaks
+  -p 'gitleaks_8.30.1_linux_x64.tar.gz' -p 'gitleaks_8.30.1_checksums.txt'` 0
+  · `sha256sum -c` (linux_x64 line) → OK · `gitleaks version` → `8.30.1` ·
+  `install -m 0755 gitleaks ~/go/bin/gitleaks` 0.
+- `gitleaks git --log-opts="--all --full-history" --redact --report-format
+  json --report-path /tmp/gl-history.json .` → 0 (45 commits, 0 leaks) ·
+  `gitleaks detect --source . --redact …` → 0 (0 leaks) · unreachable
+  snapshots ×4 + orphan blobs `gitleaks detect` → 0 each (0 leaks).
+- `git fsck --unreachable --no-reflogs` → 0 (3 blob/4 commit/10 tree/1 tag) ·
+  `git rev-list --all | wc -l` → 49 · `git log --all --merges --oneline | wc
+  -l` → 4 (45 + 4 = 49 ✓).
+
+**Decisions / lines to respect**
+- **`SECRET_HISTORY_SCAN=RESOLVED`** — the release-gate item is closed on
+  the evidence above (gitleaks v8.30.1, full history + tree + unreachable
+  extras, all 0). The **public-visibility decision itself is the owner's**
+  next call; nothing in this audit blocks or forces it, and the repo remains
+  private until the owner acts.
+- gitleaks pinned at **v8.30.1** (release binary, checksum-verified) — record
+  the same version in any future CI/pre-commit integration for consistency.
+- No code/workflow changes this session: gitleaks integration (CI job or
+  pre-commit hook) was **not** added — scope discipline. Recommended as a
+  v0.1.1-era item so the secret baseline cannot regress before the repo goes
+  public (see open decisions).
+
+**Blockers / open decisions**
+- None (audit clean and resolved).
+- **Recommended follow-up (owner):** add a recurring gitleaks check (CI job on
+  `ci.yml` — e.g. `gitleaks/gitleaks-action` at v8.30.1 — or a `make` target
+  in the local gate) so future commits can't introduce secrets between this
+  audit and the public-visibility change. Queued with the other v0.1.1-era
+  hygiene items rather than built here.
+
+**Next action**
+- Owner (fresh session): the **public-visibility step** the runbook orders
+  next (make the repo public), now unblocked by the audit, then the
+  v0.1.1-era queue: changelog cut (`[Unreleased]` → `[v0.1.0] - 2026-09-04`),
+  gitleaks-in-CI (recommended above), actionlint in the local gate, Node-20
+  action bumps, signed-tag decision.
