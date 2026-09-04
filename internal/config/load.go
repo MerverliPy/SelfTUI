@@ -92,6 +92,19 @@ func Load(ov Overrides) (Config, error) {
 		return cfg, err
 	}
 
+	// 5. canonical persistence: with workspace tools armed, Load replaces the
+	// accepted spelling with its canonical absolute root, so every consumer of
+	// this Config — the agent runner, the status bar, a later Settings save —
+	// receives the same directory the tool jail canonicalizes against (H-02).
+	// Validate just resolved the same spelling successfully, so this cannot
+	// fail unless the filesystem changes in between; on that rare race the
+	// spelling is kept and the tool layer still canonicalizes per call.
+	if cfg.ToolsEnabled && cfg.WorkspaceRoot != "" {
+		if canon, err := canonicalDir(cfg.WorkspaceRoot); err == nil {
+			cfg.WorkspaceRoot = canon
+		}
+	}
+
 	return cfg, nil
 }
 
