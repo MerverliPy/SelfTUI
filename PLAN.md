@@ -603,9 +603,17 @@ green with the fix; tag moved pre-release to `c70bf89`. Second `release.yml`
 run **SUCCESS** — gate passed at the tag, release **SelfTUI v0.1.0** created
 with both Linux archives + SHA256SUMS; assets independently downloaded and
 verified (hashes OK, `selftui v0.1.0` stamps). CI green on merged main.
-Next: **history audit (gitleaks) before any public-visibility change** — the
-repo stays private until `SECRET_HISTORY_SCAN` is resolved; changelog cut
-(`[Unreleased]` → `[v0.1.0]`) at the next release.
+**Runbook step 6 landed 2026-09-04 — history audit clean**: gitleaks
+**v8.30.1** (checksum-verified release binary, `~/go/bin/gitleaks`) over the
+full reachable history (`--all --full-history`: 45 commits, all refs incl.
+tag `v0.1.0` + `hardening/v0.1`) and the working tree found **0 leaks**;
+unreachable objects (stash entries, superseded tag, orphan blobs) scanned as
+supplementary evidence — also 0. `SECRET_HISTORY_SCAN=RESOLVED`. No
+remediation or code changes needed. **The public-visibility decision is the
+owner's next call** (repo remains private until then). v0.1.1-era queue:
+changelog cut (`[Unreleased]` → `[v0.1.0] - 2026-09-04`), **gitleaks-in-CI
+(recommended — see LEDGER step-6 entry)**, actionlint in the local gate,
+Node-20 action bumps, signed-tag decision.
 
 ---
 
