@@ -2078,3 +2078,88 @@ affecting the code.
   loading)**: confirm branch `fix/v0.1.1-audit-remediation` + clean status, red-green TDD
   on `cmd/self-tui/main.go` + `main_test.go` + `internal/config/config_test.go`, then
   record in LEDGER and tick the checklist.
+
+### 2026-09-04 — Runbook Task 01: H-01 default config load restored — XDG config regression fixed
+**Milestone:** `SelfTUI-Pi-Audit-Remediation-Runbook-2026-09-04.md` Task 01 (H-01 — restore default XDG
+configuration loading). No §10 row to tick (runbook-owned step). **Result:** done — red-green TDD on
+branch `fix/v0.1.1-audit-remediation` @ `581ac6f`, worktree clean, `go test -count=1 ./cmd/self-tui
+./internal/config` and `make check` both exit 0. Commit (next): `fix(config): load persisted default
+config on startup`.
+
+**Work done**
+- **Session-start reads:** AGENTS.md, PLAN.md §10–12 (config precedence contract: flags > env > file >
+  defaults; XDG config home `$XDG_CONFIG_HOME/selftui/config.toml`), LEDGER tail, runbook Task 01
+  block + audit finding H-01, `cmd/self-tui/main.go`, `main_test.go`,
+  `internal/config/{load,config,config_test,save_test}.go`, `internal/ui/phase4_test.go`
+  (ConfigPath UI usage), Makefile, and the `adrg/xdg` v0.5.3 source (env is snapshotted into package
+  vars at `init`; a public `xdg.Reload()` refreshes them — the mechanism the XDG-isolation tests use).
+- **Root cause confirmed (git archaeology):** `ad47e29` (M4 settings & persistence) introduced
+  `ov := config.Overrides{ConfigPath: flagConfig}` in `run()`. `flag.String` returns a **non-nil**
+  `*string` even when `-config` is omitted (value `""`), so every ordinary startup handed `Load` an
+  empty-but-non-nil `ConfigPath`. `load.go:61-69` treats a non-nil ConfigPath as "the file" → sets
+  `cfg.filePath = ""` and `os.ReadFile("")` (ENOENT, silently skipped as IsNotExist) → the default
+  `$XDG_CONFIG_HOME/selftui/config.toml` was never read, `ConfigPath()` stayed empty for the UI/log,
+  and Save's fallback file was ignored on the next startup (the H-01 save→restart loop).
+- **Red (TDD):** extracted the flag→ConfigPath decision into a pure helper
+  `configPathOverride(*string) *string` with the *current* behavior (unconditional forward), wired
+  `run()` through it, and added `TestConfigPathOverrideBoundary` (omitted `-config` must yield a nil
+  ConfigPath override; a non-empty explicit path must stay non-nil; flags parsed on a private
+  `flag.FlagSet` because `run()` owns the process-global flag set — re-registering panics). Focused
+  run failed exactly as expected: `omitted -config: ConfigPath override = "", want nil so Load resolves
+  the default XDG file` (main_test.go:45) — i.e. the current entrypoint passes an empty-but-non-nil
+  ConfigPath.
+- **Green:** fix = the helper returns nil when the flag value is `""` and the pointer otherwise
+  (`main.go`), so `Load` falls back to resolving `$XDG_CONFIG_HOME/selftui/config.toml`. Config
+  precedence and file formats untouched.
+- **Config-package coverage (step 2):** added `withXDGConfigHome(t, dir)` test helper — sets
+  `XDG_CONFIG_HOME`, calls `xdg.Reload()`, restores env + package vars and reloads again in
+  `t.Cleanup` (never touches the real user config) — plus two tests: `TestLoadResolvesDefaultXDGConfigPath`
+  (`Load(Overrides{})` resolves/reads the default XDG file and `ConfigPath()` reports it) and
+  `TestSaveToDefaultXDGPathReloadsOnFreshLoad` (Settings save with an empty `filePath` → fresh
+  `Load(Overrides{})` reloads it — the exact save→restart loop H-01 reported broken).
+- **Precedence unchanged (step 5):** explicit-`ConfigPath` behavior is covered by the pre-existing
+  suite — `TestFileOnly`, `TestEnvOverridesFile`, `TestOverridesWinEverything`, `tools_test.go`,
+  `validate_test.go`, `save_test.go` all pass unmodified under `make check`.
+- **Live binary probe** (real `run()`, isolated XDG homes; real user config untouched): default
+  startup logs `starting version=dev host=… theme=light config=/tmp/…/config/selftui/config.toml`
+  (theme=light proves the file applied — built-in default is dark), explicit `-config …/explicit.toml`
+  logs `theme=dark config=/tmp/…/explicit.toml` — explicit path still wins.
+- One transient test-authoring failure caught and fixed inside the task: first version of
+  `TestLoadResolvesDefaultXDGConfigPath` wrote `config.toml` before creating the `selftui` parent dir
+  (`os.WriteFile` doesn't MkdirAll; `Save` does) → added `os.MkdirAll`, then green.
+
+**Commands + exit codes**
+- `git status --short` → empty · `git branch --show-current` → `fix/v0.1.1-audit-remediation` ·
+  `git rev-parse --short HEAD` → `581ac6f` (all 0).
+- Baseline before edits: `go test -count=1 ./cmd/self-tui ./internal/config` → 0 (ok / ok).
+- Red: `go test -count=1 ./cmd/self-tui -run TestConfigPathOverrideBoundary -v` → **1** (FAIL,
+  main_test.go:45, message above). Green after fix: same command → 0 (PASS).
+- Transient: `go test -count=1 ./cmd/self-tui ./internal/config -run 'Test…XDG…' -v` → 1 (WriteFile
+  ENOENT) → after `os.MkdirAll` fix → 0 (3/3 PASS).
+- Full focused suite: `go test -count=1 ./cmd/self-tui ./internal/config` → 0.
+- `make check` (build + `go test ./...` + vet + gofmt) → 0. `git diff --check` → 0 (clean).
+- Live probe: `XDG_CONFIG_HOME=<tmp>/config XDG_STATE_HOME=<tmp>/state timeout 3 ./bin/selftui` →
+  exit 1 (no TTY — expected; boot log still written) with `config=/tmp/…/config/selftui/config.toml`;
+  same with `-config <tmp>/explicit.toml` → `config=/tmp/…/explicit.toml`. Temp XDG root removed.
+
+**Decisions / lines to respect**
+- Fix stays in `main.go` at the flag→Overrides seam (pure `configPathOverride` helper) so the
+  entrypoint boundary is deterministically testable; `internal/config/load.go` unchanged (nil
+  ConfigPath already meant "resolve default XDG" — the entrypoint was simply never leaving it nil).
+- No change to config precedence, file formats, or public errors. `flag.String`'s non-nil-pointer
+  quirk is documented on the helper so the regression cannot silently return.
+- XDG isolation in tests goes through `xdg.Reload()` + env restore + package-var restore; no test
+  reads or writes the real `~/.config` or `~/.local/state`.
+- Commit shape follows the Task-00 precedent: code commit
+  `fix(config): load persisted default config on startup` (main.go, main_test.go, config_test.go),
+  then a separate docs commit for this LEDGER entry + the runbook Task-01 tick.
+
+**Blockers / open decisions**
+- None for Task 01. (Note: without a TTY the binary exits 1 at tea boot — expected, unrelated to the
+  fix; the startup log line is written before that.)
+
+**Next action**
+- Fresh Pi session: runbook **Task 02 (C-01 — policy-aware recursive grep)**: confirm branch
+  `fix/v0.1.1-audit-remediation` + clean status, red-green TDD on `internal/agent/runner.go` +
+  `tools.go` + `toolpolicy.go` + `policy_test.go` + `runner_test.go`, then record in LEDGER and tick
+  the checklist.

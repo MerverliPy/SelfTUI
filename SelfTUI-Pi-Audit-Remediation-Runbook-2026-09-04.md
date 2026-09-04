@@ -54,7 +54,7 @@
 ## Progress checklist
 
 - [x] Task 00 — baseline and branch
-- [ ] Task 01 — H-01 default configuration
+- [x] Task 01 — H-01 default configuration
 - [ ] Task 02 — C-01 recursive grep policy
 - [ ] Task 03 — H-02 workspace canonicalization
 - [ ] Task 04 — H-03 tool byte/call budgets
