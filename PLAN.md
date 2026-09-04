@@ -577,10 +577,13 @@ Next: **v0.1 release** (tag `v0.1.0` + release notes) in a fresh session; do
 not tag in a hardening phase.
 **Release runbook step 4 landed 2026-09-04**: `hardening/v0.1` merged to
 `main` via **PR #1** (commit `1a45554`, merge commit, branch kept); CI
-bring-up fixed two latent defects found by the first remote runs — job
+bring-up fixed three latent defects found by the first remote runs — job
 `name:` used the `env` context (invalid in GitHub's parser; both workflows
-fixed to static names in `9bd1e0c`) and a same-clock-tick transcript-file
-reuse race in `internal/session` (`5ad160a`, O_EXCL + retry). Branch
+fixed to static names in `9bd1e0c`), a same-clock-tick transcript-file reuse
+race in `internal/session` (`5ad160a`, O_EXCL + retry), and the settings-test
+`drive` driver dropping any command slower than 100 ms — which silently lost
+the off-loop config write (the "writing config…" flake family; fixed with
+domain-driven hop waits in `settings_view_test.go`). Branch
 protection enforced on `main` (required ci status check, PR flow,
 `enforce_admins: true`, zero required approvals). Full local release gate +
 CI both green on the merged commit (`VERSION=v0.1.0 make release-check`

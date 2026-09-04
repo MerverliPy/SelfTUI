@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
 
 	"selftui/internal/config"
@@ -28,9 +29,15 @@ func settingsApp(t *testing.T) (App, config.Config) {
 
 // drive delivers messages through the model and replays whatever commands the
 // runtime would re-feed (bounded, mirroring bubbletea's cmd → msg loop).
-// Cursor-blink commands (tea.Tick) would block the synchronous loop for their
-// full interval, so any hop that does not produce a message within the grace
-// window is treated as presentation noise and dropped.
+// Hop policy is domain-driven rather than purely timer-driven: while the
+// settings form is still editing, every pending command is animation or
+// navigation noise (the form's cursor blink restarts a 530 ms self-scheduling
+// chain on each keypress, and spinner ticks do the same) so those hops keep a
+// short grace and are dropped; the moment the form completes
+// (settingsSaving/settingsSaved) the pending command is real work — the
+// off-loop config write that reports settingsSaveDoneMsg, or the model reload
+// after a host change — which is awaited for real, because dropping a slow
+// write strands the form on "writing config…" (the documented flake family).
 func drive(t *testing.T, m tea.Model, msgs ...tea.Msg) tea.Model {
 	t.Helper()
 	cur := m
@@ -38,7 +45,7 @@ func drive(t *testing.T, m tea.Model, msgs ...tea.Msg) tea.Model {
 		nm, cmd := cur.Update(msg)
 		cur = nm
 		for hops := 0; cmd != nil && hops < 8; hops++ {
-			next := execHop(cmd)
+			next := execHop(cmd, saving(cur))
 			if next == nil {
 				break
 			}
@@ -49,9 +56,23 @@ func drive(t *testing.T, m tea.Model, msgs ...tea.Msg) tea.Model {
 	return cur
 }
 
-// execHop runs one command with a grace window, so blink ticks that would
-// block for 530ms don't stall the test driver.
-func execHop(cmd tea.Cmd) tea.Msg {
+// saving reports whether the model is mid-save or freshly saved, i.e. whether
+// the next pending command is real work that must be awaited (see drive).
+func saving(m tea.Model) bool {
+	app, ok := m.(App)
+	if !ok {
+		return false
+	}
+	return app.settings.state == settingsSaving || app.settings.state == settingsSaved
+}
+
+// execHop runs one command. When real is true it is awaited up to the cap and
+// its message is returned (the cap is a deadlock guard; a slow config write is
+// still delivered). When real is false the command is treated as presentation
+// noise: anything that does not answer within the grace window is dropped, and
+// known periodic ticks (spinner) are dropped even when they answer fast, so a
+// self-rescheduling animation chain can never stall the synchronous driver.
+func execHop(cmd tea.Cmd, real bool) tea.Msg {
 	type result struct {
 		msg tea.Msg
 	}
@@ -59,12 +80,35 @@ func execHop(cmd tea.Cmd) tea.Msg {
 	go func() {
 		ch <- result{msg: cmd()}
 	}()
+	if !real {
+		select {
+		case r := <-ch:
+			if isPeriodicTick(r.msg) {
+				return nil
+			}
+			return r.msg
+		case <-time.After(100 * time.Millisecond):
+			return nil
+		}
+	}
 	select {
 	case r := <-ch:
 		return r.msg
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(2 * time.Second):
 		return nil
 	}
+}
+
+// isPeriodicTick reports whether a message is a self-rescheduling animation
+// tick (the bubbles spinner). These are presentation noise for the synchronous
+// driver: dropping them loses no state, while feeding them would make every
+// hop block for the full interval.
+func isPeriodicTick(msg tea.Msg) bool {
+	switch msg.(type) {
+	case spinner.TickMsg:
+		return true
+	}
+	return false
 }
 
 func openSettings(t *testing.T, m App) App {

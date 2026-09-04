@@ -1698,6 +1698,24 @@ protection enforced on `main`, full release gate PASSED on the merged commit.
     `UnixNano` would not help on a coarse VM clock). Regression test occupies
     the current instant's candidate name and asserts Open never reuses it.
     150× repeated + race ×5 green locally.
+  - **F3 — settings-save flake (test harness, surfaced by the docs PR #2's
+    CI run).** The `drive`/`execHop` test driver dropped any command slower
+    than 100 ms. The settings form runs `config.Save` off-loop and reports
+    back with `settingsSaveDoneMsg`; when a write (temp file + fsync)
+    exceeded 100 ms under load — the "writing config…" family documented at
+    phase 5 and in the RC audit — the driver silently lost the message and
+    three settings tests failed together (stuck at `settingsSaving`), twice
+    on this host and once on the runner. Fix (`internal/ui/settings_view_test.go`):
+    hop policy is now domain-driven — while the form is editing, pending
+    commands are animation noise (the form's cursor restarts a 530 ms blink
+    chain per keypress; bubbles spinner ticks reschedule) and keep the short
+    grace, but once the form completes (`settingsSaving`/`settingsSaved`)
+    the pending command is real work and is awaited up to a 2 s deadlock-
+    guard cap. Naively raising the cap made every blink hop pay its full
+    interval (settings suite ballooned to 134 s), so the state-based split
+    is what keeps it fast AND correct: 50× stress of the flaky family +
+    race green, full suite back to ~4.8 s. Test-only change; no production
+    code touched.
 - **CI on PR #1: green** (run `33875771938`, check "Go fmt · vet · test ·
   race · vuln · cross-build" reported on head `5ad160a`).
 - **Branch protection on `main`** (PUT `branches/main/protection`):
