@@ -1791,3 +1791,136 @@ protection enforced on `main`, full release gate PASSED on the merged commit.
   `release.yml` re-run the gate at the tag and publish assets; independently
   download + verify SHA256SUMS and `selftui v0.1.0` version strings; then the
   history audit (gitleaks) before any public-visibility change.
+
+### 2026-09-04 — v0.1 runbook step 5: v0.1.0 published; release gate flake (test-harness deadlock) found by the first tag run and fixed via PR #3 (owner task)
+**Milestone:** owner-assigned step (release runbook §5 "Tag + publish" — create
+the annotated tag on the merged `main` tip, let `release.yml` re-run the gate
+at the tag and publish, then independently verify the released assets). No §10
+row to tick (owner-assigned step); §12 tail updated. **Result:** done —
+**SelfTUI v0.1.0 released** (2026-09-04T14:59:47Z, 3 assets: both Linux
+archives + SHA256SUMS, not draft/prerelease). The first tag run **failed the
+gate** on a rare test-harness deadlock; root cause fixed in **PR #3** (merged
+`c70bf89`) and the tag moved pre-release to the fixed tip before publishing.
+
+**Work done**
+- **Local gate at merged `main` (`1bf98bb`) passed**, pinned toolchain
+  (`GOTOOLCHAIN=go1.27.1`, `~/go/bin` on PATH for govulncheck v1.7.0):
+  `VERSION=v0.1.0 make release-check` → PASSED, 0 reachable
+  vulnerabilities; both binaries stamp `selftui v0.1.0`. Release-notes
+  fallback confirmed: no `## [v0.1.0]` changelog section yet, so the
+  workflow's `[Unreleased]` fallback supplies the notes body (55 lines).
+- **Created + pushed annotated tag `v0.1.0`** (message "SelfTUI v0.1.0",
+  unsigned — no signing key configured) at `1bf98bb`.
+- **First release run FAILED the gate** (run `33884427515`, `release.yml`,
+  step "Run the complete release gate"): `selftui/internal/agent` hung
+  `go test -race` for the full 600.052s package timeout on the 2-vCPU
+  runner. `TestRunnerCancellationReturnsPromptly` (added with the M3a
+  cancellation work) never completed.
+- **Root cause (diagnosed from the goroutine dump + Go 1.27.1 sources +
+  deterministic repro):** test servers that stream a response and then park
+  on `<-r.Context().Done()` without reading the request body can deadlock in
+  cleanup. net/http only arms its client-close-detection **background read**
+  once the request body reaches EOF (`registerOnHitEOF`/`startBackgroundRead`,
+  `net/http/server.go` `conn.serve`); `httptest.Server.Close` deliberately
+  does **not** close `StateActive` connections, so the parked handler is
+  released only when the server notices the client disconnect. The
+  write-path drain that normally consumes small Content-Length bodies
+  (`server.go` ~1447, Issue 15527 deadlock guard) is **not guaranteed** —
+  skipped when `closeAfterReply` is set or raced — so the background read
+  was never armed (the CI dump shows only the handler, `srv.Close`, and the
+  alarm goroutine alive). Deterministic repro of the mechanism: an
+  unterminated chunked-body request + a parking handler never releases, even
+  after `CloseClientConnections`.
+- **Flake reproduced locally** at the runner's shape:
+  `GOMAXPROCS=2 go test -race -count=200 -timeout 90s -run
+  'TestRunnerCancellationReturnsPromptly|TestChatContextCancelled|
+  TestPullContextCancelled' ./internal/agent ./internal/ollama` → agent
+  package hung to the 90s timeout (same deadlock shape).
+- **Fix (test-only, PR #3 `fix/cancel-test-hang`, 4 files / +20):** each
+  write-then-park test handler now drains the request body first
+  (`io.Copy(io.Discard, r.Body)`), which deterministically arms the
+  background read before the handler parks — `internal/agent/runner_test.go`
+  (TestRunnerCancellationReturnsPromptly, the CI hang), `internal/ollama/
+  stream_test.go` (stallServer), `internal/ollama/chat_test.go`
+  (TestChatContextCancelled), `internal/ollama/ollama_test.go`
+  (TestPullContextCancelled). The pre-canceled-context test that never opens
+  a connection is untouched. No production code touched.
+- **Fix validated:** the same 200-run adversarial workload is green in 1.7s;
+  full agent+ollama suites ×30 under `GOMAXPROCS=2 -race` green (2.3s/68s);
+  `VERSION=v0.1.0 make release-check` PASSED at `e53a931`.
+- **PR #3**: CI green (run `33886703899`), merged with a merge commit
+  `c70bf89`; branch `fix/cancel-test-hang` deleted.
+- **Tag moved pre-release** `1bf98bb` → `c70bf89` (nothing had been published
+  — the first run failed before the publish step; private repo). Deleted
+  local + remote `v0.1.0`, re-created the annotated tag at the new tip,
+  pushed.
+- **Second release run SUCCESS** (run `33886825863`): gate passed at the tag
+  (make release-check + per-binary version verification), release notes
+  generated from the CHANGELOG `[Unreleased]` fallback, release created —
+  **SelfTUI v0.1.0**, 3 assets. `ci.yml` on merged `main` also green (run
+  `33886814058`).
+- **Independent verification (fresh dir `/tmp/v010-verify`, CI-published
+  assets only, never the local `dist/`):** `sha256sum -c` OK for both
+  archives against the published manifest (amd64 `e6d947aa…`, arm64
+  `ea12dce4…` — CI-built hashes, distinct from the local builds as
+  expected); amd64 binary executes and prints exactly `selftui v0.1.0`;
+  arm64 binary (cross-arch, cannot exec here) embeds the isolated `v0.1.0`
+  string + the `selftui %s` format literal per the documented
+  exec-or-embedded check; both archives contain exactly `selftui` + LICENSE
+  + README.md.
+
+**Commands + exit codes**
+- `git tag -a v0.1.0 -m "SelfTUI v0.1.0"` 0 · `git push origin v0.1.0` 0
+  (first push, at `1bf98bb`).
+- First release run watched: `gh run watch 33884427515 --exit-status` → 1
+  (gate step failed; exit 2 in the step, test timeout 600.052s).
+- `GOMAXPROCS=2 go test -race -count=200 -timeout 90s … ./internal/agent
+  ./internal/ollama` (pre-fix) → agent FAIL 90.030s (repro); post-fix → 0
+  (1.686s / 10.143s).
+- `GOMAXPROCS=2 go test -race -count=30 -timeout 120s ./internal/agent
+  ./internal/ollama` (post-fix) → 0 (2.255s / 67.931s).
+- `VERSION=v0.1.0 make release-check` at `1bf98bb` 0, at `e53a931` 0 ·
+  `gofmt -l internal/agent internal/ollama` → clean.
+- PR #3: `gh pr checks 3 --watch` → green · `gh pr merge 3 --merge` 0 ·
+  `git push origin --delete fix/cancel-test-hang` 0.
+- Tag move: `git tag -d v0.1.0` 0 · `git push origin :v0.1.0` 0 ·
+  `git tag -a v0.1.0 -m "SelfTUI v0.1.0"` 0 · `git push origin v0.1.0` 0.
+- Second release run: `gh run watch 33886825863 --exit-status` → 0
+  (success) · `ci.yml` run `33886814058` conclusion success.
+- Independent verify: `gh release download -R MerverliPy/SelfTUI v0.1.0` 0 ·
+  `sha256sum -c` (manifest with `dist/` prefix stripped) → OK ×2 ·
+  `./amd/selftui -version` → `selftui v0.1.0` · `strings` checks on arm64 → 0.
+
+**Decisions / lines to respect**
+- The release gate failing at a tag is a **blocking release defect**: the
+  gate is the release's own binding check, and this class of test-harness
+  deadlock (parking handlers + unconsumed request bodies) can flake any
+  future PR/CI run. Fixed at the root rather than re-run-and-hope — same
+  standard as the F1/F2/F3 fixes in step 4.
+- A tag whose release published nothing (failed gate) was **moved**, not
+  version-bumped: `v0.1.0` now names the fixed commit `c70bf89`; the product
+  tree at the tag is unchanged except test files, and the version stamp
+  contract (`selftui v0.1.0`) still holds. Nothing was ever visible outside
+  the private repo.
+- Release notes for v0.1.0 come from the CHANGELOG `[Unreleased]` section
+  (no `[v0.1.0]` section exists yet) — the workflow's documented fallback.
+  Cut `[Unreleased]` → `[v0.1.0] - 2026-09-04` at the next release, not
+  after the fact (the published notes already carry the content).
+- The annotated tag is **unsigned** (no GPG key configured on this host);
+  commits in this repo are unsigned too. Revisit if the owner wants
+  signed tags/releases.
+- Actionlint in the local gate remains a candidate (step-4 note); the
+  Node-20 deprecation warning on checkout/setup-go actions persists
+  (v0.1.1-era action-major bump).
+
+**Blockers / open decisions**
+- None (release published and verified). `SECRET_HISTORY_SCAN=UNRESOLVED`
+  persists (gitleaks never installed) — the **next step** before any
+  public-visibility change; the repo stays private until it is resolved.
+
+**Next action**
+- Fresh session (runbook step 6, if the runbook so orders): **history audit
+  (gitleaks)** over the full git history before any public-visibility change,
+  then whatever the runbook's public step requires. v0.1.1-era follow-ups
+  queued: changelog cut, actionlint in the gate, Node-20 action bumps,
+  signed-tag decision.
