@@ -330,7 +330,10 @@ func (r *Runner) executeTool(ctx context.Context, call ollama.ToolCall, emit fun
 		if err := r.authorizePath(args.Path); err != nil {
 			return "", err
 		}
-		return Grep(root, args.Pattern, args.Path)
+		// The top-level check above gates the requested path; Grep itself
+		// re-authorizes every workspace-relative descendant it would open so
+		// recursive roots (e.g. ".") cannot read denied files (C-01).
+		return Grep(ctx, root, args.Pattern, args.Path, r.authorizePath)
 	case "write_file":
 		var args struct {
 			Path      string `json:"path"`

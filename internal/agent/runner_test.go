@@ -40,7 +40,7 @@ func TestReadOnlyToolsStayInsideWorkspace(t *testing.T) {
 	if got, err := ListDir(root, "."); err != nil || !strings.Contains(got, "hello.txt") {
 		t.Errorf("ListDir = %q, %v", got, err)
 	}
-	if got, err := Grep(root, "agent", "."); err != nil || !strings.Contains(got, "hello.txt:1:hello agent") {
+	if got, err := Grep(context.Background(), root, "agent", ".", func(string) error { return nil }); err != nil || !strings.Contains(got, "hello.txt:1:hello agent") {
 		t.Errorf("Grep = %q, %v", got, err)
 	}
 	for _, path := range []string{"../outside", filepath.Join(root, "..", "outside")} {
@@ -245,6 +245,43 @@ func TestRunnerReportsTerminalDoneReason(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestRunnerGrepOverRootHidesPolicyDeniedDescendants is the C-01 regression
+// driven through the real runner: a native grep tool call with path "." over
+// a workspace seeded with every denied sensitive class must return only
+// ordinary matches plus the .env.example template. Before the fix, recursive
+// grep authorized only the requested root, so policy-denied descendants
+// (their content and their paths) leaked into the tool result.
+func TestRunnerGrepOverRootHidesPolicyDeniedDescendants(t *testing.T) {
+	root := seedSensitiveGrepWorkspace(t)
+	calls := 0
+	var summary string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		if calls == 1 {
+			io.WriteString(w, toolEvent(nativeCall("grep", `{"pattern":"GOOD_|LEAK_","path":"."}`)))
+			return
+		}
+		io.WriteString(w, finalEvent("searched"))
+	}))
+	t.Cleanup(srv.Close)
+
+	r := NewRunnerWithPolicy(ollama.New(srv.URL, ""), root, "", 3, &ToolPolicy{})
+	if err := r.Run(context.Background(), Request{
+		Model: "qwen3:8b", Messages: []ollama.ChatMessage{{Role: ollama.RoleUser, Content: "find markers"}},
+	}, func(msg Msg) {
+		if result, ok := msg.(ToolResultMsg); ok && result.Name == "grep" && result.OK {
+			summary = result.Summary
+		}
+	}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if summary == "" {
+		t.Fatalf("grep tool produced no successful result (calls=%d)", calls)
+	}
+	assertGrepLeakFree(t, summary)
 }
 
 func TestRunnerCancellationReturnsPromptly(t *testing.T) {

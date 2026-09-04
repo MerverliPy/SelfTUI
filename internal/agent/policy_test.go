@@ -3,6 +3,8 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -241,6 +243,210 @@ func TestPolicyAuthorizesBeforeExecution(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, ".env.example")); err != nil {
 		t.Errorf(".env.example was not written: %v", err)
 	}
+}
+
+// grepDeniedMarkers are the unique content markers seeded into every
+// policy-denied fixture below. grepDeniedHeaders are the rel-path line
+// prefixes a leak would print. Both must never appear in grep output over a
+// workspace that also holds the GOOD_* allowed controls.
+var grepDeniedMarkers = []string{
+	"LEAK_DOTENV", "LEAK_DOTENV_LOCAL", "LEAK_DOTENV_PROD",
+	"LEAK_CREDENTIALS", "LEAK_CREDENTIALS_JSON",
+	"LEAK_SSH", "LEAK_GNUPG", "LEAK_AWS", "LEAK_AZURE", "LEAK_KUBE", "LEAK_GCLOUD",
+	"LEAK_NESTED_SSH",
+}
+
+// seedSensitiveGrepWorkspace builds a workspace where ordinary files and the
+// .env.example template carry GOOD_* markers while every sensitive class the
+// denylist covers (.env, .env.local, .env.production, credentials,
+// credentials.json, .ssh, .gnupg, .aws, .azure, .kube, .config/gcloud, plus a
+// nested denied directory and a nested denied dotenv) carries a distinct
+// LEAK_* marker. grep pattern "GOOD_|LEAK_" matches every seeded line.
+func seedSensitiveGrepWorkspace(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	write := func(rel, content string) {
+		t.Helper()
+		p := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Ordinary matching files.
+	write("README.md", "GOOD_README: hello world\n")
+	write("src/app.go", "GOOD_CODE\n")
+	write("docs/notes.txt", "GOOD_NOTES\n")
+	// The template carve-out: .env.example stays readable.
+	write(".env.example", "GOOD_EXAMPLE=dummy\n")
+	// Denied credential files sitting in otherwise-allowed directories.
+	write(".env", "LEAK_DOTENV=topsecret\n")
+	write(".env.local", "LEAK_DOTENV_LOCAL=secret\n")
+	write("credentials", "LEAK_CREDENTIALS\n")
+	write("credentials.json", "LEAK_CREDENTIALS_JSON\n")
+	write("proj/sub/deep/.env.production", "LEAK_DOTENV_PROD\n")
+	// Denied directories (pruned before descent).
+	write(".ssh/id_rsa", "LEAK_SSH\n")
+	write(".gnupg/private.key", "LEAK_GNUPG\n")
+	write(".aws/credentials", "LEAK_AWS\n")
+	write(".azure/azureProfile.json", "LEAK_AZURE\n")
+	write(".kube/config", "LEAK_KUBE\n")
+	write(".config/gcloud/application_default_credentials.json", "LEAK_GCLOUD\n")
+	// A nested denied directory under otherwise-allowed directories.
+	write("proj/sub/.ssh/id_ed25519", "LEAK_NESTED_SSH\n")
+	return root
+}
+
+// assertGrepLeakFree is the shared policy-aware grep oracle: no denied
+// content marker and no denied rel-path header may appear, while every
+// allowed control must.
+func assertGrepLeakFree(t *testing.T, out string) {
+	t.Helper()
+	for _, marker := range grepDeniedMarkers {
+		if strings.Contains(out, marker) {
+			t.Errorf("grep output leaked denied content marker %q\noutput:\n%s", marker, out)
+		}
+	}
+	for _, header := range []string{".env:", ".env.local:", "credentials:", "credentials.json:", ".ssh/", ".gnupg/", ".aws/", ".azure/", ".kube/", "gcloud/", ".env.production:"} {
+		if strings.Contains(out, header) {
+			t.Errorf("grep output names a policy-denied path (%q)\noutput:\n%s", header, out)
+		}
+	}
+	for _, want := range []string{"GOOD_README", "GOOD_CODE", "GOOD_NOTES"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("grep output is missing ordinary match %q\noutput:\n%s", want, out)
+		}
+	}
+	// The documented .env.example carve-out must be readable and visible.
+	if !strings.Contains(out, ".env.example:1:GOOD_EXAMPLE") {
+		t.Errorf("grep output lost the .env.example carve-out control\noutput:\n%s", out)
+	}
+}
+
+// TestGrepAppliesPolicyToEveryWorkspaceDescendant is the direct-boundary
+// proof of C-01: recursive grep over "." with the policy callback never
+// opens a denied descendant — denied directories are pruned, denied files
+// are skipped, ordinary files and .env.example still match.
+func TestGrepAppliesPolicyToEveryWorkspaceDescendant(t *testing.T) {
+	root := seedSensitiveGrepWorkspace(t)
+	p := ToolPolicy{}
+	out, err := Grep(context.Background(), root, "GOOD_|LEAK_", ".", func(rel string) error { return p.AuthorizePath(rel) })
+	if err != nil {
+		t.Fatalf("Grep: %v", err)
+	}
+	assertGrepLeakFree(t, out)
+}
+
+// TestGrepSkipsNestedDeniedDirectoriesButPreservesIOErrors pins the two
+// sides of the skip contract: policy denials are skipped deterministically
+// wherever they sit (deep .aws, .config/gcloud, nested dotenv files), while
+// a real traversal error (unreadable directory) still fails the operation
+// instead of being swallowed.
+func TestGrepSkipsNestedDeniedDirectoriesButPreservesIOErrors(t *testing.T) {
+	root := t.TempDir()
+	write := func(rel, content string) {
+		t.Helper()
+		p := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("a/b/.aws/credentials", "LEAK_NESTED_AWS\n")
+	write("c/.config/gcloud/creds.json", "LEAK_DEEP_GCLOUD\n")
+	write("d/e/.env.production", "LEAK_DEEP_DOTENV\n")
+	write("ok.txt", "GOOD_OK\n")
+	p := ToolPolicy{}
+	out, err := Grep(context.Background(), root, "GOOD_|LEAK_", ".", func(rel string) error { return p.AuthorizePath(rel) })
+	if err != nil {
+		t.Fatalf("Grep: %v", err)
+	}
+	for _, marker := range []string{"LEAK_NESTED_AWS", "LEAK_DEEP_GCLOUD", "LEAK_DEEP_DOTENV"} {
+		if strings.Contains(out, marker) {
+			t.Errorf("deep policy denial %q leaked:\n%s", marker, out)
+		}
+	}
+	if !strings.Contains(out, "ok.txt:1:GOOD_OK") {
+		t.Errorf("allowed file missing from output:\n%s", out)
+	}
+
+	if os.Geteuid() == 0 {
+		t.Skip("permission-denied traversal check needs a non-root user")
+	}
+	locked := filepath.Join(root, "locked")
+	if err := os.MkdirAll(locked, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(locked, "secret.txt"), []byte("GOOD_LOCKED\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(locked, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(locked, 0o755) })
+	if _, err := Grep(context.Background(), root, "GOOD", ".", func(rel string) error { return p.AuthorizePath(rel) }); err == nil {
+		t.Errorf("Grep over an unreadable directory returned nil, want a real traversal error")
+	}
+}
+
+// TestGrepChecksCancellationWhileWalkingAndScanning pins the ctx plumbing
+// added for Task 13 (M-06): a canceled context surfaces as context.Canceled
+// promptly — before any work (pre-canceled), from a walk-time hook (the
+// dir-prune authorize callback), and between scanned files (the scan loop
+// checks before each file).
+func TestGrepChecksCancellationWhileWalkingAndScanning(t *testing.T) {
+	root := t.TempDir()
+	for i := 0; i < 5; i++ {
+		dir := filepath.Join(root, fmt.Sprintf("d%d", i))
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "f.txt"), []byte("GOOD\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	t.Run("pre-canceled", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		if _, err := Grep(ctx, root, "GOOD", ".", func(string) error { return nil }); !errors.Is(err, context.Canceled) {
+			t.Errorf("pre-canceled Grep error = %v, want context.Canceled", err)
+		}
+	})
+
+	t.Run("cancel-during-walk", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		// authorize is consulted for directory pruning during the walk with
+		// bare dir rels ("d2", no separator); canceling there must surface.
+		_, err := Grep(ctx, root, "GOOD", ".", func(rel string) error {
+			if rel == "d2" {
+				cancel()
+			}
+			return nil
+		})
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("cancel during walk: Grep error = %v, want context.Canceled", err)
+		}
+	})
+
+	t.Run("cancel-between-files", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		// File rels ("d0/f.txt") are only authorized from the scan loop;
+		// canceling there must stop the next file from being scanned.
+		_, err := Grep(ctx, root, "GOOD", ".", func(rel string) error {
+			if rel == "d0/f.txt" {
+				cancel()
+			}
+			return nil
+		})
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("cancel between files: Grep error = %v, want context.Canceled", err)
+		}
+	})
 }
 
 // TestPolicyStillEnforcesContainment: AuthorizePath is additive — the
