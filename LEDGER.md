@@ -2011,3 +2011,70 @@ code or workflow files changed.
   v0.1.1-era queue: changelog cut (`[Unreleased]` → `[v0.1.0] - 2026-09-04`),
   gitleaks-in-CI (recommended above), actionlint in the local gate, Node-20
   action bumps, signed-tag decision.
+
+### 2026-09-04 — Runbook Task 00: audit-remediation baseline — branch + toolchain pin (owner task)
+**Milestone:** `SelfTUI-Pi-Audit-Remediation-Runbook-2026-09-04.md` Task 00 (baseline and
+`fix/v0.1.1-audit-remediation` branch). No §10 row to tick (runbook-owned step). **Result:**
+done — **BASELINE=PASS** on branch `fix/v0.1.1-audit-remediation` @ `7db72b4`, worktree
+clean. Baseline `make check`/`make race`/`make vuln` all exit 0 under the newly pinned
+`toolchain go1.27.1` (go.mod), matching the CI pin; govulncheck reports 0 vulnerabilities
+affecting the code.
+
+**Work done**
+- **Session-start reads:** AGENTS.md, PLAN.md §10–12, SECURITY.md, LEDGER tail, and the
+  audit report `SelfTUI-External-Audit-2026-09-04.md` (placed by the owner mid-session;
+  was not on disk at session start — only the input pack in `~/selftui-audit-pack/`).
+- **Branch + doc commit (owner-authorized option-2 exception to Task 00's no-commit rule):**
+  `git switch -c fix/v0.1.1-audit-remediation` from clean `main` @ `e6ef11b`; commit
+  `b1f4440` adds exactly the two input documents: `SelfTUI-External-Audit-2026-09-04.md`
+  and `SelfTUI-Pi-Audit-Remediation-Runbook-2026-09-04.md`.
+- **First baseline run** (effective toolchain go1.25.8 via Debian go 1.22 +
+  GOTOOLCHAIN=auto honoring go.mod `go 1.25.8`): `make check` 0, `make race` 0,
+  `make vuln` **2** — govulncheck exit 3: "Your code is affected by 13 vulnerabilities
+  from the Go standard library" (GO-2026-6218/6090/6088/5972/5856/5039/5037/5026/4971/
+  4947/4946/4918/4870), all stdlib/x-net at go1.25.8 fixed only in go1.25.9–go1.25.13 /
+  x/net v0.53.0; reachable traces at `internal/ollama/client.go:76`,
+  `internal/ollama/stream.go:107`. Toolchain drift, not a code defect (CI pins go1.27.1).
+- **Toolchain pin (owner-authorized):** go.mod gains `toolchain go1.27.1` under
+  `go 1.25.8` (commit `7db72b4`; no go.sum impact); effective toolchain auto-switches to
+  go1.27.1. **Re-run:** `make check` 0 (7s), `make race` 0 (11s), `make vuln` 0 (3s) —
+  govulncheck: "Your code is affected by 0 vulnerabilities" (7 imported-package + 3
+  module vulns not called). Baseline elapsed ~21s total.
+- **Record keeping (owner-authorized for the whole plan):** this LEDGER entry + runbook
+  checklist tick for Task 00, committed separately.
+
+**Commands + exit codes**
+- `git status --short` → empty (session start) · `git branch --show-current` → `main` ·
+  `git rev-parse --short HEAD` → `e6ef11b` · `git log -1 --oneline` → `e6ef11b Merge pull
+  request #5 …` (all 0).
+- `git switch -c fix/v0.1.1-audit-remediation` → 0 · docs commit → 0 (`b1f4440`, 2 files,
+  +1050).
+- Baseline 1: `make check` → 0 (7s) · `make race` → 0 (11s) · `make vuln` → **2**
+  (`make: *** [Makefile:22: vuln] Error 3`, govulncheck exit 3, 3s).
+- `go version` → go1.25.8 → go1.27.1 after pin · `govulncheck -version` → v1.7.0.
+- Pin commit → 0 (`7db72b4`, go.mod +2). Baseline 2: `make check` 0 · `make race` 0 ·
+  `make vuln` 0 (~21s). `git status --short` → empty (clean) after each phase.
+
+**Decisions / lines to respect**
+- `fix/v0.1.1-audit-remediation` is the runbook branch for Tasks 00–22; every later task
+  must confirm it is active and status is clean before editing.
+- go.mod: `go 1.25.8` language level unchanged; `toolchain go1.27.1` added to align the
+  local gate with CI (ci.yml pin) and to satisfy audit finding M-10's version-enforcement
+  direction. Local default `make vuln` is green again.
+- The two input documents live on the fix branch (`b1f4440`); the runbook's progress
+  checklist is the tracking record (ticked per task here).
+- Task 00's own "no edit/commit" letter was overridden twice by explicit owner
+  authorization (docs commit; toolchain pin) — recorded here as the precedent.
+
+**Blockers / open decisions**
+- None for Task 00. `SelfTUI-External-Audit-2026-09-04.md` did not exist on this machine
+  at session start; owner placed it (and the runbook) and authorized the disposition.
+- The runbook's H-05/M-03/M-04/M-06/M-08/M-09 findings carry `[needs runtime
+  verification]` — per runbook, a task must NOT_REPRODUCED-disposition rather than force
+  a speculative patch if it does not reproduce.
+
+**Next action**
+- Fresh Pi session: runbook **Task 01 (H-01 — restore default XDG configuration
+  loading)**: confirm branch `fix/v0.1.1-audit-remediation` + clean status, red-green TDD
+  on `cmd/self-tui/main.go` + `main_test.go` + `internal/config/config_test.go`, then
+  record in LEDGER and tick the checklist.
