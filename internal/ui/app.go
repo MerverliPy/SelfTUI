@@ -206,7 +206,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case agentModelsLoadedMsg, agentModelsErrMsg, agentTokenMsg, agentDoneMsg,
 		agent.TokenMsg, agent.ToolStartMsg, agent.ToolResultMsg, agent.ToolConfirmMsg,
-		agent.ToolOutputMsg, agent.FallbackMsg, agent.AgentDoneMsg:
+		agent.FallbackMsg, agent.AgentDoneMsg:
 		agent, cmd := a.agent.Update(msg)
 		a.agent = agent
 		return a, cmd

@@ -78,8 +78,8 @@ func TestRunnerExecutesNativeToolAndStreamsFinal(t *testing.T) {
 			t.Fatalf("decode request: %v", err)
 		}
 		if calls == 1 {
-			if len(req.Tools) != 6 {
-				t.Errorf("tools = %d, want 6", len(req.Tools))
+			if len(req.Tools) != 5 {
+				t.Errorf("tools = %d, want 5 (read/list/grep/write/edit; no run_command in v0.1)", len(req.Tools))
 			}
 			w.Header().Set("Content-Type", "application/x-ndjson")
 			io.WriteString(w, toolEvent(nativeCall("read_file", `{"path":"README.md"}`)))

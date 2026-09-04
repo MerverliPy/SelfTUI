@@ -13,6 +13,14 @@ import (
 
 const DefaultMaxIterations = 12
 
+// Approval-window bounds for the per-call mutation confirmation (write_file,
+// edit_file). The v0.1 executor removal left only these approval mechanics;
+// command execution itself no longer ships (see docs/run-command-containment.md).
+const (
+	defaultConfirmTimeout = 30 * time.Second
+	maxConfirmTimeout     = 60 * time.Second
+)
+
 // Msg is an event consumed by the UI. Concrete messages intentionally contain
 // presentation-neutral data so the agent loop can be tested without Bubble Tea.
 type Msg interface{}
@@ -43,14 +51,6 @@ func (m ToolConfirmMsg) Respond(approved bool) {
 	case m.reply <- approved:
 	default:
 	}
-}
-
-// ToolOutputMsg streams bounded command output to the UI while the command is
-// still running; the final ToolResultMsg carries the complete bounded result.
-type ToolOutputMsg struct {
-	Name   string
-	Stream string
-	Text   string
 }
 
 type FallbackMsg struct{ Reason string }
@@ -303,35 +303,20 @@ func (r *Runner) executeTool(ctx context.Context, call ollama.ToolCall, emit fun
 			return "", err
 		}
 		return "edited " + args.Path, nil
-	case "run_command":
-		var args struct {
-			Argv    []string `json:"argv"`
-			Timeout int      `json:"timeout"`
-		}
-		if err := decodeArgs(call.Function.Arguments, &args); err != nil {
-			return "", fmt.Errorf("run_command: %w", err)
-		}
-		if err := validateCommand(args.Argv); err != nil {
-			return "", err
-		}
-		if err := r.confirm(ctx, call, args.Timeout, emit); err != nil {
-			return "", err
-		}
-		return RunCommand(ctx, root, args.Argv, args.Timeout, func(stream, text string) {
-			emit(ToolOutputMsg{Name: "run_command", Stream: stream, Text: text})
-		})
 	default:
+		// The boundary is a closed set: any other name — including the
+		// pre-v0.1 run_command executor, which does not ship — is rejected.
 		return "", fmt.Errorf("tool %q is not allowed", call.Function.Name)
 	}
 }
 
 func (r *Runner) confirm(ctx context.Context, call ollama.ToolCall, seconds int, emit func(Msg)) error {
-	timeout := defaultCommandTimeout
+	timeout := defaultConfirmTimeout
 	if seconds > 0 {
 		timeout = time.Duration(seconds) * time.Second
 	}
-	if timeout > maxCommandTimeout {
-		return fmt.Errorf("%s: timeout exceeds %s", call.Function.Name, maxCommandTimeout)
+	if timeout > maxConfirmTimeout {
+		return fmt.Errorf("%s: timeout exceeds %s", call.Function.Name, maxConfirmTimeout)
 	}
 	msg := ToolConfirmMsg{Name: call.Function.Name, Input: string(call.Function.Arguments), Workspace: r.workspaceRoot, Timeout: timeout, reply: make(chan bool, 1)}
 	emit(msg)

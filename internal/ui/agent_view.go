@@ -312,12 +312,6 @@ func (v AgentView) Update(msg tea.Msg) (AgentView, tea.Cmd) {
 		}
 		return v, v.waitChatCmd()
 
-	case agent.ToolOutputMsg:
-		if v.streaming {
-			v.toolStatus = "⚙ " + msg.Name + " " + msg.Stream + ": " + firstLine(msg.Text)
-		}
-		return v, v.waitChatCmd()
-
 	case agent.ToolConfirmMsg:
 		v.confirmation = &msg
 		return v, v.waitChatCmd()

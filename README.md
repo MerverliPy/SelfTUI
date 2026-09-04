@@ -5,7 +5,11 @@ models, with an embedded AI coding-agent chat and a settings panel. Runs
 identically on a PC (native terminal) and over SSH on a phone (Moshi;
 Blink/Termius similar) — layout adapts to narrow windows.
 
-**Status: M7 — pre-v0.1 UX polish done.** The Models tab lists live models from the Ollama host (`/api/tags`) with selection + an inspect pane (`/api/show`): key facts, parameters, template, modelfile, model info, license — scrollable, side-by-side on wide screens and stacked (enter-toggled) on the phone. **Delete with confirm (`x` → `y`/`esc`) and streaming pull (`p` → name → spinner + progress; `esc` cancels)** work live; pulls reload the list automatically. The Agent tab supports native or content-embedded tool calls, explicit plain-chat fallback, jailed read/write/edit tools, and a constrained confirmed command executor. It is a guardrail rather than an OS sandbox; general shell and interpreters remain disabled. M7 polished the feel (opencode.ai TUI as reference): a slash-command menu over the Agent input (`/clear`, `/model`, `/theme`, `/help`, `/refresh`) and a `ctrl+p` command palette reachable from any tab; stable per-turn headers, a streaming caret (`▍`) that disappears at rest,
+**Status: M7 — pre-v0.1 UX polish done.** The Models tab lists live models from the Ollama host (`/api/tags`) with selection + an inspect pane (`/api/show`): key facts, parameters, template, modelfile, model info, license — scrollable, side-by-side on wide screens and stacked (enter-toggled) on the phone. **Delete with confirm (`x` → `y`/`esc`) and streaming pull (`p` → name → spinner + progress; `esc` cancels)** work live; pulls reload the list automatically. The Agent tab supports native or content-embedded tool calls, explicit plain-chat fallback, jailed project-aware tools — read-only `read_file`/
+`list_dir`/`grep` and confirmed `write_file`/`edit_file`. **v0.1 ships no command
+execution**: the pre-v0.1 `run_command` executor was removed, and its containment
+record in `docs/run-command-containment.md` is now a dated deferred-design note
+(cwd + argv filtering is not an OS sandbox). M7 polished the feel (opencode.ai TUI as reference): a slash-command menu over the Agent input (`/clear`, `/model`, `/theme`, `/help`, `/refresh`) and a `ctrl+p` command palette reachable from any tab; stable per-turn headers, a streaming caret (`▍`) that disappears at rest,
 elapsed + stop-reason meta right-aligned on each assistant header, `pgup`/
 `pgdn` paging and an `f` auto-follow toggle; the composer is opencode-style —
 a header row with the model chip and a live context meter plus token usage
@@ -85,10 +89,10 @@ Once the conversation fills the context budget the meter turns red and a
 visible truncation marker stays in the transcript until `/clear`.
 Tool-capable models may use jailed `read_file`, `list_dir`, `grep`,
 `write_file`, and `edit_file`; every mutation opens a `y`/`enter` approve or
-`n`/`esc` decline dialog. The only command executor accepts a fixed argv for
-approved `go` subcommands and read-only `git` subcommands; it has a scrubbed
-environment, 30s default/60s maximum timeout, 256 KiB cap per output stream,
-process-group cancellation, and no shell or interpreter. Models that reject
+`n`/`esc` decline dialog. **v0.1 has no command execution**: read-only
+`read_file`/`list_dir`/`grep` plus confirmed `write_file`/`edit_file` are the
+whole tool surface — no shell, no interpreters, no git or go subprocesses.
+Models that reject
 tools or return no tool call show an explicit plain-chat fallback.
 
 **Command palette (M7)**: `ctrl+p` from any tab opens the command palette —

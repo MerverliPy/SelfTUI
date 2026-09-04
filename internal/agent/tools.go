@@ -62,13 +62,6 @@ func AgentTools() []ollama.ToolDefinition {
 				"required": []string{"path", "old", "new"},
 			},
 		}},
-		{Type: "function", Function: ollama.ToolFunction{
-			Name: "run_command", Description: "Run an approved allowlisted argv in the workspace. Requires user approval.",
-			Parameters: map[string]any{
-				"type": "object", "properties": map[string]any{"argv": map[string]any{"type": "array", "items": map[string]any{"type": "string"}}, "timeout": map[string]any{"type": "integer"}},
-				"required": []string{"argv"},
-			},
-		}},
 	}
 }
 

@@ -61,7 +61,7 @@
           │  ┌──────────────┐   ┌──────────────────────────┐  │
           │  │ Ollama client │   │ Agent runner (tool loop)│  │
           │  │  /api/tags,   │   │  chat + tool_calls +    │  │
-          │  │  pull stream, │   │  run_command/read/write │  │
+          │  │  pull stream, │   │  read/grep/write/edit    │  │
           │  │  delete, show │   │                          │  │
           │  └──────────────┘   └──────────────────────────┘  │
           └───────────────────────────────┬────────────────────┘
@@ -112,7 +112,6 @@ TUI/
 │   │   ├── runner.go             # the async tool-loop state machine
 │   │   ├── tools.go              # tool definitions (schema for Ollama)
 │   │   ├── exec.go               # read_file / write_file / edit_file / list_dir / grep
-│   │   ├── command.go            # run_command with streaming + timeout + cwd sandbox
 │   │   ├── context.go            # context window budgeting / truncation
 │   │   └── runner_test.go
 │   └── ui/
@@ -215,7 +214,7 @@ start
 | `edit_file` | path, old, new | exact-match replace, verify applied |
 | `list_dir` | path | shallow dir listing |
 | `grep` | pattern, path | rg-backed over project |
-| `run_command` | argv, timeout | **v1: argv allowlist, no shell/interpreter**; scrubbed env, resource/output limits, process-group kill, per-call confirmation. General shell = labeled dangerous opt-in behind a real OS/container sandbox; otherwise disabled. Streaming stdout/stderr; cancellation. |
+| ~~`run_command`~~ | ~~argv, timeout~~ | **Deferred — not shipped in v0.1 (2026-09-03).** The executor, its schema, and its dispatch case were removed from the public release; no command execution ships. See `docs/run-command-containment.md`. A future release would need a real OS/container sandbox, since cwd + argv filtering is not one. |
 
 ### Safety rules
 - All file access **jailed to `workspace_root`** (resolve symlinks, reject `..` escapes).
@@ -223,9 +222,9 @@ start
   command from reading credentials, hitting the network, writing absolute paths, spawning
   children, or escaping via interpreters. Per council audit (finding A): v1 `run_command` is
   an **argv allowlist with no shell/interpreter**, scrubbed env, resource + output limits,
-  process-group kill, cancellation, and per-call confirmation. If real isolation is
-  unavailable, `run_command` is **disabled by default / dropped**. Cwd confinement alone is
-  insufficient.
+  process-group kill, cancellation, and per-call confirmation. **Resolved for v0.1
+  (2026-09-03): `run_command` is dropped — no command execution ships**, since cwd + argv
+  filtering is not an OS sandbox; the design is deferred in `docs/run-command-containment.md`.
 - The safety controls for each tool ship **inline with that tool** in its milestone (not
   deferred to a final hardening milestone).
 - Max tool iterations and max tokens bound each run.
@@ -349,6 +348,13 @@ mutation surfaced.**
 default/60s cap, 256 KiB per stream, process-group cancellation, serialization,
 context budgeting, and focused UI/executor tests. ✅ *Exit: agent writes/edits files
 and runs allowed commands, all gated + tested.*
+
+> **2026-09-03 — v0.1 hardening: command execution removed.** Public v0.1 does not
+> expose or retain `run_command`. The executor, its tool schema, and its dispatch case
+> were deleted; `ToolOutputMsg` and the command-only UI routing went with them. v0.1
+> ships project-aware `read_file`/`list_dir`/`grep` plus confirmed `write_file`/
+> `edit_file` only. cwd + argv filtering is not an OS sandbox — see
+> `docs/run-command-containment.md`, now a dated deferred-design record.
 
 **M4 — Settings & persistence.** ✅ *done 2026-09-06:* huh (v2-aligned `charm.land/huh/v2 v2.0.3`) forms over the full config surface in four sections (Connection / Model defaults / Theme / Agent), two-column on wide screens (LayoutColumns), single-column pages otherwise; field validation (http(s) host, numeric ranges); esc-discard = nothing written (revert); submit writes the config file off-loop (`config.Save`, 0600 perms) and live-applies in-session — theme swap restyles the whole shell, host/token rebuild the Ollama client and reload both model lists, and agent params/default model/workspace/system prompt apply to the next agent run; Theme select previews live while arrowing (rolls back on discard). New flags/env for every config key. **Exit: settings persist & revert.**
 

@@ -1,11 +1,11 @@
 package ui
 
-// Regression (owner bug): mutation confirmations and command output were
-// dropped at the root App's message routing — ToolConfirmMsg/ToolOutputMsg
-// were missing from the forwarded-case list — so in the real binary the
-// "Allow write_file?" dialog never appeared and the runner blocked forever on
-// the approval channel (statusline stuck at "⚙ write_file … esc interrupt").
-// These tests drive messages through App.Update, not AgentView directly.
+// Regression (owner bug): mutation confirmations were dropped at the root
+// App's message routing — ToolConfirmMsg was missing from the forwarded-case
+// list — so in the real binary the "Allow write_file?" dialog never appeared
+// and the runner blocked forever on the approval channel (statusline stuck at
+// "⚙ write_file … esc interrupt"). These tests drive messages through
+// App.Update, not AgentView directly.
 
 import (
 	"encoding/json"
