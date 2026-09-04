@@ -59,6 +59,17 @@ fi
 rm -rf dist
 mkdir -p dist
 
+# Fail fast on the external tools before any slow step runs.
+if ! command -v govulncheck >/dev/null 2>&1; then
+  echo "release-check: govulncheck not on PATH - install the pinned version:" >&2
+  echo "  go install golang.org/x/vuln/cmd/govulncheck@v1.7.0" >&2
+  exit 2
+fi
+if ! command -v strings >/dev/null 2>&1; then
+  echo "release-check: 'strings' (binutils) not on PATH - needed for the cross-arch version check" >&2
+  exit 2
+fi
+
 # --- 1. go mod verify ------------------------------------------------------
 echo "== go mod verify =="
 go mod verify
@@ -86,11 +97,6 @@ go test -race -count=1 ./...
 
 # --- 6. govulncheck --------------------------------------------------------
 echo "== govulncheck ./... =="
-if ! command -v govulncheck >/dev/null 2>&1; then
-  echo "release-check: govulncheck not on PATH - install the pinned version:" >&2
-  echo "  go install golang.org/x/vuln/cmd/govulncheck@v1.7.0" >&2
-  exit 2
-fi
 govulncheck ./...
 
 # --- 7. CGO-disabled Linux builds ------------------------------------------
@@ -100,41 +106,11 @@ echo "== Go toolchain of the built binaries =="
 go version dist/selftui-linux-amd64 dist/selftui-linux-arm64
 
 # --- 8. version-stamp checks -----------------------------------------------
+# The exec-or-embedded-string logic lives in one place (shared with
+# .github/workflows/release.yml) so local gate and CI cannot drift.
 echo "== version stamp check (want: 'selftui $VERSION') =="
-expect="selftui $VERSION"
-for bin in dist/selftui-linux-amd64 dist/selftui-linux-arm64; do
-  if out="$("$bin" -version 2>&1)"; then
-    if [[ "$out" == "$expect" ]]; then
-      echo "ok: $bin -> $out (executed)"
-    else
-      echo "release-check: $bin reports '$out', want '$expect'" >&2
-      exit 1
-    fi
-  else
-    # A cross-compiled binary cannot execute on a foreign host (arm64 on an
-    # amd64 machine) without qemu-user/binfmt, so fall back to the value the
-    # linker actually wrote: -X replaces the whole string, so the exact
-    # version must appear as its own standalone string in the ELF image.
-    case "$out" in
-      *"Exec format error"*|*"cannot execute binary file"*)
-        if ! command -v strings >/dev/null 2>&1; then
-          echo "release-check: cannot verify $bin: needs 'strings' (binutils)" >&2
-          exit 2
-        fi
-        if strings "$bin" | grep -Fx -- "$VERSION" >/dev/null; then
-          echo "ok: $bin -> $expect (linked-in string; cannot exec $(go env GOOS)/$(go env GOARCH) on this host)"
-        else
-          echo "release-check: $bin does not embed the string '$VERSION'" >&2
-          exit 1
-        fi
-        ;;
-      *)
-        echo "release-check: unexpected failure running '$bin -version': $out" >&2
-        exit 1
-        ;;
-    esac
-  fi
-done
+scripts/verify-binary-version.sh dist/selftui-linux-amd64 "$VERSION"
+scripts/verify-binary-version.sh dist/selftui-linux-arm64 "$VERSION"
 
 # --- 9. deterministic archives ---------------------------------------------
 echo "== deterministic archives =="

@@ -64,30 +64,8 @@ jobs:
       - name: Verify the tag is the version stamped into both binaries
         run: |
           set -euo pipefail
-          want="selftui $VERSION"
           for bin in dist/selftui-linux-amd64 dist/selftui-linux-arm64; do
-            if out="$("$bin" -version 2>&1)"; then
-              [[ "$out" == "$want" ]] || {
-                echo "FAIL: $bin reports '$out', want '$want'"
-                exit 1
-              }
-            else
-              case "$out" in
-                *"Exec format error"*|*"cannot execute binary file"*)
-                  # Cross-compiled binary on a foreign host (arm64 on an
-                  # amd64 runner): check the exact string the linker wrote.
-                  strings "$bin" | grep -Fx -- "$VERSION" >/dev/null || {
-                    echo "FAIL: $bin does not embed the string '$VERSION'"
-                    exit 1
-                  }
-                  ;;
-                *)
-                  echo "FAIL: cannot run $bin -version: $out"
-                  exit 1
-                  ;;
-              esac
-            fi
-            echo "ok: $bin -> $want"
+            scripts/verify-binary-version.sh "$bin" "$VERSION"
           done
 
       - name: Generate release notes from CHANGELOG.md
