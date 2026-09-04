@@ -2253,3 +2253,88 @@ clean, all gates exit 0. Commit: `fix(agent): enforce policy during recursive gr
 - Fresh Pi session: runbook **Task 03 (H-02 — canonical workspace validation)**: confirm branch
   `fix/v0.1.1-audit-remediation` + clean status, red-green TDD on `internal/config/validate.go` +
   `tools_test.go` + `validate_test.go`, then record in LEDGER and tick the checklist.
+
+### 2026-09-04 — Runbook Task 03: H-02 workspace canonicalization — workspace-root aliases of `/` and home rejected by canonical identity
+**Milestone:** `SelfTUI-Pi-Audit-Remediation-Runbook-2026-09-04.md` Task 03 (H-02 — canonical workspace
+root validation). No §10 row to tick (runbook-owned step). **Result:** done — red-green TDD on branch
+`fix/v0.1.1-audit-remediation` @ `5af840b`, worktree clean, all gates exit 0. Commit:
+`fix(config): reject canonical root and home workspaces`.
+
+**Work done**
+- **Session-start reads:** AGENTS.md, PLAN.md §§10–12, LEDGER tail (Task-02 handoff), runbook Task-03
+  block + audit finding H-02, `internal/config/{validate,load}.go`, `tools_test.go`, `validate_test.go`,
+  `internal/agent/tools.go` (`canonicalRoot`/`securePath`), README workspace contract, ui/cmd config
+  consumers (`app.go`, `agent_view.go`, `settings_view.go`, `phase4_test.go`) to prove the runtime path
+  before patching.
+- **Root cause confirmed (code + live red evidence):** `validate.go` `validateToolsWorkspace` rejected
+  only the literal `"/"` and compared `filepath.Clean(workspaceRoot)` to the lexical home path — no
+  `filepath.Abs`, no `filepath.EvalSymlinks`. The tool layer later does both (`agent/tools.go`
+  `canonicalRoot`: Abs → EvalSymlinks → IsDir) on every call, so `/tmp/..`, a symlink to `/`, a
+  symlink to home, or a relative spelling resolving to home could validate and then jail the enabled
+  tools on the whole filesystem or the home directory (H-02, defeating the README/UI "never `/` or
+  home" boundary promise).
+- **Red (TDD):** added to `tools_test.go` — `TestValidateToolsWorkspaceAliasesRejected` (table-driven,
+  `tools_enabled=true`, each case asserting the exact stable error): direct `/` and direct home
+  (controls), the literal spelling `/tmp/..`, symlink → `/`, symlink → home, and a relative path
+  resolving to home under `t.Chdir(filepath.Dir(home))`; `TestValidateToolsWorkspaceSymlinkToRealProjectAccepted`
+  (symlink to a real project dir must stay legal — over-rejection guard);
+  `TestLoadToolsWorkspaceStoresCanonicalRoot` (toml + env sources: with tools armed, Load must store
+  the canonical target, not the symlink spelling); `TestLoadToolsOffKeepsBroadWorkspaceSpelling`
+  (tools off: `/` and home stay legal and Load stores the spelling verbatim). Ran against the
+  unmodified code — **failed exactly as H-02 describes**: `dotdot above tmp`, `symlink to root`,
+  `symlink to home`, `relative path resolving to home` all returned nil ("want rejection …"), and Load
+  stored the raw `ws-link` instead of the canonical project dir.
+- **Green (minimum fix, `validate.go` + `load.go`):** one config-local helper `canonicalDir(path)`
+  (filepath.Abs → filepath.EvalSymlinks → IsDir) that mirrors `internal/agent/tools.go canonicalRoot`
+  step-for-step; `validateToolsWorkspace` now canonicalizes the candidate root and rejects canonical
+  `/` and a filesystem-identical home **with the existing stable error texts unchanged**; the home
+  side is canonicalized too (still guarded by `os.UserHomeDir` error, as before). New stable error
+  only for an unresolvable root:
+  `config: tools_enabled: workspace_root: cannot resolve "<ws>": <cause>` (reachable only if the dir
+  vanishes between the earlier stat and EvalSymlinks). **Canonical persistence:** `Load` (step 5 in
+  `load.go`) now replaces `cfg.WorkspaceRoot` with `canonicalDir`'s result when `ToolsEnabled` and the
+  root is non-empty, so every consumer of the Loaded config — agent runner, status bar, later
+  Settings save — receives the canonical directory; the tool layer additionally re-canonicalizes per
+  call, so validation and execution cannot diverge on any path. `tools_enabled=false` behavior
+  untouched (no new rejections, spelling stored verbatim). No `internal/agent` import into config.
+  Existing tests (incl. `home trailing slash`, missing-dir error, precedence, ui `phase4_test`
+  round-trips) unchanged and green.
+- **README wording:** no change needed — README already says "never `/` or your home directory" and
+  the fix makes validation honor exactly that promise for aliases too.
+
+**Commands + exit codes**
+- `git status --short` → empty · `git branch --show-current` → `fix/v0.1.1-audit-remediation` ·
+  `git rev-parse --short HEAD` → `2d6288b` (all 0).
+- RED: `go test -count=1 ./internal/config -run 'Test.*Tools.*Workspace' -v` → **1** (FAIL; the four
+  alias subtests + canonical-storage subtests failed as quoted above). Green after fix: same command
+  → 0 (5 top-level tests incl. 7 sub-cases).
+- Full config package: `go test -count=1 ./internal/config` → 0. `make check` → 0 (build + uncached
+  `go test ./...` all packages + vet + gofmt). `make race` → 0. `gofmt -l cmd internal` empty.
+  `git diff --check` → 0 (clean).
+- Commits: code `5af840b` (3 files, +203/−5) then the docs commit for this entry + runbook tick.
+
+**Decisions / lines to respect**
+- The `/` and home bans are now enforced by **canonical directory identity** (Abs + EvalSymlinks +
+  IsDir), not spelling; the error strings are byte-identical to the pre-H-02 messages so every UI
+  surface reports the same stable text. Only the canonical-`/` and canonical-home values are rejected —
+  symlinks to a real project directory remain legal (test-pinned), and `/tmp/..` must be tested with
+  the raw literal (filepath.Join would pre-clean it to `/` and mask the alias).
+- `canonicalDir` lives in config and must never be replaced by an `internal/agent` import: the two
+  packages implement the same three-step resolution independently so neither imports the other, and
+  any drift between them would show up as validation/execution disagreement — keep them in lockstep.
+- Canonical persistence is a tools-armed property of `Load` only: with tools off, workspace_root
+  values (`/`, home, symlinks, relatives) are stored verbatim and stay legal. Save still writes the
+  current in-memory spelling (canonical after any Load); the Settings live-apply path may hold the
+  raw spelling until the next boot, where the per-call tool-layer canonicalization keeps the jail
+  identical (validated alias can never be executed as `/` or home on the boot or form path).
+- Residual (pre-existing, out of scope): a workspace root whose own entry is retargeted (symlink
+  swap / dir replacement) between validation and a tool call is a TOCTOU the tool layer re-resolves
+  per call — the same accepted residual as in-workspace symlink aliases (audit line 278).
+
+**Blockers / open decisions**
+- None for Task 03. Env note carried from Task 02: `make vuln` needs `$(go env GOPATH)/bin` on PATH.
+
+**Next action**
+- Fresh Pi session: runbook **Task 04 (H-03 — bound native tool streams and total executions)**: confirm
+  branch `fix/v0.1.1-audit-remediation` + clean status, red-green TDD on `internal/ollama/chat.go` +
+  `internal/agent/runner.go` + tests, then record in LEDGER and tick the checklist.
