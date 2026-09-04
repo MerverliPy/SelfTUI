@@ -2163,3 +2163,93 @@ config on startup`.
   `fix/v0.1.1-audit-remediation` + clean status, red-green TDD on `internal/agent/runner.go` +
   `tools.go` + `toolpolicy.go` + `policy_test.go` + `runner_test.go`, then record in LEDGER and tick
   the checklist.
+
+### 2026-09-04 — Runbook Task 02: C-01 policy-aware recursive grep — recursive grep enforces the sensitive-path denylist
+**Milestone:** `SelfTUI-Pi-Audit-Remediation-Runbook-2026-09-04.md` Task 02 (C-01 — make recursive grep
+enforce the sensitive-path policy). No §10 row to tick (runbook-owned step). **Result:** done —
+red-green TDD on branch `fix/v0.1.1-audit-remediation` @ `a85236b`, worktree
+clean, all gates exit 0. Commit: `fix(agent): enforce policy during recursive grep`.
+
+**Work done**
+- **Session-start reads:** AGENTS.md, PLAN.md §§10–12, LEDGER tail (Task-01 handoff), runbook Task-02
+  block + audit finding C-01, `internal/agent/{runner,tools,toolpolicy}.go`,
+  `policy_test.go`, `runner_test.go`, `SECURITY.md`, `mutation.go`, agent-view policy wiring
+  (`internal/ui/agent_view.go:197`). Grep has exactly two call sites: `runner.go:333` (grep tool case)
+  and the direct call in `runner_test.go` (`TestReadOnlyToolsStayInsideWorkspace`).
+- **Root cause confirmed (code + live red evidence):** `runner.go` grep case ran `authorizePath` only
+  on the model-supplied root (`args.Path`), then `tools.go` `Grep` walked the tree with
+  `filepath.WalkDir`, skipping only `.git` and appending every non-symlink file — the policy was never
+  applied to discovered descendants. `SECURITY.md:45-47` promises the denylist covers `.ssh`, `.aws`,
+  `.env*`, etc., so `grep "."` violated the core safety contract (C-01).
+- **Red (TDD):** added `seedSensitiveGrepWorkspace`/`assertGrepLeakFree` helpers in `policy_test.go`
+  (ordinary `GOOD_*` files, `.env.example` template control, and a distinct `LEAK_*` marker per denied
+  class) plus `TestRunnerGrepOverRootHidesPolicyDeniedDescendants` in `runner_test.go`, driving the
+  real runner with a native grep tool call (`pattern "GOOD_|LEAK_"`, `path "."`). Ran against the
+  unmodified production code — **failed exactly as C-01 describes**: output contained
+  `.env:1:LEAK_DOTENV=topsecret`, `.env.local:1:…`, `.ssh/id_rsa:1:…`, `.gnupg/private.key:1:…`,
+  `.aws/credentials:1:…`, `.azure/azureProfile.json:1:…`, `.kube/config:1:…`,
+  `.config/gcloud/application_default_credentials.json:1:…`, `credentials:1:…`,
+  `credentials.json:1:…`, plus nested `proj/sub/.ssh/id_ed25519` and `proj/sub/deep/.env.production`
+  (while `.env.example:1:GOOD_EXAMPLE=dummy` correctly showed).
+- **Green (minimum fix, `tools.go`):** `Grep` now takes `ctx` and an `authorize func(string) error`
+  and applies the policy to **every canonical workspace-relative descendant**: denied directories are
+  pruned with `filepath.SkipDir` before descent (`.ssh`, `.gnupg`, `.aws`, `.azure`, `.kube`,
+  `.config/gcloud`, and any denied dir wherever nested) and denied files are skipped before they are
+  ever opened (`.env*` except `.env.example`, `credentials`, `credentials.json`, wherever nested).
+  Denials are deterministic skips — never whole-operation failures; real traversal/I/O errors (e.g. an
+  unreadable directory) still fail the grep. `.git` skip, `sort.Strings`, `maxSearchBytes`/`maxResultBytes`
+  + `[output truncated]` contract all unchanged.
+- **`context.Context` at the grep boundary now (Task 13/M-06 preparation):** `Grep` checks
+  `ctx.Err()` before the walk, in the walk callback, and before scanning each file, returning promptly
+  on cancellation. `runner.go` grep case passes `ctx` and `r.authorizePath` as the per-descendant
+  callback (top-level `authorizePath` gate kept; Grep re-authorizes descendants so a recursive root
+  cannot read denied files). The only other call site (direct Grep in
+  `TestReadOnlyToolsStayInsideWorkspace`) passes an explicit allow-all callback — no policy intended.
+- **Regression + boundary tests added:** `TestGrepAppliesPolicyToEveryWorkspaceDescendant`
+  (direct Grep over "." with the real policy callback), `TestGrepSkipsNestedDeniedDirectoriesButPreservesIOErrors`
+  (deep `.aws`, deep `.config/gcloud`, nested dotenv skipped; chmod-000 dir still fails the grep —
+  skipped when root), `TestGrepChecksCancellationWhileWalkingAndScanning` (pre-canceled / cancel during
+  walk via the dir-prune hook / cancel between scanned files all surface `context.Canceled`). Denied
+  fixture classes seeded: `.env`, `.env.local`, `.env.production`, `.ssh`, `.gnupg`, `.aws`, `.azure`,
+  `.kube`, `.config/gcloud`, `credentials`, `credentials.json` (all at root and nested). The five-tool
+  surface, `toolpolicy.go` denylist classes, and the `.env.example` carve-out are untouched.
+
+**Commands + exit codes**
+- `git status --short` → empty · `git branch --show-current` → `fix/v0.1.1-audit-remediation` ·
+  `git rev-parse --short HEAD` → `4937931` (all 0).
+- Baseline: `go test -count=1 ./internal/agent` → 0.
+- RED: `go test -count=1 ./internal/agent -run TestRunnerGrepOverRootHidesPolicyDeniedDescendants -v`
+  → **1** (FAIL; leak evidence above). Green after fix: same command → 0.
+- Focused suite: `go test -count=1 ./internal/agent -run 'Test.*(Grep|Policy|Sensitive)'` → 0
+  (9 top-level tests incl. 3 cancellation subtests). Full package: `go test -count=1 ./internal/agent`
+  → 0. `make check` → 0. `make race` → 0.
+- `make vuln` → 0 via `$(go env GOPATH)/bin/govulncheck` (govulncheck is not on the shell PATH;
+  `make vuln` alone exits 127 "No such file or directory" — PATH-environment issue only, same scan
+  binary Task 00 used). `git diff --check` → 0 (clean).
+
+**Decisions / lines to respect**
+- The C-01 fix lives at the Grep boundary (`tools.go`), not in `toolpolicy.go`: `Grep` gains
+  `ctx context.Context` and `authorize func(string) error`; the runner passes its existing
+  `r.authorizePath` (nil policy ⇒ allow-all, unchanged). Direct policy-free callers pass an explicit
+  allow-all callback. `authorize == nil` inside Grep also means allow-all (pre-policy direct-call
+  semantics preserved for any future caller).
+- **Public signature change (reported per runbook):** `Grep(root, pattern, path string)` →
+  `Grep(ctx context.Context, root, pattern, path string, authorize func(string) error)`. No other
+  public function changed; `ListDir`/`ReadFile`/policy/containment untouched. The ctx is the
+  Task-13/M-06 seam so that task does not redesign the API.
+- Policy denials during a walk are silent, deterministic skips (empty result when everything is
+  denied) — do not convert them into whole-operation errors; real I/O errors keep failing the grep.
+- The red test was written against the untouched production code (runner-level regression only, no
+  signature dependency); direct-boundary tests were added in the green step after the signature
+  change made them compilable.
+- Commit shape follows the Task-00/01 precedent: one code commit (`fix(agent): enforce policy during
+  recursive grep`) with the four agent files, then a separate docs commit for this LEDGER entry + the
+  runbook Task-02 tick.
+
+**Blockers / open decisions**
+- None for Task 02. (Env note only: `make vuln` needs `$(go env GOPATH)/bin` on PATH.)
+
+**Next action**
+- Fresh Pi session: runbook **Task 03 (H-02 — canonical workspace validation)**: confirm branch
+  `fix/v0.1.1-audit-remediation` + clean status, red-green TDD on `internal/config/validate.go` +
+  `tools_test.go` + `validate_test.go`, then record in LEDGER and tick the checklist.
