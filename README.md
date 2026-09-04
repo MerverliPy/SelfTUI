@@ -70,14 +70,60 @@ clean reconnect — see `docs/reconnect.md`.
 ```sh
 make build     # bin/selftui
 make run       # go run ./cmd/self-tui
-make test      # unit tests
+make test      # unit tests (uncached)
+make race      # full suite under the race detector
 make lint      # go vet + gofmt check
+make check     # canonical pre-commit gate: build + test + vet + gofmt
+make vuln      # govulncheck ./... (needs govulncheck on PATH)
 selftui -version  # print the build version ("dev" on dev builds)
 ```
 
-Requires Go ≥ 1.25 (`GOTOOLCHAIN=auto` fetches it on demand). Logs go to
-`$XDG_STATE_HOME/selftui/log.txt` — never stderr, so the TUI stays clean over
-SSH.
+Requires Go ≥ 1.25 (`GOTOOLCHAIN=auto` fetches it on demand). **CI and the
+release gates pin Go 1.27.1** — the current official stable release at
+phase-8 time (2026-09-04) — so run the gates locally with the same toolchain
+(`export GOTOOLCHAIN=go1.27.1`, with its `bin` on `PATH`) and your local
+result is the CI result. `make vuln` additionally needs `govulncheck` on
+`PATH` (pinned install: `go install golang.org/x/vuln/cmd/govulncheck@v1.7.0`).
+Logs go to `$XDG_STATE_HOME/selftui/log.txt` — never stderr, so the TUI stays
+clean over SSH.
+
+## Release engineering (v0.1)
+
+Release binaries are static, CGO-disabled Linux builds stamped with a version
+(dev builds default to `dev`):
+
+```sh
+make build-linux-amd64                     # dist/selftui-linux-amd64
+make build-linux-arm64                     # dist/selftui-linux-arm64
+VERSION=v0.1.0 make release-check          # the full gate; never tags
+```
+
+`scripts/release-check.sh` (`VERSION=v0.1.0 make release-check`) is the gate
+a release must pass before the owner tags it. It requires a clean worktree
+and a `VERSION` of the form `v<major>.<minor>.<patch>`, then runs `go mod
+verify`, the gofmt check, `go vet`, uncached tests, race tests,
+`govulncheck`, both Linux builds, a version-stamp check of each binary
+(executed where the host can run it, otherwise the exact string `-X` linked
+in), and writes deterministic archives plus `dist/SHA256SUMS`. The script
+**never creates or pushes a git tag** — tagging `v0.1.0` and publishing the
+release is the owner's separate step.
+
+Artifacts (all under the gitignored `dist/`):
+
+- `dist/selftui-linux-amd64`, `dist/selftui-linux-arm64` — raw static binaries
+- `dist/selftui-<version>-linux-<arch>.tar.gz` — deterministic archives
+  (binary + `LICENSE` + `README.md`)
+- `dist/SHA256SUMS` — sha256 over both archives; verify from the repo root
+  with `sha256sum -c dist/SHA256SUMS`
+
+CI and releases run on GitHub Actions (`.github/workflows/`): `ci.yml` runs
+the same checks as the local gate on every pull request and push to `main`;
+`release.yml` runs only on a pushed `v*` tag — it re-runs the complete
+release gate, verifies the tag is exactly the version stamped into both
+binaries, uploads the two archives + `SHA256SUMS`, and publishes release
+notes generated from `CHANGELOG.md`. Both workflows pin **Go 1.27.1** and
+govulncheck **v1.7.0** and use only GitHub's default `GITHUB_TOKEN` with
+least-privilege permissions — no secrets.
 
 ## Config
 

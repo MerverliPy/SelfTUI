@@ -36,6 +36,28 @@ for tagged releases.
   GitHub's Security tab), `CONTRIBUTING.md`, and this changelog with an
   Unreleased section.
 
+### Added
+
+- **Reproducible CI + release gates (v0.1 hardening phase 8, 2026-09-04).**
+  New Makefile targets: `race` (full suite under the race detector), `vuln`
+  (`govulncheck ./...`), `build-linux-amd64`/`build-linux-arm64` (CGO-disabled
+  static Linux release binaries stamped with `-X main.Version=$(VERSION)`),
+  and `release-check` (runs `scripts/release-check.sh`). The gate script
+  requires a clean worktree and `VERSION=v<major>.<minor>.<patch>`, then runs
+  `go mod verify`, the gofmt check, `go vet`, uncached tests, race tests,
+  `govulncheck`, both Linux builds, per-binary version-stamp verification,
+  and writes deterministic release archives plus `dist/SHA256SUMS` under the
+  gitignored `dist/`; it never creates or pushes a git tag. GitHub Actions
+  workflows were added: `ci.yml` (every pull request + push to `main`) and
+  `release.yml` (`v*` tag pushes — complete release gate, tag-vs-binary-
+  version verification, archive + `SHA256SUMS` upload, release notes from
+  `CHANGELOG.md`). Both pin **Go 1.27.1** (current official stable release,
+  2026-09-04) and govulncheck **v1.7.0**, and use only the default
+  least-privilege `GITHUB_TOKEN` — no secrets. The first `make vuln` run
+  surfaced two reachable advisories in indirect dependencies — goldmark
+  (GO-2026-5320, XSS in the markdown render path) and x/text (GO-2026-5970,
+  infinite loop) — fixed by bumping to goldmark v1.7.17 and x/text v0.39.0.
+
 ### Security
 
 - Earlier v0.1 hardening already removed command execution, made workspace

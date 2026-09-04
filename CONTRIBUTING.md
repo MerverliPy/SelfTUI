@@ -24,19 +24,23 @@ dated release-hardening note at the top.
 
 ## Building and testing
 
-Requires Go ≥ 1.25 (`GOTOOLCHAIN=auto` fetches it on demand).
+Requires Go ≥ 1.25 (`GOTOOLCHAIN=auto` fetches it on demand). CI and the
+release gates pin **Go 1.27.1** (current official stable at phase-8 time);
+run gates locally with the same toolchain so local == CI.
 
 ```sh
 make build     # bin/selftui
 make test      # unit tests (uncached — golden fixture compares always run)
+make race      # full suite under the race detector
 make lint      # go vet + gofmt check
 make check     # canonical pre-commit gate: build + test + vet + gofmt
+make vuln      # govulncheck ./... (install: go install golang.org/x/vuln/cmd/govulncheck@v1.7.0)
 ```
 
-Race detector (always run it on UI/session changes):
+Race detector (or `make race`):
 
 ```sh
-go test -race -count=1 ./internal/ui ./internal/session
+go test -race -count=1 ./...
 ```
 
 Golden render fixtures (testdata/golden) pin the shell at 72×30 and 120×40.
@@ -46,6 +50,19 @@ diff — do not blanket-update without reading what changed:
 ```sh
 go test ./internal/ui -run TestGoldenRender -update
 ```
+
+## Releases
+
+v0.1.x releases are gated end-to-end by `scripts/release-check.sh`
+(`VERSION=v0.1.0 make release-check`): it demands a clean worktree and a
+`VERSION` matching `v<major>.<minor>.<patch>`, then runs module verification,
+gofmt, vet, uncached tests, race tests, `govulncheck`, both CGO-disabled
+Linux builds, per-binary version-stamp checks, deterministic archives, and a
+`SHA256SUMS` manifest under `dist/` (gitignored). The gate **never tags**;
+pushing a `v*` tag is the owner's step and triggers `.github/workflows/
+release.yml`, which re-runs the gate, verifies the tag against both binaries'
+stamped versions, uploads the archives + `SHA256SUMS`, and generates release
+notes from `CHANGELOG.md`. See README "Release engineering (v0.1)".
 
 ## Style of contribution
 

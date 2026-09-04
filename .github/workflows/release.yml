@@ -1,0 +1,136 @@
+# SelfTUI release — runs only when a tag matching v* is pushed.
+#
+# VERSION is the tag itself (e.g. v0.1.0). The job checks out the exact
+# tagged commit (clean worktree by construction), runs the complete release
+# gate (scripts/release-check.sh), then verifies once more that the tag is
+# exactly the version stamped into both Linux binaries before uploading the
+# archives + SHA256SUMS and creating the release with notes generated from
+# CHANGELOG.md.
+#
+# Least privilege: `contents: write` is the minimum needed to create the
+# release and upload its assets; GitHub's default GITHUB_TOKEN is used and no
+# secrets are added.
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  # Current official stable Go release at phase-8 time (2026-09-04).
+  GO_VERSION: "1.27.1"
+  # golang.org/x/vuln release pinned for reproducibility.
+  GOVULNCHECK_VERSION: "v1.7.0"
+  # The pushed tag, e.g. v0.1.0 — release-check.sh stamps this into both
+  # binaries via -X main.Version.
+  VERSION: ${{ github.ref_name }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  release:
+    name: Release ${{ env.VERSION }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go ${{ env.GO_VERSION }}
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Install govulncheck ${{ env.GOVULNCHECK_VERSION }}
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@${{ env.GOVULNCHECK_VERSION }}
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Tag must match v<major>.<minor>.<patch>
+        run: |
+          [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+            echo "ref name '$VERSION' does not match v<major>.<minor>.<patch>"
+            exit 1
+          }
+
+      - name: Run the complete release gate (make release-check)
+        run: make release-check
+
+      - name: Verify the tag is the version stamped into both binaries
+        run: |
+          set -euo pipefail
+          want="selftui $VERSION"
+          for bin in dist/selftui-linux-amd64 dist/selftui-linux-arm64; do
+            if out="$("$bin" -version 2>&1)"; then
+              [[ "$out" == "$want" ]] || {
+                echo "FAIL: $bin reports '$out', want '$want'"
+                exit 1
+              }
+            else
+              case "$out" in
+                *"Exec format error"*|*"cannot execute binary file"*)
+                  # Cross-compiled binary on a foreign host (arm64 on an
+                  # amd64 runner): check the exact string the linker wrote.
+                  strings "$bin" | grep -Fx -- "$VERSION" >/dev/null || {
+                    echo "FAIL: $bin does not embed the string '$VERSION'"
+                    exit 1
+                  }
+                  ;;
+                *)
+                  echo "FAIL: cannot run $bin -version: $out"
+                  exit 1
+                  ;;
+              esac
+            fi
+            echo "ok: $bin -> $want"
+          done
+
+      - name: Generate release notes from CHANGELOG.md
+        run: |
+          set -euo pipefail
+          # Prefer the CHANGELOG section for this exact version (tag or bare
+          # e.g. "## [v0.1.0]" / "## [0.1.0] - 2026-09-04"), then the
+          # [Unreleased] section; if neither exists the publish step falls
+          # back to `gh release create --generate-notes`.
+          extract() {
+            awk -v want="$1" '
+              /^## \[/ { if (insec) exit; if (index($0, "[" want "]")) insec = 1; next }
+              insec { print }
+            ' CHANGELOG.md
+          }
+          body=""
+          for want in "$VERSION" "${VERSION#v}"; do
+            [ -n "$body" ] || body="$(extract "$want")"
+          done
+          [ -n "$body" ] || body="$(extract Unreleased)"
+          if [ -n "$body" ]; then
+            printf '## %s\n\n' "$VERSION" > /tmp/release-notes.md
+            printf '%s\n' "$body" >> /tmp/release-notes.md
+          else
+            rm -f /tmp/release-notes.md
+          fi
+
+      - name: Publish release with archives + SHA256SUMS
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          assets=(
+            dist/selftui-"$VERSION"-linux-amd64.tar.gz
+            dist/selftui-"$VERSION"-linux-arm64.tar.gz
+            dist/SHA256SUMS
+          )
+          if [ -s /tmp/release-notes.md ]; then
+            gh release create "$VERSION" "${assets[@]}" \
+              --title "SelfTUI $VERSION" \
+              --notes-file /tmp/release-notes.md
+          else
+            gh release create "$VERSION" "${assets[@]}" \
+              --title "SelfTUI $VERSION" \
+              --generate-notes
+          fi
