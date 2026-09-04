@@ -277,6 +277,17 @@ The runner emits an ordered stream of `tea.Msg`s:
 - `AgentDoneMsg{ err }` — finalize
 The UI just reacts to messages; it never runs the loop.
 
+> **Phase 6 (2026-09-04): every async child result crosses the App shell in
+> one envelope per child.** All asynchronous results — the Agent's model-list
+> fetches and every chat activity-channel event, and the Models tab's
+> list/show/delete/pull results plus its dialog spinner ticks — are produced
+> wrapped in `agentEventMsg`/`modelsEventMsg` (payload `tea.Msg`).
+> `App.Update` has exactly one case per child (unwrap + delegate), so a newly
+> added async result can never be dropped at the shell again (the
+> 2026-09-06 `ToolConfirmMsg` routing bug). Root-owned messages
+> (`settingsThemeMsg`, `agentThemeMsg`, `settingsSaveDoneMsg`, `WindowSizeMsg`,
+> `KeyMsg`) stay root messages.
+
 ---
 
 ## 7. Views & responsive layout (PC vs iPhone)

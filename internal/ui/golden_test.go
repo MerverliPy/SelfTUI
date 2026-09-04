@@ -69,24 +69,24 @@ func bootApp(t *testing.T, w, h int) App {
 
 func buildModelsCompact(t *testing.T, w, h int) App {
 	m := bootApp(t, w, h)
-	return updateTab(t, m, modelsLoadedMsg{list: sampleModels()})
+	return updateTab(t, m, modelsEventMsg{msg: modelsLoadedMsg{list: sampleModels()}})
 }
 
 func buildModelsCompactInspect(t *testing.T, w, h int) App {
 	m := buildModelsCompact(t, w, h)
 	m = updateTab(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
-	return updateTab(t, m, modelsShowMsg{name: "qwen3:8b", details: sampleDetails()})
+	return updateTab(t, m, modelsEventMsg{msg: modelsShowMsg{name: "qwen3:8b", details: sampleDetails()}})
 }
 
 func buildModelsWideInspect(t *testing.T, w, h int) App {
 	m := buildModelsCompact(t, w, h)
-	return updateTab(t, m, modelsShowMsg{name: "qwen3:8b", details: sampleDetails()})
+	return updateTab(t, m, modelsEventMsg{msg: modelsShowMsg{name: "qwen3:8b", details: sampleDetails()}})
 }
 
 func buildAgent(t *testing.T, w, h int) App {
 	m := bootApp(t, w, h)
 	m = updateTab(t, m, tea.KeyPressMsg{Text: "2"})
-	return updateTab(t, m, agentModelsLoadedMsg{models: sampleModels()})
+	return updateTab(t, m, agentEventMsg{msg: agentModelsLoadedMsg{models: sampleModels()}})
 }
 
 // buildAgentTurn seeds one committed turn (user + assistant with a
@@ -420,17 +420,17 @@ func TestLightThemeRendersEveryTab(t *testing.T) {
 		m = updateTab(t, m, tea.WindowSizeMsg{Width: f.w, Height: f.h})
 		switch f.name {
 		case "models-compact":
-			m = updateTab(t, m, modelsLoadedMsg{list: sampleModels()})
+			m = updateTab(t, m, modelsEventMsg{msg: modelsLoadedMsg{list: sampleModels()}})
 		case "models-compact-inspect":
-			m = updateTab(t, m, modelsLoadedMsg{list: sampleModels()})
+			m = updateTab(t, m, modelsEventMsg{msg: modelsLoadedMsg{list: sampleModels()}})
 			m = updateTab(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
-			m = updateTab(t, m, modelsShowMsg{name: "qwen3:8b", details: sampleDetails()})
+			m = updateTab(t, m, modelsEventMsg{msg: modelsShowMsg{name: "qwen3:8b", details: sampleDetails()}})
 		case "models-wide-inspect":
-			m = updateTab(t, m, modelsLoadedMsg{list: sampleModels()})
-			m = updateTab(t, m, modelsShowMsg{name: "qwen3:8b", details: sampleDetails()})
+			m = updateTab(t, m, modelsEventMsg{msg: modelsLoadedMsg{list: sampleModels()}})
+			m = updateTab(t, m, modelsEventMsg{msg: modelsShowMsg{name: "qwen3:8b", details: sampleDetails()}})
 		case "agent-compact", "agent-wide":
 			m = updateTab(t, m, tea.KeyPressMsg{Text: "2"})
-			m = updateTab(t, m, agentModelsLoadedMsg{models: sampleModels()})
+			m = updateTab(t, m, agentEventMsg{msg: agentModelsLoadedMsg{models: sampleModels()}})
 		case "settings-compact", "settings-wide":
 			m = updateTab(t, m, tea.KeyPressMsg{Text: "3"})
 		}

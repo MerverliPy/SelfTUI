@@ -192,6 +192,17 @@ type modelsPullDoneMsg struct {
 	err  string
 }
 
+// modelsEventMsg is the single envelope the root App accepts for every
+// asynchronous Models command result: the list/show/delete fetches
+// (modelsLoadedMsg/modelsLoadErrMsg/modelsShowMsg/modelsShowErrMsg/
+// modelsDeleteDoneMsg), the streamed pull progress + completion
+// (modelsPullMsg/modelsPullDoneMsg), and the pull dialog's spinner ticks
+// (spinner.TickMsg). App.Update has exactly one routing case per child and
+// unwraps before delegating, so any payload that is produced is routed by
+// construction — a newly added async result can no longer be dropped at the
+// shell (the 2026-09-06 ToolConfirmMsg routing bug).
+type modelsEventMsg struct{ msg tea.Msg }
+
 // Init starts the first list fetch. Called once from the root App.
 func (v ModelsView) Init() tea.Cmd {
 	v.loading = true
@@ -204,9 +215,9 @@ func (v ModelsView) loadCmd() tea.Cmd {
 		defer cancel()
 		models, err := v.client.List(ctx)
 		if err != nil {
-			return modelsLoadErrMsg{err: err.Error()}
+			return modelsEventMsg{msg: modelsLoadErrMsg{err: err.Error()}}
 		}
-		return modelsLoadedMsg{list: models}
+		return modelsEventMsg{msg: modelsLoadedMsg{list: models}}
 	}
 }
 
@@ -216,9 +227,9 @@ func (v ModelsView) showCmd(name string) tea.Cmd {
 		defer cancel()
 		details, err := v.client.Show(ctx, name)
 		if err != nil {
-			return modelsShowErrMsg{name: name, err: err.Error()}
+			return modelsEventMsg{msg: modelsShowErrMsg{name: name, err: err.Error()}}
 		}
-		return modelsShowMsg{name: name, details: details}
+		return modelsEventMsg{msg: modelsShowMsg{name: name, details: details}}
 	}
 }
 
@@ -227,9 +238,9 @@ func (v ModelsView) deleteCmd(name string) tea.Cmd {
 		ctx, cancel := context.WithTimeout(v.ctx, 60*time.Second)
 		defer cancel()
 		if err := v.client.Delete(ctx, name); err != nil {
-			return modelsDeleteDoneMsg{name: name, err: err.Error()}
+			return modelsEventMsg{msg: modelsDeleteDoneMsg{name: name, err: err.Error()}}
 		}
-		return modelsDeleteDoneMsg{name: name}
+		return modelsEventMsg{msg: modelsDeleteDoneMsg{name: name}}
 	}
 }
 
@@ -264,20 +275,20 @@ func (v ModelsView) startPull(name string) (ModelsView, tea.Cmd) {
 		defer close(ch)
 		defer cancel()
 		err := v.client.Pull(ctx, name, func(p ollama.PullProgress) {
-			ch <- modelsPullMsg{name: name, progress: p}
+			ch <- modelsEventMsg{msg: modelsPullMsg{name: name, progress: p}}
 		})
 		if err != nil {
-			ch <- modelsPullDoneMsg{name: name, err: err.Error()}
+			ch <- modelsEventMsg{msg: modelsPullDoneMsg{name: name, err: err.Error()}}
 			return
 		}
-		ch <- modelsPullDoneMsg{name: name}
+		ch <- modelsEventMsg{msg: modelsPullDoneMsg{name: name}}
 	}()
 
 	return v, v.waitPullCmd()
 }
 
 func (v ModelsView) spinnerTick() tea.Cmd {
-	return func() tea.Msg { return v.spinner.Tick() }
+	return func() tea.Msg { return modelsEventMsg{msg: v.spinner.Tick()} }
 }
 
 // ModalOpen reports whether the Models tab is showing a modal (confirm /
@@ -295,6 +306,13 @@ func (v ModelsView) Update(msg tea.Msg) (ModelsView, tea.Cmd) {
 	cmds := make([]tea.Cmd, 0, 3)
 	var cmd tea.Cmd
 	switch msg := msg.(type) {
+	case modelsEventMsg:
+		// The App shell normally unwraps the envelope before delegating; when
+		// the view runs standalone (or a test drives its commands directly)
+		// the wrapped result comes back as-is, so unwrap and re-dispatch to
+		// the same switch.
+		return v.Update(msg.msg)
+
 	case tea.WindowSizeMsg:
 		v.w, v.h = msg.Width, msg.Height
 		return v, nil

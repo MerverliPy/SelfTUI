@@ -208,6 +208,17 @@ type agentDoneMsg struct {
 	reason string // terminal ollama done_reason of the final stream (stop/length)
 }
 
+// agentEventMsg is the single envelope the root App accepts for every
+// asynchronous Agent command result: the model-list fetch results
+// (agentModelsLoadedMsg/agentModelsErrMsg) and every event the chat activity
+// channel delivers (agent.TokenMsg, agent.ToolStartMsg, agent.ToolResultMsg,
+// agent.ToolConfirmMsg, agent.FallbackMsg, agent.AgentDoneMsg, plus the
+// legacy agentTokenMsg/agentDoneMsg). App.Update has exactly one routing case
+// per child and unwraps before delegating, so any payload that is produced is
+// routed by construction — a newly added async result can no longer be
+// dropped at the shell (the 2026-09-06 ToolConfirmMsg routing bug).
+type agentEventMsg struct{ msg tea.Msg }
+
 // agentThemeMsg asks the root App to switch the whole shell theme. The Agent
 // view does not own the palette (settings do), so the slash command /theme
 // emits this and App applies it (M7-A).
@@ -224,15 +235,17 @@ func (v AgentView) loadModelsCmd() tea.Cmd {
 		defer cancel()
 		models, err := v.client.List(ctx)
 		if err != nil {
-			return agentModelsErrMsg{err: err.Error()}
+			return agentEventMsg{msg: agentModelsErrMsg{err: err.Error()}}
 		}
-		return agentModelsLoadedMsg{models: models}
+		return agentEventMsg{msg: agentModelsLoadedMsg{models: models}}
 	}
 }
 
 // startChat begins a streaming agent turn in a background goroutine. The
-// activity channel carries tool events, token deltas, and one final
-// agentDoneMsg. turnStart anchors the per-turn elapsed footer (M7-B).
+// activity channel carries agentEventMsg-wrapped tool events, token deltas,
+// and one final agent.AgentDoneMsg (the shell unwraps before routing, so a
+// chat event can never be dropped at the App again). turnStart anchors the
+// per-turn elapsed footer (M7-B).
 func (v AgentView) startChat() (AgentView, tea.Cmd) {
 	ch := make(chan tea.Msg, 64)
 	ctx, cancel := context.WithCancel(v.ctx)
@@ -258,7 +271,7 @@ func (v AgentView) startChat() (AgentView, tea.Cmd) {
 			Model: model, Messages: history,
 			Temperature: v.temperature, TopP: v.topP, NumCtx: v.numCtx,
 		}, func(msg agent.Msg) {
-			ch <- msg
+			ch <- agentEventMsg{msg: msg}
 		})
 	}()
 
@@ -288,6 +301,13 @@ func (v AgentView) Update(msg tea.Msg) (AgentView, tea.Cmd) {
 	cmds := make([]tea.Cmd, 0, 3)
 	var cmd tea.Cmd
 	switch msg := msg.(type) {
+	case agentEventMsg:
+		// The App shell normally unwraps the envelope before delegating; when
+		// the view runs standalone (or a test drives its commands directly)
+		// the wrapped result comes back as-is, so unwrap and re-dispatch to
+		// the same switch.
+		return v.Update(msg.msg)
+
 	case tea.WindowSizeMsg:
 		v.w, v.h = msg.Width, msg.Height
 		// Wrap width changed: recompose the textarea fit and force a renderer

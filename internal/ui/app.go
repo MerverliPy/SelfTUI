@@ -5,11 +5,9 @@ import (
 	"fmt"
 	"strings"
 
-	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
-	"selftui/internal/agent"
 	"selftui/internal/config"
 	"selftui/internal/ollama"
 )
@@ -199,16 +197,20 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// the same keypress to the tab that was just entered.
 		return a, nil
 
-	case modelsLoadedMsg, modelsLoadErrMsg, modelsShowMsg, modelsShowErrMsg,
-		modelsDeleteDoneMsg, modelsPullMsg, modelsPullDoneMsg, spinner.TickMsg:
-		models, cmd := a.models.Update(msg)
+	case modelsEventMsg:
+		// One envelope per child: every asynchronous Models result (list/show/
+		// delete fetches, streamed pull events, dialog spinner ticks) crosses
+		// the shell wrapped in modelsEventMsg, so a new async result can never
+		// be dropped here again — unwrap and let ModelsView route it.
+		models, cmd := a.models.Update(msg.msg)
 		a.models = models
 		return a, cmd
 
-	case agentModelsLoadedMsg, agentModelsErrMsg, agentTokenMsg, agentDoneMsg,
-		agent.TokenMsg, agent.ToolStartMsg, agent.ToolResultMsg, agent.ToolConfirmMsg,
-		agent.FallbackMsg, agent.AgentDoneMsg:
-		agent, cmd := a.agent.Update(msg)
+	case agentEventMsg:
+		// One envelope per child: every asynchronous Agent result (model-list
+		// fetches, every chat activity-channel event) crosses the shell wrapped
+		// in agentEventMsg — unwrap and let AgentView route it.
+		agent, cmd := a.agent.Update(msg.msg)
 		a.agent = agent
 		return a, cmd
 	default:

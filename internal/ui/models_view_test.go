@@ -170,9 +170,13 @@ func TestModelsViewEnterInspectsOnCompact(t *testing.T) {
 	}
 
 	msg := cmd()
-	show, ok := msg.(modelsShowMsg)
+	ev, ok := msg.(modelsEventMsg)
 	if !ok {
-		t.Fatalf("cmd() = %T, want modelsShowMsg", msg)
+		t.Fatalf("cmd() = %T, want modelsEventMsg envelope", msg)
+	}
+	show, ok := ev.msg.(modelsShowMsg)
+	if !ok {
+		t.Fatalf("envelope payload = %T, want modelsShowMsg", ev.msg)
 	}
 	if show.name != "qwen3:8b" {
 		t.Errorf("show name = %q, want qwen3:8b", show.name)
@@ -510,15 +514,18 @@ func TestModelsViewDialogSwallowsNavKeys(t *testing.T) {
 }
 
 // deleteResultFromCmd runs a command (and any batch of sub-commands the
-// runtime would execute) and extracts the modelsDeleteDoneMsg result.
+// runtime would execute) and extracts the modelsDeleteDoneMsg result from the
+// modelsEventMsg envelope every async command now returns.
 func deleteResultFromCmd(cmd tea.Cmd) (modelsDeleteDoneMsg, bool) {
 	if cmd == nil {
 		return modelsDeleteDoneMsg{}, false
 	}
 	msg := cmd()
 	switch m := msg.(type) {
-	case modelsDeleteDoneMsg:
-		return m, true
+	case modelsEventMsg:
+		if dm, ok := m.msg.(modelsDeleteDoneMsg); ok {
+			return dm, true
+		}
 	case tea.BatchMsg:
 		for _, sub := range m {
 			if dm, ok := deleteResultFromCmd(sub); ok {

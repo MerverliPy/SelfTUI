@@ -704,7 +704,7 @@ func TestAgentViewModalBlocksTabJump(t *testing.T) {
 	m = am.(App)
 
 	// Load the agent model list through the root, then open the Agent tab.
-	m = updateTab(t, m, agentModelsLoadedMsg{models: sampleModels()})
+	m = updateTab(t, m, agentEventMsg{msg: agentModelsLoadedMsg{models: sampleModels()}})
 	m = updateTab(t, m, tea.KeyPressMsg{Text: "2"})
 	if m.tab != 1 {
 		t.Fatalf("tab = %d, want 1", m.tab)

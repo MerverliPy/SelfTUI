@@ -246,9 +246,13 @@ func TestModelsViewParentCancellationStopsList(t *testing.T) {
 		if elapsed := time.Since(start); elapsed > time.Second {
 			t.Errorf("list command returned after %s, want ≤ 1s", elapsed.Round(time.Millisecond))
 		}
-		errMsg, ok := msg.(modelsLoadErrMsg)
+		ev, ok := msg.(modelsEventMsg)
 		if !ok {
-			t.Fatalf("cmd() = %T after parent cancel, want modelsLoadErrMsg (no fabricated list)", msg)
+			t.Fatalf("cmd() = %T after parent cancel, want a modelsEventMsg envelope (no fabricated list)", msg)
+		}
+		errMsg, ok := ev.msg.(modelsLoadErrMsg)
+		if !ok {
+			t.Fatalf("envelope payload = %T after parent cancel, want modelsLoadErrMsg (no fabricated list)", ev.msg)
 		}
 		if !strings.Contains(errMsg.err, "canceled") {
 			t.Errorf("err = %q, want a context-canceled error", errMsg.err)

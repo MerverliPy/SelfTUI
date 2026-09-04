@@ -1254,3 +1254,71 @@ hardening plan; branch tip was `7fea64f`) · **Result:** done — see commit
 **Next action**
 - Fresh session: next owner-assigned step (v0.1 tag/release notes or the
   next hardening phase).
+### 2026-09-04 — v0.1 hardening, phase 6: envelope asynchronous UI events (owner task)
+**Milestone:** owner-assigned step on `hardening/v0.1` (phase 6 of the v0.1
+hardening plan; branch tip was `43698da`) · **Result:** done — commit
+"refactor: envelope asynchronous UI events". No §10 milestone row to tick
+(hardening phases are owner-assigned steps, not PLAN.md §10 milestones).
+
+**Work done**
+- New per-child envelopes `agentEventMsg{ msg tea.Msg }` (agent_view.go) and
+  `modelsEventMsg{ msg tea.Msg }` (models_view.go): the single message shape
+  the root App accepts for each child's asynchronous results.
+- Producer-side wrapping, so routing coverage is structural, not a per-type
+  case list: the Agent model-list loader and the chat activity goroutine post
+  `agentEventMsg` (model-list results + every chat-channel event —
+  Token/ToolStart/ToolResult/ToolConfirm/Fallback/AgentDone + legacy
+  agentTokenMsg/agentDoneMsg); the Models load/show/delete cmds, the pull
+  goroutine (progress + completion), and the pull dialog's spinner ticks all
+  post `modelsEventMsg`.
+- `App.Update` (app.go): the two concrete child case lists are replaced by
+  exactly one case per child that unwraps and delegates to
+  `ModelsView.Update`/`AgentView.Update`; bare `spinner.TickMsg` routing to
+  ModelsView is gone. Root-owned `settingsThemeMsg`, `agentThemeMsg`,
+  `settingsSaveDoneMsg`, `WindowSizeMsg`, `KeyMsg` remain root messages.
+- Each view keeps its concrete cases and adds a one-line unwrap for its own
+  envelope, so a standalone view (or a test that runs the view's commands
+  directly) is self-consistent: wrapped results that come straight back are
+  re-dispatched to the same switch.
+- Tests: new `TestAppEnvelopeRoutingTable` (18 rows — every currently defined
+  async payload, agent and models, injected through its envelope at the root
+  with per-row state assertions proving it reached the intended child,
+  including an enveloped spinner tick advancing the Models dialog spinner);
+  `TestUnrelatedSpinnerTickNotRoutedToModels` (a bare tick is dropped, not
+  silently animating ModelsView); explicit root-flow regressions
+  `TestAppRoutingChatCompletesTurn`, `TestAppRoutingPullCompletesAndReloads`,
+  `TestAppRoutingChatErrorSurfaced`; the existing tool-confirmation and
+  declined-write routing regressions were preserved (envelope-adapted
+  injections; `pumpAgent` unchanged — the chat channel now carries
+  envelopes, which is exactly what the shell routes). Root-level test
+  injections (app/agent_view/m7/golden) now use the envelopes; view-level
+  concrete injections and channel pumps are untouched; direct `cmd()` result
+  assertions (deleteResultFromCmd, show result, canceled list) unwrap the
+  envelope. PLAN §6 "Streaming to UI" gained the phase-6 envelope bullet.
+
+**Commands + exit codes**
+- RED: focused `-run 'TestAppEnvelopeRoutingTable|TestUnrelatedSpinnerTickNotRoutedToModels'`
+  → behavioral FAILs `1` (envelopes dropped at the shell; raw spinner tick
+  silently routed to ModelsView — frame advanced).
+- GREEN: same focused run → `ok` `0`; `go test -count=1 ./internal/ui` `0`;
+  `go test -race -count=1 ./internal/ui` `0` (8.98s, clean); `make check` `0`
+  (build + `go test -count=1 ./...` all packages ok + vet + gofmt).
+
+**Decisions / lines to respect**
+- The envelope is applied at the producer boundary (cmds return it; chat/pull
+  goroutines post it), and the App shell is the only unwrap point in
+  production; the views' own unwrap case exists purely so a standalone view
+  remains a coherent tea.Model when its own wrapped results return to it.
+- Root-bound messages produced by children (agentThemeMsg; settings'
+  settingsThemeMsg/settingsSaveDoneMsg; huh form internals) are deliberately
+  NOT wrapped — the shell routes them itself.
+- Channels stay typed `chan tea.Msg`; the payload is structural, so future
+  payload types are routed by construction.
+
+**Blockers / open decisions**
+- None. v0.1 (tag + release notes) still next; further hardening phases per
+  owner as assigned.
+
+**Next action**
+- Fresh session: next owner-assigned step (v0.1 tag/release notes or the
+  next hardening phase).
