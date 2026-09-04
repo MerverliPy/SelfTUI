@@ -25,6 +25,11 @@ const miB = 1 << 20
 func stallServer(t *testing.T, prefix string) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Drain the request body before parking: only after the body reaches
+		// EOF does net/http arm its client-close-detection background read, so
+		// a handler that never reads r.Body can park forever once the client
+		// disconnects (rare race -> 10m package timeout in CI under 2 vCPU).
+		io.Copy(io.Discard, r.Body)
 		w.Header().Set("Content-Type", "application/x-ndjson")
 		if prefix != "" {
 			io.WriteString(w, prefix)
