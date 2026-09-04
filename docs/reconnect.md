@@ -3,6 +3,14 @@
 **Date:** 2026-09-03 · **Decision:** owner, recorded 2026-09-03 (PLAN §10 M6) ·
 **Transport resolution + smoke:** M6 session (live over Moshi/iPhone 16 Pro).
 
+> **Historical evidence record (2026-09-03; release-hardening label added
+> 2026-09-04).** This page is a dated record of the M6 reconnect runs. The
+> version strings in the evidence below (`0.6.0-m6`) are as-captured log
+> output from those runs — current dev builds print `dev`. Where this page
+> touches the v0.1 product contract (chat is per-process and in-memory; the
+> Markdown transcript export survives exit but is **not** resumable), the
+> 2026-09-04 contract note in `PLAN.md` governs.
+
 ## What "reconnect" means — resolution (live-measured)
 
 SelfTUI runs on the **host** inside a terminal the phone provides over SSH.

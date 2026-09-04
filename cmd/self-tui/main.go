@@ -6,6 +6,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -21,9 +22,17 @@ import (
 	"selftui/internal/ui"
 )
 
-// Version identifies this build; it is logged at startup and printed by
-// selftui -version so release/smoke evidence is attributable (M6).
-const Version = "0.6.0-m6"
+// Version identifies this build; it is printed by `selftui -version` and
+// logged at startup so release/smoke evidence is attributable (M6). It is a
+// var so a build can stamp a concrete version (default "dev").
+var Version = "dev"
+
+// printVersion writes the `selftui -version` output. Kept as one function so
+// the formatting contract ("selftui <Version>") is testable against a
+// temporarily-set Version (see main_test.go).
+func printVersion(w io.Writer) {
+	fmt.Fprintf(w, "selftui %s\n", Version)
+}
 
 func main() {
 	if err := run(); err != nil {
@@ -50,7 +59,7 @@ func run() error {
 	flag.Parse()
 
 	if *flagVersion {
-		fmt.Printf("selftui %s\n", Version)
+		printVersion(os.Stdout)
 		return nil
 	}
 

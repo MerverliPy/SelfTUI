@@ -1,6 +1,7 @@
 # run_command containment design — DEFERRED (not shipped in v0.1)
 
-**Status: deferred-design record (2026-09-03, v0.1 hardening).**
+**Status: historical deferred-design record (2026-09-03, v0.1 hardening) —
+retained for reference; not current product behavior.**
 
 The executor described on this page is **not shipped in v0.1**. Per the public
 v0.1 security decision, SelfTUI exposes no command execution: `run_command` was

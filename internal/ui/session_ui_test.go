@@ -50,7 +50,7 @@ func TestAgentViewPersistsChatSession(t *testing.T) {
 	}
 }
 
-func TestAgentViewSaveCommandShowsPath(t *testing.T) {
+func TestAgentViewExportCommandShowsPath(t *testing.T) {
 	client, _, _ := fakeOllamaUI(t)
 	dir := t.TempDir()
 	v := testAgent(t, client)
@@ -60,21 +60,26 @@ func TestAgentViewSaveCommandShowsPath(t *testing.T) {
 	v, _ = v.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	drainChat(t, &v)
 
-	typeText(t, &v, "/save")
+	typeText(t, &v, "/export")
 	v, _ = v.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if !strings.Contains(v.notice, "session: ") || !strings.Contains(v.notice, filepath.Base(dir)) {
+	if !strings.Contains(v.notice, "transcript: ") || !strings.Contains(v.notice, filepath.Base(dir)) {
 		t.Errorf("notice = %q, want the transcript path", v.notice)
 	}
-	if _, err := os.Stat(strings.TrimPrefix(v.notice, "session: ")); err != nil {
+	if _, err := os.Stat(strings.TrimPrefix(v.notice, "transcript: ")); err != nil {
 		t.Errorf("notice path is not a real file: %v", err)
+	}
+	// The export reports the transcript file; it must never claim the
+	// conversation itself can be resumed from it (chat stays in-memory).
+	if strings.Contains(strings.ToLower(v.notice), "resume") {
+		t.Errorf("notice = %q, must not claim the conversation can be resumed", v.notice)
 	}
 }
 
-func TestAgentViewSaveWithoutRecording(t *testing.T) {
-	// No session dir configured: /save explains recording is off.
+func TestAgentViewExportWithoutRecording(t *testing.T) {
+	// No session dir configured: /export explains recording is off.
 	v := testAgent(t, nil)
 	v, _ = v.Update(agentModelsLoadedMsg{models: sampleModels()})
-	typeText(t, &v, "/save")
+	typeText(t, &v, "/export")
 	v, _ = v.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if !strings.Contains(v.notice, "recording is off") {
 		t.Errorf("notice = %q, want the off-state hint", v.notice)
@@ -84,7 +89,7 @@ func TestAgentViewSaveWithoutRecording(t *testing.T) {
 	v2 := testAgent(t, nil)
 	v2 = v2.WithSessionDir(t.TempDir(), "")
 	v2, _ = v2.Update(agentModelsLoadedMsg{models: sampleModels()})
-	typeText(t, &v2, "/save")
+	typeText(t, &v2, "/export")
 	v2, _ = v2.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if !strings.Contains(v2.notice, "nothing recorded yet") {
 		t.Errorf("notice = %q, want the empty hint", v2.notice)

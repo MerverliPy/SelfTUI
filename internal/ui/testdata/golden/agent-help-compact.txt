@@ -6,7 +6,7 @@
   │ /clear    clear the conversation (asks first)                    │  
   │ /model    pick a model                                           │  
   │ /theme    toggle dark/light for this session                     │  
-  │ /save     flush + show the chat-session file                     │  
+  │ /export   flush + reveal the transcript file path                │  
   │ /help     show this reference                                    │  
   │ /refresh  reload the model list                                  │  
   │                                                                  │  

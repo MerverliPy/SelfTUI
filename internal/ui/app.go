@@ -103,6 +103,13 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		a.w, a.h = msg.Width, msg.Height
+		if a.tooSmall() {
+			// Below the minimum the shell chrome cannot lay out, so the
+			// children keep their last usable geometry and the App renders
+			// the bounded small-terminal message instead (phase 7). The size
+			// is re-forwarded once the window grows back over the minimum.
+			return a, nil
+		}
 		a.models, _ = a.models.Update(msg)
 		a.agent, _ = a.agent.Update(msg)
 		a.settings, _ = a.settings.Update(msg)
@@ -134,6 +141,11 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// ctrl+c always quits the app, even while a settings form is open.
 		if k.Code == 'c' && k.Mod.Contains(tea.ModCtrl) {
 			return a, func() tea.Msg { return tea.Quit() }
+		}
+		// A sub-minimum window shows only the small-terminal notice; no key
+		// (tab jumps, palette, composer, form) reaches the hidden shell.
+		if a.tooSmall() {
+			return a, nil
 		}
 		// Any keypress dismisses the transient status toast before the key
 		// reaches the view it is aimed at.
@@ -317,10 +329,46 @@ func (a *App) applySaved(cfg config.Config) tea.Cmd {
 	return nil
 }
 
+func (a App) tooSmall() bool {
+	// A zero-size frame (no pty size negotiated yet, M0a edge note) is stored
+	// harmlessly and is not "too small": it is not a real geometry.
+	if a.w == 0 || a.h == 0 {
+		return false
+	}
+	return a.w < minTermW || a.h < minTermH
+}
+
+// renderTooSmall is the bounded small-terminal placeholder. Every row is
+// truncated to the window width and the view is capped at the window height,
+// so the message can never overflow — even on a 1x1 frame.
+func (a App) renderTooSmall() string {
+	lines := []string{
+		"terminal too small",
+		"",
+		fmt.Sprintf("current: %dx%d", a.w, a.h),
+		fmt.Sprintf("minimum: %dx%d", minTermW, minTermH),
+		"",
+		"enlarge the window to continue",
+	}
+	if maxRows := maxInt(a.h, 1); len(lines) > maxRows {
+		lines = lines[:maxRows]
+	}
+	out := make([]string, len(lines))
+	for i, l := range lines {
+		out[i] = truncateToWidth(l, maxInt(a.w, 1))
+	}
+	return strings.Join(out, "\n")
+}
+
 // View renders header + active body + status bar. The command palette
 // replaces the active tab's body; the transient note is shown in the status
-// bar's left cell (see Update: every keypress clears it).
+// bar's left cell (see Update: every keypress clears it). Below the minimum
+// window geometry the whole shell is replaced by the bounded small-terminal
+// message.
 func (a App) View() tea.View {
+	if a.tooSmall() {
+		return tea.NewView(a.renderTooSmall())
+	}
 	header := TabBar{Active: a.tab, Styles: a.styles, Width: a.w}.Render()
 
 	var body string

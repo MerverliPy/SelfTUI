@@ -14,7 +14,16 @@ decisions/blockers → next action).
 > **One fresh session per step (binding — see `AGENTS.md`).** A "step" = one milestone
 > (`PLAN.md` §10) or one owner-assigned task. Do not chain a second step in the same
 > session. Finish the chosen step → append this file → commit → stop; start the next step
-> in a new `pi` session with cwd `/home/calvin/SelfTUI`.
+> in a new `pi` session with cwd at this repository's root.
+
+> **Historical record (label added 2026-09-04).** Every `##`/`###` entry below
+> is a dated, append-only record of work and claims **as they stood when the
+> entry was written**. Old product claims retained inside entries — e.g. the
+> transcript command's earlier name, pre-release version strings, the removed
+> `run_command` behavior, planning-era "chat sessions persist" framing, and
+> personal local paths — are **historical**: superseded where they conflict
+> with the 2026-09-04 v0.1 product contract in `PLAN.md` and the dated
+> release-hardening entry appended at the bottom of this log.
 
 ---
 
@@ -1317,6 +1326,115 @@ hardening plan; branch tip was `43698da`) · **Result:** done — commit
 
 **Blockers / open decisions**
 - None. v0.1 (tag + release notes) still next; further hardening phases per
+  owner as assigned.
+
+**Next action**
+- Fresh session: next owner-assigned step (v0.1 tag/release notes or the
+  next hardening phase).
+
+### 2026-09-04 — v0.1 hardening, phase 7: align the product contract (owner task)
+**Milestone:** owner-assigned step on `hardening/v0.1` (phase 7 of the v0.1
+hardening plan; branch tip was `4ebd1fa`) · **Result:** done — commit
+"docs: align product contract for v0.1". No §10 milestone row to tick
+(hardening phases are owner-assigned steps, not PLAN.md §10 milestones).
+
+**Work done**
+- **Version identity.** `const Version = "0.6.0-m6"` → `var Version = "dev"`
+  in `cmd/self-tui/main.go`; the `-version` output is produced by a single
+  `printVersion(w io.Writer)` seam, and a new test temporarily sets `Version`
+  (`dev`, `1.2.3-rc1`, `0.7.0`) and proves the formatting stays exactly
+  `selftui <value>`. Live check: `go run ./cmd/self-tui -version` and
+  `bin/selftui -version` both print `selftui dev`. **No tag was created** in
+  this phase (v0.1.0 tagging stays a separate owner step).
+- **`/save` → `/export` rename.** The Agent slash command that flushes the
+  transcript is now `/export` ("flush + reveal the transcript file path"):
+  slash-command list, help overlay, dispatch case, notice prefix
+  (`session:` → `transcript:`), comments, tests, and the four golden fixtures
+  (agent-help compact/wide, agent-slash compact/wide) all updated. The
+  success notice reports the Markdown transcript path; the test now also
+  asserts the notice never claims the conversation can be resumed. Session
+  files remain append-only Markdown exports (`internal/session` untouched
+  beyond comments).
+- **Deterministic small-terminal state.** New App gate: when a `WindowSizeMsg`
+  arrives below `minTermW=40` or `minTermH=12` (layout.go), the shell stores
+  the geometry and does **not** forward a sub-minimum size to the children
+  (their layouts assume ≥40x12), keys are inert (only `ctrl+c` still quits),
+  and `App.View()` renders a bounded placeholder naming `terminal too small`,
+  the current dimensions, and `minimum: 40x12` — rows truncated to the window
+  width and capped at the window height, so it cannot overflow even at 1x1.
+  A zero-size frame (no pty size negotiated yet) is explicitly **not** "too
+  small" (M0a edge note preserved). New `small_terminal_test.go`: a
+  table-driven boundary suite (39x12 / 40x11 / 39x11 / 39x100 / 200x11 /
+  1x30 / 80x1 / 1x1 / 40x12 / 41x12 / 40x13 / 72x30 / 120x40) asserting the
+  message contract, the normal shell at/above the minimum, and frame
+  boundedness (no row wider than the window, no view taller), plus a Unicode
+  content case (CJK, box drawing, block shading, emoji, combining accent in
+  the Agent transcript) at 40x12/41x12/40x13/72x30/39x12/40x11.
+- **Public docs rewritten to the v0.1 contract** (README, PLAN §top +
+  §12): v0.1 is a single-process Linux/WSL TUI for Ollama; sessions are
+  in-memory with the Markdown transcript export surviving exit but **not**
+  resumable; tools are off by default and require an explicit workspace;
+  command execution is not shipped; non-loopback tokens require HTTPS;
+  native Windows/macOS not supported. README gains a "v0.1 product contract"
+  section and documents the 40x12 minimum + `/export`.
+- **Historical evidence preserved with a dated correction.** LEDGER.md gains
+  this entry + an explicit "Historical record" label at the top (all dated
+  entries below are as-written history; superseded claims are governed by the
+  PLAN contract note). PLAN.md's stale top-level "PLANNING. No implementation
+  code yet." was removed and replaced by a dated release-hardening correction;
+  the remaining old strings in PLAN.md (M3b `run_command`/read-only git row,
+  M6 `0.6.0-m6`, M7-follow-up-2 `/save`) are each annotated "(Historical
+  record…)". docs/reconnect.md and docs/m0a-gate-evidence.md carry explicit
+  historical-evidence labels (version strings there are as-captured);
+  docs/run-command-containment.md is now "historical deferred-design record".
+  COUNCIL-MEMO.md is labeled a historical advisory record and its audited
+  artifact path scrubbed.
+- **Personal absolute paths scrubbed** from README (none), the new
+  CONTRIBUTING/SECURITY, PLAN.md (repo path removed from §2, §10 M0, §11 #1),
+  AGENTS.md (session-ritual cwd now "this repository's root"), COUNCIL-MEMO.md,
+  and the LEDGER preamble (same reword); historical entries inside LEDGER keep
+  them only under the top historical label.
+- **New repo files:** `LICENSE` (Apache-2.0 — no recorded owner decision
+  specified another license), `SECURITY.md` (private vulnerability reporting
+  via GitHub's Security tab; no invented email), `CONTRIBUTING.md`, and
+  `CHANGELOG.md` (Unreleased section). README Project docs list updated.
+
+**Commands + exit codes**
+- `rg -n '0\.6\.0-m6|Chat sessions persist|/save|read-only git|PLANNING\. No
+  implementation' .` → every remaining hit is **historical and explicitly
+  labeled**: dated LEDGER entries (this one included, which quotes the gate
+  patterns), docs/reconnect.md (historical evidence label), and PLAN.md
+  inline "(Historical record…)" annotations; outside those, no hits for any
+  of the five patterns — README/CHANGELOG/docs carry none.
+- RED→GREEN per slice: version test (compile red → green `0`); `/export`
+  tests (behavioral red → green `0`); small-terminal tests (red → green `0`,
+  including 40x12 wide-rune frames with no overflow).
+- `go test -count=1 ./cmd/self-tui ./internal/ui ./internal/session` → ok `0`.
+- `go test -race -count=1 ./internal/ui ./internal/session` → ok `0`.
+- `make check` (build + `go test -count=1 ./...` all packages ok + vet +
+  gofmt) → exit `0`.
+- Golden fixtures regenerated with `go test ./internal/ui -run TestGoldenRender
+  -update`; `git diff` of testdata/golden touches only the four /export
+  fixture lines.
+- Environmental note: two cold-start full `internal/ui` runs failed before any
+  edit (no test named; view-frame output), then passed 10+ consecutive clean
+  runs incl. `-race` — consistent with the documented localhost port-prober
+  flake on strict fake-host tests (see phase-5 LEDGER note), not a code
+  defect; final gate evidence below is from clean runs.
+
+**Decisions / lines to respect**
+- `Version` is a `var` (default `dev`); release tagging stays a separate owner
+  step — **no `v0.1.0` tag in this phase**.
+- The transcript command is `/export` and its copy never claims resumability;
+  "session" naming survives only in internal package/field names.
+- The small-terminal floor is 40x12; sub-minimum sizes never reach child
+  views; zero-size frames are not "too small".
+- Old strings that remain anywhere are historical and explicitly labeled;
+  the v0.1 product contract in PLAN.md/README.md governs current claims.
+- Apache-2.0 LICENSE added (no other recorded owner license decision).
+
+**Blockers / open decisions**
+- None. v0.1 tag + release notes still next; further hardening phases per
   owner as assigned.
 
 **Next action**

@@ -733,8 +733,10 @@ func (v AgentView) WithSessionDir(dir, host string) AgentView {
 	return v
 }
 
-// saveSession flushes the transcript and returns a notice with its path.
-func (v AgentView) saveSession() (AgentView, tea.Cmd) {
+// exportSession flushes the Markdown transcript and reports its path. The
+// export is append-only and cannot be resumed (chat stays in-memory), so the
+// notice reports the file and never claims the conversation can be reloaded.
+func (v AgentView) exportSession() (AgentView, tea.Cmd) {
 	switch {
 	case v.session == nil && v.sessionDir == "":
 		v.notice = "session recording is off — no transcript is written"
@@ -745,7 +747,7 @@ func (v AgentView) saveSession() (AgentView, tea.Cmd) {
 			v.sessionErr = true
 			v.notice = "session log: " + err.Error()
 		} else {
-			v.notice = "session: " + v.session.Path()
+			v.notice = "transcript: " + v.session.Path()
 		}
 	}
 	return v, nil
@@ -764,7 +766,7 @@ func slashCommandList() []slashCommand {
 		{"clear", "clear the conversation (asks first)"},
 		{"model", "pick a model (m)"},
 		{"theme", "toggle dark/light for this session"},
-		{"save", "flush + show the chat-session file path"},
+		{"export", "flush + reveal the transcript file path"},
 		{"help", "list slash commands and keys"},
 		{"refresh", "reload the model list (r)"},
 	}
@@ -838,8 +840,8 @@ func (v AgentView) runSlashCommand() (AgentView, tea.Cmd) {
 	case "help":
 		v.helpOpen = true
 		return v, nil
-	case "save":
-		return v.saveSession()
+	case "export":
+		return v.exportSession()
 	case "refresh":
 		v.loading = true
 		v.modelsErr = ""
@@ -1549,7 +1551,7 @@ func (v AgentView) renderConfirmationOverlay(bodyH int) string {
 }
 
 // slashMenuMaxRows fits the whole command set (six commands as of the
-// /save addition) so the menu never needs its own scroll.
+// /export rename) so the menu never needs its own scroll.
 const slashMenuMaxRows = 6
 
 // renderSelectorOverlay centers the model picker over the body. The picker
@@ -1614,7 +1616,7 @@ func (v AgentView) renderHelpOverlay(bodyH int) string {
 		" /clear    clear the conversation (asks first)",
 		" /model    pick a model",
 		" /theme    toggle dark/light for this session",
-		" /save     flush + show the chat-session file",
+		" /export   flush + reveal the transcript file path",
 		" /help     show this reference",
 		" /refresh  reload the model list",
 		"",

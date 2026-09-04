@@ -1,6 +1,13 @@
 # Council Audit Memo — SelfTUI Plan
 
-**Date:** 2026-09-03 · **Audited artifact:** `/home/calvin/TUI/PLAN.md` · **Status:** CONVERGED
+**Date:** 2026-09-03 · **Audited artifact:** the pre-M0 plan document (then at a
+local path under the owner's home dir; since renamed/moved — see LEDGER
+2026-09-03) · **Status:** CONVERGED
+
+> **Historical advisory record (2026-09-03).** This memo audited the
+> *planning-era* roadmap and is retained verbatim as history. Product claims
+> it repeats (full coding agent incl. commands; PC + iPhone framing) predate
+> the v0.1 hardening — see the 2026-09-04 product contract in `PLAN.md`.
 
 ---
 

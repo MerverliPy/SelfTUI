@@ -6,7 +6,20 @@
 > identically on PC (native terminal) and iPhone 16 Pro (SSH into the host, responsive to
 > narrow screens).
 
-> **Status: PLANNING.** No implementation code yet.
+> **Status (2026-09-04):** v0.1 release hardening on `hardening/v0.1`.
+>
+> **Release-hardening correction (2026-09-04, owner task — phase 7 of the v0.1
+> hardening plan).** The public **v0.1 product contract** is: a **single-process
+> Linux/WSL TUI for Ollama** (native Windows/macOS not supported); **chat is
+> in-memory per process** — the per-process Markdown transcript under the XDG
+> state dir survives exit as an append-only export but **cannot be resumed**
+> (no reload/import path in v0.1); **workspace tools are off by default** and
+> require an explicitly trusted project workspace root; **command execution is
+> not shipped**; a bearer token on a **non-loopback host requires `https://`**.
+> Planning-era prose above and milestone rows below predate this note: they
+> are **historical records**, and where they conflict with this contract the
+> contract wins. See `CHANGELOG.md` (Unreleased) and the dated phase-7
+> `LEDGER.md` entry.
 
 ---
 
@@ -37,8 +50,8 @@
   so remote hosts (needed for iPhone-only workflows) are supported.
 - **Markdown rendering:** `glamour` for GitHub-flavored markdown with syntax-highlighted
   code blocks in agent/chat output.
-- **Repository:** standalone git repo at `/home/calvin/SelfTUI`; `/TUI` gitignored by the
-  parent dotfiles repo so the code never pollutes it.
+- **Repository:** standalone git repo (created 2026-09-03; rename/setup record
+  in LEDGER). It lives outside the dotfiles tree, so the code never pollutes it.
 
 ---
 
@@ -352,8 +365,8 @@ Re-cut per `COUNCIL-MEMO.md`. Principle: **each milestone is a ship gate**, safe
 controls ship inline with the tool that exposes them, and the **agent scope is gated on
 an evidence spike — model management + plain chat are not.**
 
-**M0 — Repo + skeleton + minimal config.** ✅ *done 2026-09-03 — see LEDGER* standalone git repo at `/home/calvin/SelfTUI`
-(dotfiles ignores it by default, so no `.gitignore` step needed there); `go.mod`, Charm
+**M0 — Repo + skeleton + minimal config.** ✅ *done 2026-09-03 — see LEDGER*
+standalone git repo (setup record in LEDGER 2026-09-03); `go.mod`, Charm
 dependency set pinned; root model + tab/status bar;
 config load; **responsive shell + breakpoint system at measured sizes** (not an assumed
 88-col); cancellation plumbing. ✅ *Exit: app boots, tabs work, clean build, Charm set compiles.*
@@ -393,7 +406,9 @@ mutation surfaced.**
 `go` and read-only `git` argv (no shell/interpreters), scrubbed environment, 30s
 default/60s cap, 256 KiB per stream, process-group cancellation, serialization,
 context budgeting, and focused UI/executor tests. ✅ *Exit: agent writes/edits files
-and runs allowed commands, all gated + tested.*
+and runs allowed commands, all gated + tested.* *(Historical milestone record:
+`run_command` — including the read-only `git` argv — was removed from v0.1 on
+2026-09-03; see the removal note below and the product contract at the top.)*
 
 > **2026-09-03 — v0.1 hardening: command execution removed.** Public v0.1 does not
 > expose or retain `run_command`. The executor, its tool schema, and its dispatch case
@@ -435,6 +450,8 @@ in the Agent chat input switched tabs mid-prompt** — fixed: digits jump only
 from Models / an empty chat input (regression test). Dead `compactToolResult`
 helper removed. `selftui -version` prints `0.6.0-m6` and is logged at startup.
 `make check` + `go test -race` green; README ships the reconnect guidance.
+*(Historical record: that version string is what the M6 build printed; current
+builds default `Version` to `dev` — see the 2026-09-04 product-contract note.)*
 *(Hardening was pushed inline into each tool's milestone, so M6 is acceptance, not the
 first safety gate.)*
 
@@ -489,7 +506,10 @@ files under `$XDG_STATE_HOME/selftui/sessions/chat-<ts>-<pid>.md` (0600),
 conversation survives exit and is inspectable (the owner asked for this so
 past chats are recoverable). New `/save` slash command flushes + reveals the
 path; `SELFTUI_SESSION_DIR` overrides the dir, `SELFTUI_NO_SESSION=1`
-disables; errors disable once with one notice. Slash menu grew to six
+disables; errors disable once with one notice. *(Historical record: the
+`/save` command was renamed `/export` in the 2026-09-04 release-hardening
+pass; the transcript remains an append-only export that cannot be resumed.)*
+Slash menu grew to six
 commands (menu cap 6). Goldens 19 frames; `make check` + `go test -race`
 green. *Still next: v0.1 (tag + release notes).*
 
@@ -499,7 +519,7 @@ green. *Still next: v0.1 (tag + release notes).*
 
 | # | Item | Notes / needed decision |
 |---|------|--------------------------|
-| 1 | **Git ownership** ✅ *decided + set up* | Standalone repo at `/home/calvin/SelfTUI`; `git init` done (dotfiles `.gitignore` uses `*` default-ignore, so no extra step was needed). |
+| 1 | **Git ownership** ✅ *decided + set up* | Standalone repo; `git init` done (setup record in LEDGER 2026-09-03). |
 | 2 | **Markdown rendering** ✅ *decided* | Use `glamour` for GitHub-flavored markdown. |
 | 3 | **Agent tool breadth** | "Full coding agent" is large. v1 tool set is bounded by the read-only (M3a) then mutation (M3b) split. Confirm whether git-awareness/project-indexing/multi-file apply belong in v1 or later. |
 | 4 | **Coding model + dispatch** | *OD3 resolved:* default agent model = **`qwen3:8b`** (native tool PASS). Dual dispatch (native `tool_calls` + content-embedded tool-JSON) stays required for pick-any-model (`qwen2.5-coder` content-JSON; `gemma3` → 400 → explicit non-agent fallback). Agent loop must handle qwen3 `thinking` phase. |
@@ -539,7 +559,12 @@ right side when the opencode-composer follow-up landed (see §10 M7 note),
 pgup/pgdn + `f` follow (B), context meter
 + filter-as-you-type model picker with the default starred (C); `make check`
 and `go test -race` green, 10 new golden frames (17 total) at 72×30/120×40.
-Next: **v0.1 release** (tag `v0.1.0` + release notes) in a fresh session.
+**v0.1 hardening phases 1–7 landed 2026-09-03/04** on `hardening/v0.1`
+(root cancellation, command execution removed, config validated + atomically
+saved, explicit workspace tool trust, bounded streams, enveloped UI events,
+product-contract docs) — see LEDGER for each dated phase entry.
+Next: **v0.1 release** (tag `v0.1.0` + release notes) in a fresh session; do
+not tag in a hardening phase.
 
 ---
 

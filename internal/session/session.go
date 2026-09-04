@@ -54,7 +54,7 @@ func Open(dir, host string) (*Log, error) {
 	return l, nil
 }
 
-// Path returns the transcript file path (for the /save hint and error text).
+// Path returns the transcript file path (for the /export hint and error text).
 func (l *Log) Path() string {
 	if l == nil {
 		return ""
@@ -93,7 +93,7 @@ func (l *Log) Append(role, model, content, meta string, at time.Time) error {
 	return nil
 }
 
-// Flush makes every appended turn durable (used by /save and before reads).
+// Flush makes every appended turn durable (used by /export and before reads).
 func (l *Log) Flush() error {
 	if l == nil {
 		return nil

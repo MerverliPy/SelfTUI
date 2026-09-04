@@ -10,7 +10,8 @@ M3a, M3b, M4, M5, M6) **or** one clearly-scoped task the owner assigns in a mess
 
 1. **One step per session (binding).** Never start a new step in the same session that
    completed a step. When a step is done (changes committed), the session STOPS. The
-   next step is begun only by opening a **new `pi` session with cwd `/home/calvin/SelfTUI`**.
+   next step is begun only by opening a **new `pi` session with cwd at this
+   repository's root**.
 2. **Session-start ritual (read-only, in this order):**
    `AGENTS.md` → `PLAN.md` §10 (roadmap) + §11 (risks/owner decisions) → **the tail of
    `LEDGER.md`** (latest handoff). Then choose **exactly one** step. Do not re-plan the

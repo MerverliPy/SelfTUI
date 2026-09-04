@@ -14,6 +14,12 @@ const (
 	// 16 Pro in portrait, default font. Anchor for the compact range.
 	devicePortraitCols = 72
 
+	// minTermW/minTermH are the smallest window SelfTUI renders its shell in.
+	// Below either bound the shell chrome cannot lay out, so the App shows a
+	// bounded "terminal too small" message instead (phase 7 hardening).
+	minTermW = 40
+	minTermH = 12
+
 	// compactMax is the widest "compact" layout: stacked panels, full-width
 	// controls. Holds the measured portrait width (72) with margin for
 	// zoomed-in fonts (~60–78 cols).
