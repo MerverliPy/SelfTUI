@@ -1,5 +1,4 @@
   Models    Agent    Settings                                           
-                                                                        
   ╭──────────────────────────────────────────────────────────────────╮  
   │Help                                                              │  
   │                                                                  │  
@@ -7,6 +6,7 @@
   │ /clear    clear the conversation (asks first)                    │  
   │ /model    pick a model                                           │  
   │ /theme    toggle dark/light for this session                     │  
+  │ /save     flush + show the chat-session file                     │  
   │ /help     show this reference                                    │  
   │ /refresh  reload the model list                                  │  
   │                                                                  │  

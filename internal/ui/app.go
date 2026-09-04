@@ -207,6 +207,14 @@ func (a App) canOpenPalette() bool {
 	return !a.paletteOpen && !a.settings.Editing() && !a.models.ModalOpen() && !a.agent.ModalOpen() && !a.agent.streaming
 }
 
+// WithSessionDir enables Agent chat transcript persistence under dir (the
+// resolved state dir; empty disables). Called by main after New; the host is
+// recorded in each transcript's header.
+func (a App) WithSessionDir(dir, host string) App {
+	a.agent = a.agent.WithSessionDir(dir, host)
+	return a
+}
+
 // applyTheme re-themes the whole shell (styles, tab chrome, and every child
 // view). Used for live Theme previews and after a saved theme change, plus
 // the session-only /theme toggles.

@@ -866,3 +866,50 @@ interrupt; model chip as a display chip, picker trigger stays `m`)
 
 **Next action**
 - Fresh session: tag v0.1.0 + release notes.
+
+### 2026-09-06 — Chat-session persistence (owner task: "do that" on recoverable chats)
+**Milestone:** owner task · **Result:** done — committed turns now mirror to a
+per-process markdown transcript; `make check` + `go test -race` green.
+
+**Work done**
+- `internal/session`: append-only transcript writer. `Open(dir, host)` makes
+  the sessions dir (0700) + `chat-<ts>-<pid>.md` (0600, append mode) with a
+  small header (# SelfTUI chat session / started / host); `Append(role,
+  model, content, meta, at)` writes readable `## user/assistant (model) ·
+  HH:MM:SS · meta` blocks preserving content verbatim; Flush/Close. Unit
+  tests: perms, header, block format incl multi-line content, fresh file per
+  run (sub-second + pid name), nil-safety, unknown-role error.
+- UI wiring: AgentView holds `sessionDir/sessionHost/session` and lazily
+  opens the log on the first committed turn (`appendSessionTurn` on the user
+  append in sendInput and on the assistant commit in onChatDone, with the
+  elapsed·reason meta). A write failure disables the log once and shows one
+  notice — chat never blocks or breaks for the transcript. `WithSessionDir`
+  on AgentView and App; main resolves the dir (default
+  `$XDG_STATE_HOME/selftui/sessions` via xdg.StateHome, `SELFTUI_SESSION_DIR`
+  override, `SELFTUI_NO_SESSION=1` disable) and logs it at startup.
+- `/save` slash command: flush + notice with the transcript path (also
+  explains the off state and the nothing-recorded-yet state). Slash menu is
+  now six commands — menu cap raised 5→6 so the whole set fits; help overlay
+  + README updated (location, env knobs, `/save`).
+
+**Commands + exit codes**
+- `go build ./...` `0` · `go vet ./...` `0` · `gofmt -l .` empty
+- `go test ./... -count=1` `0` (agent/config/ollama/session/ui/cmd)
+- `go test -race ./...` `0` · `make check` `0`
+- `go test ./internal/ui -run TestGoldenRender -update` `0` (help/slash
+  fixtures regenerated for /save + 6-row menu; 19 frames total)
+
+**Decisions / lines to respect**
+- Recording is ON by default (owner asked for recoverable chats); env knobs:
+  `SELFTUI_SESSION_DIR` to relocate, `SELFTUI_NO_SESSION=1` to disable.
+- One file per process run (chat is per-process); /clear within a run does
+  not start a new file. Files are plain markdown (0600) — inspectable by the
+  owner or by tooling, e.g. `rg '^## ' ~/.local/state/selftui/sessions/`.
+- Transcript writes happen on the update loop but are tiny and synchronous;
+  errors degrade to one notice, never an error state.
+
+**Blockers / open decisions**
+- None. v0.1 release (tag + release notes) still next.
+
+**Next action**
+- Fresh session: tag v0.1.0 + release notes.

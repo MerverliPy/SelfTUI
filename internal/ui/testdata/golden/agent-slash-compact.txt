@@ -13,12 +13,12 @@
 │                                                                      │
 │                                                                      │
 │                                                                      │
-│                                                                      │
 ╰──────────────────────────────────────────────────────────────────────╯
 ╭──────────────────────────────────────────────────────────────────────╮
 │❯ /clear  clear the conversation (asks first)                         │
 │  /model  pick a model (m)                                            │
 │  /theme  toggle dark/light for this session                          │
+│  /save  flush + show the chat-session file path                      │
 │  /help  list slash commands and keys                                 │
 │  /refresh  reload the model list (r)                                 │
 ╰──────────────────────────────────────────────────────────────────────╯

@@ -366,7 +366,10 @@ recovers (tags 200 in 1.4 ms). The **fresh-SSH death** shape (plain ssh: drop
 deterministically by the new `make smoke-reconnect` harness
 (`scripts/reconnect-smoke.py`): 72×30 boot, mid-generation drop → SIGHUP
 death (rc=-1), host recovery (generation round-trip 0.1 s), clean fresh
-reconnect with config re-applied — PASS ×3. `cmd/size-probe` extended with
+reconnect with config re-applied — PASS ×3. *(Chat is per-process: the live
+conversation lives in the process; since the 2026-09-06 persistence task,
+committed turns are also mirrored to a per-process session file under the
+XDG state dir so a dropped/quit process leaves a recoverable transcript.)* `cmd/size-probe` extended with
 session headers (pid + `-session` tag) and checkpoints (`c` / SIGUSR1) so
 probe.txt is attributable session blocks. Auth/TLS: bearer-token tests on the
 stream endpoints and real-TLS tests (trusted handshake over https on JSON +
@@ -425,6 +428,18 @@ from a footer row onto the assistant header's right side; `esc` while
 running is now an **armed interrupt** (first esc warns “esc again to
 interrupt”, second cancels). Goldens grew to 19 frames; `make check` +
 `go test -race` green. *Still next: v0.1 (tag + release notes).*
+
+**M7 follow-up 2 — chat-session persistence (owner task 2026-09-06).**
+Chat stays in-memory, but committed turns now mirror to a per-process
+markdown transcript (`internal/session`, lazy open on the first message):
+files under `$XDG_STATE_HOME/selftui/sessions/chat-<ts>-<pid>.md` (0600),
+`## user/assistant (model) · time · meta` blocks with raw content, so a
+conversation survives exit and is inspectable (the owner asked for this so
+past chats are recoverable). New `/save` slash command flushes + reveals the
+path; `SELFTUI_SESSION_DIR` overrides the dir, `SELFTUI_NO_SESSION=1`
+disables; errors disable once with one notice. Slash menu grew to six
+commands (menu cap 6). Goldens 19 frames; `make check` + `go test -race`
+green. *Still next: v0.1 (tag + release notes).*
 
 ---
 

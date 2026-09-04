@@ -123,6 +123,11 @@ func run() error {
 	}
 	rootLog.Info("starting", "version", Version, "host", cfg.Host, "theme", cfg.Theme, "config", cfg.ConfigPath())
 
+	// --- chat-session transcript dir (owner feature): every committed turn
+	// is appended to a per-process file here, so a conversation survives the
+	// process. SELFTUI_NO_SESSION=1 disables; SELFTUI_SESSION_DIR overrides.
+	rootLog.Info("session dir", "path", sessionDirForRun())
+
 	// --- cancellation plumbing: SIGINT/SIGTERM cancel a root context that
 	// the program and (from M1+) background jobs share ---
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -131,6 +136,7 @@ func run() error {
 	// --- bootstrap the program ---
 	client := ollama.New(cfg.Host, cfg.AuthToken)
 	m := ui.New(&cfg, ui.NewStyles(cfg.Theme), client)
+	m = m.WithSessionDir(sessionDirForRun(), cfg.Host)
 	p := tea.NewProgram(m, tea.WithContext(ctx))
 	rootLog.Info("program running")
 	if _, err := p.Run(); err != nil {
@@ -139,4 +145,20 @@ func run() error {
 	cancel()
 	rootLog.Info("shutdown clean")
 	return nil
+}
+
+// sessionDirForRun resolves the chat-transcript directory: SELFTUI_NO_SESSION=1
+// disables recording, SELFTUI_SESSION_DIR overrides the default (the XDG state
+// dir, next to log.txt). An empty result leaves chat in-memory only.
+func sessionDirForRun() string {
+	if os.Getenv("SELFTUI_NO_SESSION") == "1" {
+		return ""
+	}
+	if v := os.Getenv("SELFTUI_SESSION_DIR"); v != "" {
+		return v
+	}
+	if xdg.StateHome == "" {
+		return ""
+	}
+	return filepath.Join(xdg.StateHome, "selftui", "sessions")
 }

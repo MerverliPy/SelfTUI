@@ -15,6 +15,7 @@ import (
 	"selftui/internal/agent"
 	"selftui/internal/config"
 	"selftui/internal/ollama"
+	"selftui/internal/session"
 )
 
 // AgentView is the Agent tab (PLAN.md §7): a streaming transcript rendered
@@ -76,6 +77,15 @@ type AgentView struct {
 	input   textarea.Model
 	chatErr string
 	notice  string
+
+	// Chat-session persistence: when sessionDir is set, committed turns are
+	// appended to a per-process transcript file under it (session.Open).
+	// Errors disable the log once and surface one notice; chat never blocks
+	// on the disk.
+	sessionDir  string
+	sessionHost string // recorded in the transcript header (best effort)
+	session     *session.Log
+	sessionErr  bool
 
 	// Composer (M7-A): slash-command drafting. The menu is derived from the
 	// live input value (typing "/cl" filters to clear), so there is no
@@ -379,6 +389,7 @@ func (v AgentView) onChatDone(m agentDoneMsg) (AgentView, tea.Cmd) {
 		v.turnModel = append(v.turnModel, v.model)
 		v.turnMeta = append(v.turnMeta, meta)
 		v.render = append(v.render, v.renderBlock(v.assistantHeaderRow(v.model, meta), v.streamText))
+		v = v.appendSessionTurn("assistant", v.model, v.streamText, meta, time.Now())
 		v.streamText = ""
 	}
 
@@ -631,7 +642,62 @@ func (v AgentView) sendInput() (AgentView, tea.Cmd) {
 	v.turnMeta = append(v.turnMeta, "") // placeholder keeps turnMeta aligned with history
 	v.render = append(v.render, v.renderBlock(v.userHeader(), text))
 	v.checkContextBudget()
+	v = v.appendSessionTurn("user", v.model, text, "", time.Now())
 	return v.startChat()
+}
+
+// appendSessionTurn mirrors a committed message into the per-process session
+// transcript (lazily opened on the first message). I/O happens on the update
+// loop but is tiny; on any error the log is disabled and one notice tells the
+// user where it failed — a transcript is never worth breaking the chat for.
+func (v AgentView) appendSessionTurn(role, model, content, meta string, at time.Time) AgentView {
+	if v.sessionDir == "" || v.sessionErr {
+		return v
+	}
+	if v.session == nil {
+		sess, err := session.Open(v.sessionDir, v.sessionHost)
+		if err != nil {
+			v.sessionErr = true
+			v.notice = "session log: " + err.Error()
+			return v
+		}
+		v.session = sess
+	}
+	if err := v.session.Append(role, model, content, meta, at); err != nil {
+		v.session.Close()
+		v.session = nil
+		v.sessionErr = true
+		v.notice = "session log: " + err.Error()
+	}
+	return v
+}
+
+// WithSessionDir enables transcript persistence under dir with host recorded
+// in the file header (called by the root App; empty dir disables).
+func (v AgentView) WithSessionDir(dir, host string) AgentView {
+	v.sessionDir = dir
+	v.sessionHost = host
+	v.session = nil
+	v.sessionErr = false
+	return v
+}
+
+// saveSession flushes the transcript and returns a notice with its path.
+func (v AgentView) saveSession() (AgentView, tea.Cmd) {
+	switch {
+	case v.session == nil && v.sessionDir == "":
+		v.notice = "session recording is off — no transcript is written"
+	case v.session == nil:
+		v.notice = "nothing recorded yet — send a message first"
+	default:
+		if err := v.session.Flush(); err != nil {
+			v.sessionErr = true
+			v.notice = "session log: " + err.Error()
+		} else {
+			v.notice = "session: " + v.session.Path()
+		}
+	}
+	return v, nil
 }
 
 // --- slash commands (M7-A) ------------------------------------------------
@@ -647,6 +713,7 @@ func slashCommandList() []slashCommand {
 		{"clear", "clear the conversation (asks first)"},
 		{"model", "pick a model (m)"},
 		{"theme", "toggle dark/light for this session"},
+		{"save", "flush + show the chat-session file path"},
 		{"help", "list slash commands and keys"},
 		{"refresh", "reload the model list (r)"},
 	}
@@ -720,6 +787,8 @@ func (v AgentView) runSlashCommand() (AgentView, tea.Cmd) {
 	case "help":
 		v.helpOpen = true
 		return v, nil
+	case "save":
+		return v.saveSession()
 	case "refresh":
 		v.loading = true
 		v.modelsErr = ""
@@ -1371,7 +1440,9 @@ func (v AgentView) renderConfirmationOverlay(bodyH int) string {
 	return v.renderOverlayTitle(bodyH, "Confirm mutation", lines)
 }
 
-const slashMenuMaxRows = 5
+// slashMenuMaxRows fits the whole command set (six commands as of the
+// /save addition) so the menu never needs its own scroll.
+const slashMenuMaxRows = 6
 
 // renderSelectorOverlay centers the model picker over the body. The picker
 // filters as you type (any printable key extends the filter across name,
@@ -1435,6 +1506,7 @@ func (v AgentView) renderHelpOverlay(bodyH int) string {
 		" /clear    clear the conversation (asks first)",
 		" /model    pick a model",
 		" /theme    toggle dark/light for this session",
+		" /save     flush + show the chat-session file",
 		" /help     show this reference",
 		" /refresh  reload the model list",
 		"",

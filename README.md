@@ -12,7 +12,14 @@ a header row with the model chip and a live context meter plus token usage
 (`ctx ▓▓░░ 38% · 1.2k/3.1k`), an auto-growing prompt, and a statusline under
 it that turns red at the truncation point and surfaces the omission marker in
 the transcript. The model picker filters as you type and stars the configured
-default. The Settings tab (huh forms) edits the whole config surface and
+default. **Chat sessions persist**: every committed turn is appended to a
+per-process transcript file under `~/.local/state/selftui/sessions/` (0600,
+plain markdown — `## user (qwen3:8b)` / `## assistant (…)` blocks with
+timestamps and the elapsed·reason meta), so a conversation stays recoverable
+and inspectable after the process exits. `/save` in the Agent input flushes
+and shows the file path; `SELFTUI_SESSION_DIR` overrides the directory and
+`SELFTUI_NO_SESSION=1` turns recording off (chat then stays in-memory only).
+The Settings tab (huh forms) edits the whole config surface and
 writes it back to the config file with in-session live apply. Golden render
 fixtures pin the shell — including every M7 overlay and the composer layout
 — at the two canonical geometries, the measured Moshi portrait device
@@ -68,7 +75,8 @@ prompt (up to four rows), and below the box a statusline that shows the
 running state with an **armed interrupt** (`esc` arms, `esc` again cancels —
 a stray esc can't kill a run) or the key legend. A **`/`** in the prompt opens
 the command menu — `/clear` (asks first), `/model`, `/theme` (session toggle;
-save in Settings to keep it), `/help` (command reference), `/refresh` —
+save in Settings to keep it), `/help` (command reference), `/refresh`, and
+`/save` (flush + show the chat-session file path) —
 filtered as you type; arrows move and `enter` runs. Idle `esc` clears a
 drafted prompt. Every finished assistant message shows elapsed time and why
 it stopped (`· stop` / `· length` / `· stopped`) right-aligned on its header;
