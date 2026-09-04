@@ -65,6 +65,7 @@ func TestAppRoutingShowsMutationConfirm(t *testing.T) {
 
 	cfg := config.Default()
 	cfg.WorkspaceRoot = root // the agent writes here, not the repo cwd
+	cfg.ToolsEnabled = true  // this flow exercises the armed tool surface
 	m := New(&cfg, NewStyles("dark"), ollama.New(srv.URL, ""))
 	m = updateTab(t, m, tea.WindowSizeMsg{Width: 88, Height: 40})
 	m = updateTab(t, m, agentModelsLoadedMsg{models: sampleModels()})
@@ -137,6 +138,7 @@ func TestAppRoutingDeclineSkipsWrite(t *testing.T) {
 
 	cfg := config.Default()
 	cfg.WorkspaceRoot = root
+	cfg.ToolsEnabled = true
 	m := New(&cfg, NewStyles("dark"), ollama.New(srv.URL, ""))
 	m = updateTab(t, m, tea.WindowSizeMsg{Width: 88, Height: 40})
 	m = updateTab(t, m, agentModelsLoadedMsg{models: sampleModels()})

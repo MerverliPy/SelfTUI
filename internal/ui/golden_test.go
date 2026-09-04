@@ -341,8 +341,7 @@ func TestApprovalOverlayFitsDevice(t *testing.T) {
 			}
 		}))
 		defer srv.Close()
-		cfg := config.Default()
-		v := NewAgentViewWithWorkspace(ollama.New(srv.URL, ""), NewStyles("dark"), "dark", "", root, cfg.Agent)
+		v := newAgentTools(t, ollama.New(srv.URL, ""), srv.URL, root)
 		v, _ = v.Update(tea.WindowSizeMsg{Width: w, Height: h})
 		v, _ = v.Update(agentModelsLoadedMsg{models: sampleModels()})
 		typeText(t, &v, "write big")

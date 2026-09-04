@@ -29,7 +29,7 @@ import (
 //   - esc (discard) or a write failure leaves the config file and in-session
 //     state untouched ("revert"); a theme preview is rolled back on discard.
 //
-// settingsValues holds the ten form-bound values on a shared allocation so
+// settingsValues holds the eleven form-bound values on a shared allocation so
 // the form's bindings (Value(&v.host)…) and the view read the same data. The
 // SettingsView value is copied on every Update; the pointer survives copies.
 type settingsValues struct {
@@ -42,6 +42,7 @@ type settingsValues struct {
 	topP              string
 	numCtx            string
 	maxToolIterations string
+	toolsEnabled      bool
 }
 
 type SettingsView struct {
@@ -122,6 +123,7 @@ func (s SettingsView) Begin() SettingsView {
 		topP:              strconv.FormatFloat(c.Agent.TopP, 'f', -1, 64),
 		numCtx:            strconv.Itoa(c.Agent.NumCtx),
 		maxToolIterations: strconv.Itoa(c.Agent.MaxToolIterations),
+		toolsEnabled:      c.ToolsEnabled,
 	}
 	s.state = settingsEditing
 	s.errMsg = ""
@@ -191,6 +193,22 @@ func (s SettingsView) policyValidator(marker string, shape func(string) error) f
 			}
 			// The config is invalid because of another field; that field's own
 			// validator will surface it, and Save re-validates regardless.
+		}
+		return nil
+	}
+}
+
+// policyValidatorBool is policyValidator for the workspace-tools toggle: the
+// Confirm field validates a bool, but the policy is checked on the whole
+// snapshot the form would save, surfacing only errors that belong to this
+// field (stable marker "config: tools_enabled:"). Enabling tools with an
+// empty / / / home workspace root is refused inline before any save.
+func (s SettingsView) policyValidatorBool(marker string) func(bool) error {
+	return func(_ bool) error {
+		if err := config.Validate(s.snapshot()); err != nil {
+			if marker == "" || strings.Contains(err.Error(), marker) {
+				return err
+			}
 		}
 		return nil
 	}
@@ -296,6 +314,13 @@ func (s SettingsView) buildForm() *huh.Form {
 			Placeholder("12").
 			Validate(s.policyValidator("config: agent: max_tool_iterations", integerShape("max tool iterations"))).
 			Value(&v.maxToolIterations),
+		huh.NewConfirm().
+			Title("Enable workspace tools").
+			Description("Let the agent read and edit files under the workspace root. Defaults off — requires a workspace root outside your home directory; against a remote host, workspace content may be sent to it.").
+			Affirmative("Enable").
+			Negative("Disable").
+			Validate(s.policyValidatorBool("config: tools_enabled:")).
+			Value(&v.toolsEnabled),
 	).Title("Agent").Description("Applied to the next agent run on save.")
 
 	km := huh.NewDefaultKeyMap()
@@ -446,6 +471,7 @@ func (s SettingsView) snapshot() config.Config {
 		a.MaxToolIterations = int(n)
 	}
 	c.Agent = a
+	c.ToolsEnabled = s.val.toolsEnabled
 	return c
 }
 

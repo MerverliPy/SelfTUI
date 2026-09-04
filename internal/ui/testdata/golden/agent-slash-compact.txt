@@ -27,4 +27,4 @@
 │❯ /                                                                   │
 ╰──────────────────────────────────────────────────────────────────────╯
 enter send · shift+enter newline · esc clear draft                      
- ⏻ http://localhost:11434                       Agent · 72x30 · compact 
+ ⏻ http://localhost:11434 · tools off           Agent · 72x30 · compact 

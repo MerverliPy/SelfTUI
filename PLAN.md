@@ -145,7 +145,9 @@ Resolved in priority order: **flags > env vars > config file (`~/.config/selftui
 | `agent.top_p` | `0.9` | nucleus sampling |
 | `agent.num_ctx` | `4096` | context window |
 | `agent.system_prompt` | built-in default | agent persona/system instructions |
+| `agent.max_tool_iterations` | `12` | upper bound on tool calls per run |
 | `agent.workspace_root` | cwd at launch | project root the agent operates on |
+| `tools_enabled` | `false` | **Phase 4 (workspace tool trust):** arms the jailed workspace tools. Off = plain chat (the Ollama request carries no tools). Enabling requires `workspace_root` to be a real project directory — empty, `/` or the user's home directory is rejected. Sources: config file, `SELFTUI_TOOLS_ENABLED` (strconv.ParseBool), Settings → Agent → *Enable workspace tools*. |
 
 ### Ollama client (`internal/ollama`)
 Thin typed wrapper over the REST API:
@@ -197,8 +199,10 @@ background goroutine. No external agent framework.
 ### Tool loop (state machine in `internal/agent/runner.go`)
 ```
 start
+ ├─ 0. Tools disabled (no ToolPolicy / NewRunner): plain chat only — the
+ │     request carries no tools field and nothing can execute.
  ├─ 1. Build messages = system_prompt + conversation + tool results
- ├─ 2. POST /api/chat with { model, messages, tools, stream }
+ ├─ 2. POST /api/chat with { model, messages, tools, stream }  (armed runner)
  ├─ 3. Model responds:
  │     • finish_reason = "stop", content only → complete, emit final message
  │     • tool_calls present (native OR content-embedded) → validate → execute → append result → loop to 1
@@ -209,15 +213,34 @@ start
 ### Execution of tool calls (everything async, in goroutine, blocking-safe ops)
 | Tool | Signature | Notes |
 |------|-----------|-------|
-| `read_file` | path | assessor-resolved within workspace root |
-| `write_file` | path, content | atomic write, no overwrite unless `overwrite:true` |
-| `edit_file` | path, old, new | exact-match replace, verify applied |
-| `list_dir` | path | shallow dir listing |
-| `grep` | pattern, path | rg-backed over project |
+| `read_file` | path | assessor-resolved within workspace root; policy-gated |
+| `write_file` | path, content | atomic write, no overwrite unless `overwrite:true`; policy-gated before confirmation |
+| `edit_file` | path, old, new | exact-match replace, verify applied; policy-gated before confirmation |
+| `list_dir` | path | shallow dir listing; policy-gated |
+| `grep` | pattern, path | rg-backed over project; policy-gated |
 | ~~`run_command`~~ | ~~argv, timeout~~ | **Deferred — not shipped in v0.1 (2026-09-03).** The executor, its schema, and its dispatch case were removed from the public release; no command execution ships. See `docs/run-command-containment.md`. A future release would need a real OS/container sandbox, since cwd + argv filtering is not one. |
 
 ### Safety rules
+- **Workspace tools are opt-in (Phase 4).** `NewRunner` (the compatibility
+  constructor) sends no tool definitions and behaves as plain chat;
+  production arms the tools through `NewRunnerWithPolicy` with a
+  `ToolPolicy`, driven by `config.ToolsEnabled` (default `false`).
 - All file access **jailed to `workspace_root`** (resolve symlinks, reject `..` escapes).
+- **Sensitive-path policy (`ToolPolicy.AuthorizePath`), applied before every
+  tool executes on top of containment (Phase 4):** a requested path
+  containing a component named `.ssh`, `.gnupg`, `.aws`, `.azure`, `.kube`,
+  or the `.config/gcloud` composite, or whose basename is `.env`/`.env.*`
+  (except `.env.example`), `credentials`, or `credentials.json` is refused
+  outright — credential trees are never worth touching even when they
+  resolve inside the workspace.
+- Enabling tools with `workspace_root` empty, `/`, or the user's home
+  directory is rejected at config validation: a model with file tools must
+  not be pointed at the whole filesystem or at the directory adjacent to
+  the user's credentials.
+- The UI shows the canonical workspace and `tools off`/`tools on` in the
+  status bar and Agent statusline; tools enabled against a non-loopback
+  host shows a persistent warning that workspace content may be sent to
+  that host. No onboarding wizard in v0.1.
 - **These are guardrails, not a sandbox.** A workspace cwd + timeout + denylist do *not* stop a
   command from reading credentials, hitting the network, writing absolute paths, spawning
   children, or escaping via interpreters. Per council audit (finding A): v1 `run_command` is

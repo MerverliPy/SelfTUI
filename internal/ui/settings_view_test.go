@@ -142,8 +142,9 @@ func TestThemePreviewEmitsLiveThemeMsg(t *testing.T) {
 	}
 }
 
-// TestSettingsSubmitPersistsAndApplies walks the whole form (10 fields across
-// 4 groups) and submits unchanged values: the config file is written and the
+// TestSettingsSubmitPersistsAndApplies walks the whole form (11 fields across
+// 4 groups — the Agent group gained the workspace-tools toggle) and submits
+// unchanged values: the config file is written and the
 // saved panel shows (persist path of the M4 exit). Value-change/apply is
 // covered by TestSettingsApplyConfigLive.
 func TestSettingsSaveErrorSurfacedAndRetry(t *testing.T) {
@@ -155,7 +156,7 @@ func TestSettingsSaveErrorSurfacedAndRetry(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
 
 	m = openSettings(t, m)
-	keys := make([]tea.Msg, 10)
+	keys := make([]tea.Msg, 11)
 	for i := range keys {
 		keys[i] = tea.KeyPressMsg{Code: tea.KeyEnter}
 	}
@@ -181,7 +182,7 @@ func TestSettingsSaveErrorSurfacedAndRetry(t *testing.T) {
 	if !app.settings.Editing() {
 		t.Fatalf("enter on the error panel should reopen the editing form, got:\n%s", view(t, app))
 	}
-	keys = make([]tea.Msg, 10)
+	keys = make([]tea.Msg, 11)
 	for i := range keys {
 		keys[i] = tea.KeyPressMsg{Code: tea.KeyEnter}
 	}
@@ -196,7 +197,7 @@ func TestSettingsSubmitPersistsAndApplies(t *testing.T) {
 	path := cfg.ConfigPath()
 	m = openSettings(t, m)
 
-	keys := make([]tea.Msg, 10)
+	keys := make([]tea.Msg, 11)
 	for i := range keys {
 		keys[i] = tea.KeyPressMsg{Code: tea.KeyEnter}
 	}
@@ -241,7 +242,8 @@ func TestSettingsFieldValidationReusesConfigPolicy(t *testing.T) {
 	m, cfg := settingsApp(t)
 	m = openSettings(t, m)
 
-	// Advance to the last field: 10 fields across 4 groups.
+	// Advance to the max-tool-iterations field (10th of 11 across 4 groups;
+	// the tools toggle follows it).
 	keys := make([]tea.Msg, 9)
 	for i := range keys {
 		keys[i] = tea.KeyPressMsg{Code: tea.KeyEnter}

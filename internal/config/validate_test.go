@@ -15,7 +15,7 @@ import (
 // blank all of them first so a developer's shell exports can never leak into
 // a case (env beats the config file, so a leaked var would change the result).
 var allEnvVars = []string{
-	"HOST", "AUTH_TOKEN", "THEME", "DEFAULT_MODEL", "WORKSPACE_ROOT",
+	"HOST", "AUTH_TOKEN", "THEME", "DEFAULT_MODEL", "WORKSPACE_ROOT", "TOOLS_ENABLED",
 	"AGENT_TEMPERATURE", "AGENT_TOP_P", "AGENT_NUM_CTX",
 	"AGENT_SYSTEM_PROMPT", "AGENT_MAX_TOOL_ITERATIONS",
 }
@@ -53,6 +53,7 @@ func envFrom(t *testing.T, c Config) {
 	t.Setenv(envPrefix+"AGENT_TOP_P", strconv.FormatFloat(c.Agent.TopP, 'f', -1, 64))
 	t.Setenv(envPrefix+"AGENT_NUM_CTX", strconv.Itoa(c.Agent.NumCtx))
 	t.Setenv(envPrefix+"AGENT_MAX_TOOL_ITERATIONS", strconv.Itoa(c.Agent.MaxToolIterations))
+	t.Setenv(envPrefix+"TOOLS_ENABLED", strconv.FormatBool(c.ToolsEnabled))
 	if c.Agent.SystemPrompt != "" {
 		t.Setenv(envPrefix+"AGENT_SYSTEM_PROMPT", c.Agent.SystemPrompt)
 	}
@@ -68,6 +69,7 @@ func tomlSource(t *testing.T, c Config) string {
 		DefaultModel:  ptr(c.DefaultModel),
 		Theme:         ptr(c.Theme),
 		WorkspaceRoot: ptr(c.WorkspaceRoot),
+		ToolsEnabled:  ptr(c.ToolsEnabled),
 		Agent: &fileAgentConfig{
 			Temperature:       &c.Agent.Temperature,
 			TopP:              &c.Agent.TopP,

@@ -19,6 +19,13 @@ type Config struct {
 	// WorkspaceRoot is the project root the agent operates on (defaults to cwd).
 	WorkspaceRoot string
 
+	// ToolsEnabled arms the jailed workspace tools (read/list/grep/write/
+	// edit) for the Agent tab. It defaults to false: the agent is plain chat
+	// until the user explicitly trusts a workspace root (see the validation
+	// pairing in Validate — tools require a real project root, never the
+	// whole filesystem or the home directory).
+	ToolsEnabled bool
+
 	// Agent parameters.
 	Agent AgentConfig
 

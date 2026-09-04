@@ -142,8 +142,7 @@ func TestAgentViewReadOnlyToolLoop(t *testing.T) {
 		}
 	}))
 	t.Cleanup(srv.Close)
-	cfg := config.Default()
-	v := NewAgentViewWithWorkspace(ollama.New(srv.URL, ""), NewStyles("dark"), "dark", "", root, cfg.Agent)
+	v := newAgentTools(t, ollama.New(srv.URL, ""), srv.URL, root)
 	v, _ = v.Update(tea.WindowSizeMsg{Width: 88, Height: 40})
 	v, _ = v.Update(agentModelsLoadedMsg{models: sampleModels()})
 	typeText(t, &v, "read note")
@@ -182,8 +181,7 @@ func TestAgentViewDeclinesMutationConfirmation(t *testing.T) {
 		}
 	}))
 	t.Cleanup(srv.Close)
-	cfg := config.Default()
-	v := NewAgentViewWithWorkspace(ollama.New(srv.URL, ""), NewStyles("dark"), "dark", "", root, cfg.Agent)
+	v := newAgentTools(t, ollama.New(srv.URL, ""), srv.URL, root)
 	v, _ = v.Update(tea.WindowSizeMsg{Width: 88, Height: 40})
 	v, _ = v.Update(agentModelsLoadedMsg{models: sampleModels()})
 	typeText(t, &v, "write no")

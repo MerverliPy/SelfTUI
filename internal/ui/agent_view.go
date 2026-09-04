@@ -79,6 +79,15 @@ type AgentView struct {
 	topP        float64
 	numCtx      int
 
+	// Workspace tool trust (Phase 4): toolsEnabled arms the jailed tool
+	// surface for the next send (false = plain chat, the default); workspace
+	// is the canonical root the status row advertises; host is the config
+	// Ollama base URL, used to warn when tools could send workspace content
+	// to a non-loopback host.
+	toolsEnabled bool
+	workspace    string
+	host         string
+
 	// Input + feedback.
 	input   textarea.Model
 	chatErr string
@@ -125,27 +134,31 @@ type AgentView struct {
 }
 
 // NewAgentView builds the Agent tab using the current directory as its
-// workspace, with a background parent context. It remains a compatibility
-// constructor for tests and callers that predate root-context wiring; new
-// code should go through the App's NewWithContext (or newAgentView with the
-// real parent) so operations cancel with the process.
+// workspace, with a background parent context and workspace tools DISABLED
+// (the default: no tool definitions reach the model until the user opts in
+// via cfg.ToolsEnabled — production wiring through NewWithContext). It
+// remains a compatibility constructor for tests and legacy callers.
 func NewAgentView(client *ollama.Client, styles Styles, theme, defaultModel string, agentCfg config.AgentConfig) AgentView {
-	return newAgentView(nil, client, styles, theme, defaultModel, "", "", agentCfg)
+	return newAgentView(nil, client, styles, theme, defaultModel, "", "", agentCfg, false, "")
 }
 
 // NewAgentViewWithWorkspace builds the Agent tab with the configured project
-// root and system prompt (background parent context; see NewAgentView).
+// root and system prompt (background parent context; tools disabled — see
+// NewAgentView).
 func NewAgentViewWithWorkspace(client *ollama.Client, styles Styles, theme, defaultModel, workspaceRoot string, agentCfg config.AgentConfig) AgentView {
-	return newAgentView(nil, client, styles, theme, defaultModel, workspaceRoot, agentCfg.SystemPrompt, agentCfg)
+	return newAgentView(nil, client, styles, theme, defaultModel, workspaceRoot, agentCfg.SystemPrompt, agentCfg, false, "")
 }
 
 // newAgentView is the private constructor: it stores ctx as the parent every
-// operation this view starts derives from. Public constructors pass nil (→ a
-// background root); the App's NewWithContext passes the process root.
-func newAgentView(ctx context.Context, client *ollama.Client, styles Styles, theme, defaultModel, workspaceRoot, systemPrompt string, agentCfg config.AgentConfig) AgentView {
+// operation this view starts derives from, and arms the workspace tools
+// exactly when the caller says so (the App passes cfg.ToolsEnabled). host is
+// the config Ollama base URL, used for the remote-host warning; a compat
+// caller that cannot prove the host leaves it empty, which never warns.
+func newAgentView(ctx context.Context, client *ollama.Client, styles Styles, theme, defaultModel, workspaceRoot, systemPrompt string, agentCfg config.AgentConfig, toolsEnabled bool, host string) AgentView {
 	ctx = normalizeCtx(ctx)
-	if workspaceRoot == "" {
-		workspaceRoot, _ = os.Getwd()
+	root := workspaceRoot
+	if root == "" {
+		root, _ = os.Getwd()
 	}
 	ta := textarea.New()
 	ta.Prompt = "❯ "
@@ -155,7 +168,7 @@ func newAgentView(ctx context.Context, client *ollama.Client, styles Styles, the
 	return AgentView{
 		client:       client,
 		ctx:          ctx,
-		runner:       agent.NewRunner(client, workspaceRoot, systemPrompt, agentCfg.MaxToolIterations),
+		runner:       runnerFor(client, root, systemPrompt, agentCfg.MaxToolIterations, toolsEnabled),
 		styles:       styles,
 		dark:         theme != "light",
 		loading:      true,
@@ -164,12 +177,24 @@ func newAgentView(ctx context.Context, client *ollama.Client, styles Styles, the
 		topP:         agentCfg.TopP,
 		numCtx:       agentCfg.NumCtx,
 		systemPrompt: systemPrompt,
+		toolsEnabled: toolsEnabled,
+		workspace:    canonicalWorkspaceLabel(root),
+		host:         host,
 		follow:       true,
 		input:        ta,
 		selectorOpen: false,
 		selIdx:       0,
 		renderW:      -1,
 	}
+}
+
+// runnerFor builds the agent runner for one tools state: plain chat (no
+// policy) when disabled, the armed policy runner when enabled.
+func runnerFor(client *ollama.Client, root, systemPrompt string, maxIterations int, toolsEnabled bool) *agent.Runner {
+	if !toolsEnabled {
+		return agent.NewRunner(client, root, systemPrompt, maxIterations)
+	}
+	return agent.NewRunnerWithPolicy(client, root, systemPrompt, maxIterations, &agent.ToolPolicy{})
 }
 
 // --- messages -------------------------------------------------------------
@@ -1336,16 +1361,46 @@ func (v AgentView) statusLine() string {
 		return v.statusRow(maxW, []string{left}, right, v.stopArmed)
 	case v.notice != "":
 		return v.styles.Placeholder.Render(truncateToWidth(v.notice, maxW))
+	case v.remoteHost():
+		// Persistent remote-host warning (Phase 4): tools against a
+		// non-loopback host can carry workspace content off the machine, so
+		// the statusline says so until the user turns tools off or points at
+		// a local host. It outranks the key legend on purpose.
+		warn := "⚠ tools on — workspace content may be sent to " + v.host
+		return v.styles.Error.Render(truncateToWidth(warn, maxW))
 	}
 
 	// Legend. While composing, the letter commands (m/r/u/d/f) are off; with
 	// an empty input they are advertised (the interrupt/stop hint only shows
-	// while running).
+	// while running). The leading identity segment — tools state + canonical
+	// workspace — is the one thing that survives width pressure (the legend
+	// drops from the tail first), so the Agent view always answers "what can
+	// this model touch?" even on a phone.
 	if v.input.Value() != "" {
 		return v.statusRow(maxW, []string{"enter send", "shift+enter newline", "esc clear draft"}, "", false)
 	}
-	segs := []string{"enter send", "/ commands", "m model", "r refresh", "shift+enter newline"}
+	identity := toolsChip(v.toolsEnabled)
+	if v.workspace != "" {
+		identity += " · " + v.workspace
+	}
+	segs := []string{identity, "enter send", "/ commands", "m model", "r refresh", "shift+enter newline"}
 	return v.statusRow(maxW, segs, "", false)
+}
+
+// toolsChip is the stable tools-state label shared by the status bar and the
+// Agent statusline.
+func toolsChip(on bool) string {
+	if on {
+		return "tools on"
+	}
+	return "tools off"
+}
+
+// remoteHost reports whether tools are armed against a host that is not
+// loopback — the only combination that can send workspace content off this
+// machine. An unknown (empty) host never warns.
+func (v AgentView) remoteHost() bool {
+	return v.toolsEnabled && v.host != "" && !config.LoopbackHost(v.host)
 }
 
 // statusRow styles one statusline: Placeholder legend segments joined with
@@ -1665,12 +1720,13 @@ func (v AgentView) applyTheme(dark bool, styles Styles) AgentView {
 }
 
 // ApplyConfig applies a successful settings save in-session: scalar chat
-// parameters and the default model take effect for the next send, and the
-// runner is rebuilt so a new workspace root, system prompt, iteration cap,
-// and client apply. An in-flight turn keeps the runner it started with
-// (startChat copies the pointer before the goroutine runs), so swapping here
-// is safe mid-stream. reload=true (host/token change) clears the selector
-// models and refetches from the new host.
+// parameters, the default model, the workspace tool trust switch, and the
+// host take effect for the next send, and the runner is rebuilt so a new
+// workspace root, system prompt, iteration cap, tools state, and client
+// apply. An in-flight turn keeps the runner it started with (startChat copies
+// the pointer before the goroutine runs), so swapping here is safe
+// mid-stream. reload=true (host/token change) clears the selector models and
+// refetches from the new host.
 func (v AgentView) ApplyConfig(cfg config.Config, c *ollama.Client, reload bool) (AgentView, tea.Cmd) {
 	v.client = c
 	v.defaultModel = cfg.DefaultModel
@@ -1682,7 +1738,10 @@ func (v AgentView) ApplyConfig(cfg config.Config, c *ollama.Client, reload bool)
 	if root == "" {
 		root, _ = os.Getwd()
 	}
-	v.runner = agent.NewRunner(c, root, cfg.Agent.SystemPrompt, cfg.Agent.MaxToolIterations)
+	v.toolsEnabled = cfg.ToolsEnabled
+	v.host = cfg.Host
+	v.workspace = canonicalWorkspaceLabel(root)
+	v.runner = runnerFor(c, root, cfg.Agent.SystemPrompt, cfg.Agent.MaxToolIterations, cfg.ToolsEnabled)
 	if !reload {
 		return v, nil
 	}

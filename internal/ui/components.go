@@ -2,10 +2,32 @@ package ui
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"charm.land/lipgloss/v2"
 )
+
+// canonicalWorkspaceLabel resolves a configured workspace root the way the
+// jailed tools see it — the canonical real path, symlinks resolved — for the
+// status displays. An empty root means the current directory (the runner's
+// default workspace). If the real path cannot be resolved (root missing),
+// the cleaned absolute path is shown instead; this is display-only, the
+// runner does its own stricter resolution at execution time.
+func canonicalWorkspaceLabel(root string) string {
+	if root == "" {
+		root, _ = os.Getwd()
+	}
+	abs, err := filepath.Abs(root)
+	if err != nil {
+		abs = root
+	}
+	if real, err := filepath.EvalSymlinks(abs); err == nil {
+		return real
+	}
+	return abs
+}
 
 // fitContent caps a wrapped dialog body to budget rows while keeping its
 // head and its tail (the action/decision legend is always the last line, so

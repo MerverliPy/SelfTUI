@@ -1075,3 +1075,97 @@ tick (hardening phases are owner-assigned steps, not PLAN.md §10 milestones).
 **Next action**
 - Fresh session: next owner-assigned step (v0.1 tag/release notes or the next
   hardening phase).
+
+### 2026-09-03 — v0.1 hardening, phase 4: require explicit workspace tool trust (owner task)
+**Milestone:** owner-assigned step on `hardening/v0.1` (phase 4 of the v0.1
+hardening plan; branch tip was `a98f1d8`) · **Result:** done — see commit
+"security: require explicit workspace tool trust". No §10 milestone row to
+tick (hardening phases are owner-assigned steps, not PLAN.md §10 milestones).
+
+**Work done**
+- `config.ToolsEnabled bool`, TOML `tools_enabled`, env `SELFTUI_TOOLS_ENABLED`
+  via `strconv.ParseBool` (garbage → `parse SELFTUI_TOOLS_ENABLED="…"` load
+  error; env beats file, so `false` can disable a file-enabled tools), default
+  `false`, persisted by `Save`. `config.Validate` now rejects
+  `tools_enabled=true` when `workspace_root` is empty (`config: tools_enabled:
+  workspace_root is required when tools are enabled`), `/` (`…must not be /…`)
+  or exactly the current user's home directory (`…must not be your home
+  directory…`, compared after `filepath.Clean` so a trailing slash cannot
+  dodge it); tools-off keeps those roots legal. Settings → Agent gained an
+  *Enable workspace tools* confirm toggle (11th field) whose validator is the
+  config policy (stable `config: tools_enabled:` marker), so enabling against
+  an unsafe root fails inline with the same message `Save`/`Load` produce.
+- `agent.ToolPolicy` (new `toolpolicy.go`): `Tools() []ollama.ToolDefinition`
+  returns the five Phase-1 v0.1 tools (read_file/list_dir/grep +
+  confirmed write_file/edit_file; closed — no run_command); `AuthorizePath`
+  rejects any requested path containing a component `.ssh`/`.gnupg`/`.aws`/
+  `.azure`/`.kube` or the `.config/gcloud` composite, and basenames `.env`/
+  `.env.*` except exactly `.env.example`, plus `credentials`/
+  `credentials.json`. Lexical and additive to the existing canonical
+  containment (`securePath`/`canonicalRoot`); `.`/empty-component paths pass
+  to containment (a model legitimately asks `list_dir "."`).
+- `Runner.policy *ToolPolicy`; `NewRunner` stays the compatibility wrapper
+  with tools DISABLED (nil policy → plain chat, no tools field on the wire —
+  proven by a test that inspects the raw JSON body, and by a test where a
+  hostile endpoint replies with a tool_calls event: nothing executes, no
+  confirmation, no file). Production wiring is `NewRunnerWithPolicy`;
+  `runPlainChat` now records the terminal done_reason so the tools-off footer
+  keeps its `· stop/· length` meta. Each of the five `executeTool` cases calls
+  `authorizePath(args.Path)` before its own validation/confirm/executor, so a
+  sensitive request never even surfaces an approval dialog.
+- UI: the Agent statusline (idle legend) and the root status bar both show the
+  canonical workspace (real path, symlinks resolved — `canonicalWorkspaceLabel`,
+  empty root → cwd) and `tools off`/`tools on`; the bar drops the workspace
+  (then the warning) under width pressure, host+tools survive. When tools are
+  enabled against a non-loopback host (`config.LoopbackHost`, exported and
+  reused by validateHost) the Agent statusline shows a persistent red
+  `⚠ tools on — workspace content may be sent to <host>` row, and the status
+  bar appends `⚠ workspace content may be sent to the remote host` when it
+  fits. Agent view/compat constructors default to tools off; the App passes
+  `cfg.ToolsEnabled`/`cfg.Host` through `newAgentView` and `ApplyConfig`
+  rebuilds the runner on a settings save. No onboarding wizard built (v0.1
+  stays out of that scope).
+- Golden fixtures regenerated (19 frames; only the status rows changed —
+  `· tools off · /home/calvin/SelfTUI/internal/ui` in the agent frames/bar).
+  Note: fixtures embed the test cwd as the canonical workspace (empty
+  workspace_root → cwd is the real default behavior), so they are
+  machine-path dependent like the existing behavior always was.
+- README (env/file config rows, agent tools = opt-in, Settings toggle,
+  sensitive-path refusal) and PLAN §5/§6 (tools_enabled row, policy, safety
+  rules, tool-table policy notes) updated.
+
+**Commands + exit codes**
+- RED: `go test -count=1 ./internal/config -run 'TestTools|…'` → build fail
+  `undefined: ToolsEnabled`; `go test ./internal/agent -run 'TestToolPolicy|…'`
+  → `undefined: ToolPolicy/NewRunnerWithPolicy`; `go vet ./internal/ui` →
+  `too many arguments in call to newAgentView` (all intended).
+- Green: `go test -count=1 ./internal/config ./internal/agent ./internal/ui` `0`
+- `go test -race -count=1 ./internal/config ./internal/agent ./internal/ui` `0`
+- `make check` `0` (build + `go test -count=1 ./...` + vet + gofmt); full
+  `go test -race -count=1 ./...` `0`; goldens regenerated via
+  `go test ./internal/ui -run TestGoldenRender -update` (diff reviewed: only
+  the status rows).
+
+**Decisions / lines to respect**
+- ToolPolicy zero value = fully armed; "enabled" is expressed by which
+  constructor arms it (nil policy vs `&ToolPolicy{}`), mirroring
+  NewRunner = disabled default.
+- AuthorizePath is lexical on the requested path, deliberately in addition to
+  containment; an in-workspace symlink alias to a forbidden file is out of
+  scope (the agent cannot create symlinks, so only a pre-existing user-made
+  alias could matter).
+- `.env.*`-prefixed basenames are refused except exactly `.env.example`
+  (future `.env` variants are credential files too).
+- The v0.1 tools stay the same closed five; nothing was added to the tool
+  surface, only an explicit trust gate in front of it.
+
+**Blockers / open decisions**
+- The referenced `docs/superpowers/plans/2026-09-04-v0.1-release-hardening.md`
+  does not exist in the repo (any branch) or on disk, as in phases 0–3; the
+  inline phase spec was treated as operative, and ToolPolicy's API was derived
+  from it + the codebase. If the owner's plan named different fields/methods,
+  the divergence is isolated to `internal/agent/toolpolicy.go`.
+
+**Next action**
+- Fresh session: next owner-assigned step (v0.1 tag + release notes or the
+  next hardening phase).

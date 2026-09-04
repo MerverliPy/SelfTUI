@@ -82,7 +82,7 @@ func TestAgentViewParentCancellationStopsChat(t *testing.T) {
 
 	cfg := config.Default()
 	v := newAgentView(parentCtx, ollama.New(srv.URL, ""), NewStyles("dark"), "dark",
-		"", cfg.WorkspaceRoot, cfg.Agent.SystemPrompt, cfg.Agent)
+		"", cfg.WorkspaceRoot, cfg.Agent.SystemPrompt, cfg.Agent, false, srv.URL)
 	v, _ = v.Update(tea.WindowSizeMsg{Width: 88, Height: 40})
 	v, _ = v.Update(agentModelsLoadedMsg{models: sampleModels()})
 

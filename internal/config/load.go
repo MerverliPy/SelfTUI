@@ -27,6 +27,7 @@ type fileConfig struct {
 	DefaultModel  *string          `toml:"default_model"`
 	Theme         *string          `toml:"theme"`
 	WorkspaceRoot *string          `toml:"workspace_root"`
+	ToolsEnabled  *bool            `toml:"tools_enabled"`
 	Agent         *fileAgentConfig `toml:"agent"`
 }
 
@@ -113,6 +114,9 @@ func applyFile(c *Config, f fileConfig) {
 	if f.WorkspaceRoot != nil {
 		c.WorkspaceRoot = *f.WorkspaceRoot
 	}
+	if f.ToolsEnabled != nil {
+		c.ToolsEnabled = *f.ToolsEnabled
+	}
 	if f.Agent == nil {
 		return
 	}
@@ -148,6 +152,13 @@ func applyEnv(c *Config) error {
 	}
 	if v := os.Getenv(envPrefix + "WORKSPACE_ROOT"); v != "" {
 		c.WorkspaceRoot = v
+	}
+	if v := os.Getenv(envPrefix + "TOOLS_ENABLED"); v != "" {
+		parsed, err := strconv.ParseBool(v)
+		if err != nil {
+			return fmt.Errorf("parse %sTOOLS_ENABLED=%q: %w", envPrefix, v, err)
+		}
+		c.ToolsEnabled = parsed
 	}
 	if v := os.Getenv(envPrefix + "AGENT_TEMPERATURE"); v != "" {
 		parsed, err := strconv.ParseFloat(v, 64)
@@ -240,6 +251,7 @@ func Save(c Config) error {
 		DefaultModel:  ptr(c.DefaultModel),
 		Theme:         ptr(c.Theme),
 		WorkspaceRoot: ptr(c.WorkspaceRoot),
+		ToolsEnabled:  ptr(c.ToolsEnabled),
 		Agent: &fileAgentConfig{
 			Temperature:       &c.Agent.Temperature,
 			TopP:              &c.Agent.TopP,

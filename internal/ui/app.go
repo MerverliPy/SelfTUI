@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
@@ -66,7 +67,7 @@ func NewWithContext(ctx context.Context, cfg *config.Config, styles Styles, clie
 		styles:   styles,
 		curTheme: cfg.Theme,
 		models:   newModelsView(ctx, client, styles, cfg.Theme),
-		agent:    newAgentView(ctx, client, styles, cfg.Theme, cfg.DefaultModel, cfg.WorkspaceRoot, cfg.Agent.SystemPrompt, cfg.Agent),
+		agent:    newAgentView(ctx, client, styles, cfg.Theme, cfg.DefaultModel, cfg.WorkspaceRoot, cfg.Agent.SystemPrompt, cfg.Agent, cfg.ToolsEnabled, cfg.Host),
 		settings: NewSettingsView(cfg, styles),
 	}
 }
@@ -226,6 +227,32 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return a, nil
 }
 
+// statusLeft composes the status bar's left cell from the session config:
+// the Ollama host, the workspace-tools state, the canonical workspace, and —
+// when tools are armed against a non-loopback host — a warning that
+// workspace content may be sent to it. Parts drop from the tail under width
+// pressure (workspace first, then the warning), so the bar never wraps and
+// the host + tools state always survive; truncateToWidth is the last resort.
+func (a App) statusLeft(right string) string {
+	parts := []string{"⏻ " + a.cfg.Host, toolsChip(a.cfg.ToolsEnabled)}
+	if a.cfg.ToolsEnabled && a.cfg.Host != "" && !config.LoopbackHost(a.cfg.Host) {
+		parts = append(parts, "⚠ workspace content may be sent to the remote host")
+	}
+	if ws := canonicalWorkspaceLabel(a.cfg.WorkspaceRoot); ws != "" {
+		parts = append(parts, ws)
+	}
+	joined := strings.Join(parts, " · ")
+	budget := a.w - lipgloss.Width(right) - 3
+	for lipgloss.Width(joined) > budget && len(parts) > 2 {
+		parts = parts[:len(parts)-1]
+		joined = strings.Join(parts, " · ")
+	}
+	if budget > 0 && lipgloss.Width(joined) > budget {
+		joined = truncateToWidth(joined, budget)
+	}
+	return joined
+}
+
 // canOpenPalette reports whether the command palette may open right now:
 // never over another modal (settings form, approval, picker, pull, delete)
 // and never mid-generation (its actions would race the stream).
@@ -308,13 +335,18 @@ func (a App) View() tea.View {
 		}
 	}
 
-	left := "⏻ " + a.cfg.Host
-	if a.note != "" {
-		left = a.note
+	right := fmt.Sprintf("%s · %dx%d · %s", tabLabels[a.tab], a.w, a.h, BreakpointFor(a.w))
+	// Transient toasts win the left cell; otherwise show the Phase 4
+	// identity: host · tools state · canonical workspace, plus a remote-host
+	// warning when armed tools could send workspace content off the machine
+	// (space permitting).
+	left := a.note
+	if left == "" {
+		left = a.statusLeft(right)
 	}
 	status := StatusBar{
 		Left:   left,
-		Right:  fmt.Sprintf("%s · %dx%d · %s", tabLabels[a.tab], a.w, a.h, BreakpointFor(a.w)),
+		Right:  right,
 		Styles: a.styles,
 		Width:  a.w,
 	}.Render()

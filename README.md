@@ -6,7 +6,14 @@ identically on a PC (native terminal) and over SSH on a phone (Moshi;
 Blink/Termius similar) — layout adapts to narrow windows.
 
 **Status: M7 — pre-v0.1 UX polish done.** The Models tab lists live models from the Ollama host (`/api/tags`) with selection + an inspect pane (`/api/show`): key facts, parameters, template, modelfile, model info, license — scrollable, side-by-side on wide screens and stacked (enter-toggled) on the phone. **Delete with confirm (`x` → `y`/`esc`) and streaming pull (`p` → name → spinner + progress; `esc` cancels)** work live; pulls reload the list automatically. The Agent tab supports native or content-embedded tool calls, explicit plain-chat fallback, jailed project-aware tools — read-only `read_file`/
-`list_dir`/`grep` and confirmed `write_file`/`edit_file`. **v0.1 ships no command
+`list_dir`/`grep` and confirmed `write_file`/`edit_file`. **Workspace tools are
+opt-in (`tools off` by default)**: the agent is plain chat until you enable
+them (Settings → Agent → *Enable workspace tools*, `tools_enabled` in the
+config file, or `SELFTUI_TOOLS_ENABLED`), and enabling requires a real
+project workspace root — never `/` or your home directory. The status bar
+and the Agent statusline always show the canonical workspace and `tools off`/
+`tools on`; with tools enabled against a non-loopback host, a persistent
+warning notes that workspace content may be sent to that host. **v0.1 ships no command
 execution**: the pre-v0.1 `run_command` executor was removed, and its containment
 record in `docs/run-command-containment.md` is now a dated deferred-design note
 (cwd + argv filtering is not an OS sandbox). M7 polished the feel (opencode.ai TUI as reference): a slash-command menu over the Agent input (`/clear`, `/model`, `/theme`, `/help`, `/refresh`) and a `ctrl+p` command palette reachable from any tab; stable per-turn headers, a streaming caret (`▍`) that disappears at rest,
@@ -50,8 +57,8 @@ Resolution order: **flags > env > config file > defaults**.
 | Source | Examples |
 |--------|----------|
 | Flags | `selftui -host http://192.168.1.50:11434 -theme light -default-model qwen3:8b -temperature 0.4 -top-p 0.95 -num-ctx 8192 -max-tool-iterations 20 -workspace-root ~/proj -system-prompt "…"` |
-| Env | `SELFTUI_HOST`, `SELFTUI_THEME`, `SELFTUI_DEFAULT_MODEL`, `SELFTUI_WORKSPACE_ROOT`, `SELFTUI_AUTH_TOKEN`, `SELFTUI_AGENT_TEMPERATURE`, `SELFTUI_AGENT_TOP_P`, `SELFTUI_AGENT_NUM_CTX`, `SELFTUI_AGENT_SYSTEM_PROMPT`, `SELFTUI_AGENT_MAX_TOOL_ITERATIONS` |
-| File | `~/.config/selftui/config.toml` (`host`, `theme`, `default_model`, `auth_token`, `workspace_root`, `[agent]` table) |
+| Env | `SELFTUI_HOST`, `SELFTUI_THEME`, `SELFTUI_DEFAULT_MODEL`, `SELFTUI_WORKSPACE_ROOT`, `SELFTUI_AUTH_TOKEN`, `SELFTUI_TOOLS_ENABLED`, `SELFTUI_AGENT_TEMPERATURE`, `SELFTUI_AGENT_TOP_P`, `SELFTUI_AGENT_NUM_CTX`, `SELFTUI_AGENT_SYSTEM_PROMPT`, `SELFTUI_AGENT_MAX_TOOL_ITERATIONS` |
+| File | `~/.config/selftui/config.toml` (`host`, `theme`, `default_model`, `auth_token`, `workspace_root`, `tools_enabled`, `[agent]` table) |
 
 **Secrets (auth token):** set the token via `SELFTUI_AUTH_TOKEN` or put
 `auth_token` in the config file (written 0600, directory 0700) — the Settings →
@@ -95,7 +102,15 @@ Once the conversation fills the context budget the meter turns red and a
 visible truncation marker stays in the transcript until `/clear`.
 Tool-capable models may use jailed `read_file`, `list_dir`, `grep`,
 `write_file`, and `edit_file`; every mutation opens a `y`/`enter` approve or
-`n`/`esc` decline dialog. **v0.1 has no command execution**: read-only
+`n`/`esc` decline dialog. These tools exist only when **workspace tools are
+enabled** (Settings → *Enable workspace tools*, `tools_enabled`, or
+`SELFTUI_TOOLS_ENABLED`) with a project workspace root; otherwise the agent
+is plain chat and the Ollama request carries no tools. With tools enabled,
+requests to sensitive paths (`.ssh`, `.gnupg`, `.aws`, `.azure`, `.kube`,
+`.config/gcloud`, or credential files like `.env`, `.env.local`, `.env.production`,
+`credentials`, `credentials.json` — `.env.example` stays allowed) are refused
+before the tool runs, on top of the canonical workspace containment.
+**v0.1 has no command execution**: read-only
 `read_file`/`list_dir`/`grep` plus confirmed `write_file`/`edit_file` are the
 whole tool surface — no shell, no interpreters, no git or go subprocesses.
 Models that reject
@@ -109,10 +124,12 @@ the Agent tab's `/` menu is the equivalent path (Blink maps ctrl to the
 `ctrl+p` shortcut). Palette and slash actions are session-scoped; persistence
 is Settings → Theme.
 
-**Settings tab (M4)**: a huh form over the config surface, in four sections —
+**Settings tab (M4/Phase 4)**: a huh form over the config surface, in four sections —
 Connection (host, auth token), Model defaults (default model, temperature,
 top-p, context window), Theme, and Agent (system prompt, workspace root, max
-tool iterations). `enter`/`tab` advance fields, `shift+tab` goes back, and
+tool iterations, and an *Enable workspace tools* toggle — off by default,
+validated against the config policy). `enter`/`tab` advance fields,
+`shift+tab` goes back, and
 `esc` discards the whole edit (nothing is written; “revert”). Arrowing Dark/
 Light previews the theme live; submitting on the last field writes the config
 file and applies the change in-session (host/token swap the Ollama client and

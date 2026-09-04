@@ -37,4 +37,4 @@
                                                                                                                         
                                                                                                                         
                                                                                                                         
- ⏻ http://localhost:11434                                                                         Agent · 120x40 · wide 
+ ⏻ http://localhost:11434 · tools off · /home/calvin/SelfTUI/internal/ui                          Agent · 120x40 · wide 

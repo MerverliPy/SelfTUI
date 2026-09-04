@@ -1,10 +1,12 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -43,6 +45,34 @@ func Validate(c Config) error {
 		if err != nil || !st.IsDir() {
 			return fmt.Errorf("config: workspace_root: %s does not exist or is not a directory", c.WorkspaceRoot)
 		}
+	}
+
+	// Workspace tools are opt-in and only safe against a real project root.
+	// With tools enabled, an empty root (→ cwd, unpredictable), "/" (the
+	// whole filesystem) or the user's home directory (adjacent to
+	// .ssh/.gnupg/.aws/…) would hand the model a much broader filesystem than
+	// a workspace; reject that pairing outright.
+	if c.ToolsEnabled {
+		if err := validateToolsWorkspace(c.WorkspaceRoot); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateToolsWorkspace enforces the tools_enabled/workspace_root pairing
+// (see Validate). workspaceRoot is compared after cleaning, so a trailing
+// slash on the home directory does not dodge the rule.
+func validateToolsWorkspace(workspaceRoot string) error {
+	if workspaceRoot == "" {
+		return errors.New("config: tools_enabled: workspace_root is required when tools are enabled")
+	}
+	if workspaceRoot == "/" {
+		return errors.New("config: tools_enabled: workspace_root must not be / when tools are enabled")
+	}
+	home, err := os.UserHomeDir()
+	if err == nil && filepath.Clean(workspaceRoot) == filepath.Clean(home) {
+		return errors.New("config: tools_enabled: workspace_root must not be your home directory when tools are enabled")
 	}
 	return nil
 }
@@ -90,15 +120,22 @@ func validateHost(host, token string) error {
 	if u.Fragment != "" {
 		return fmt.Errorf("config: host: fragment is not allowed")
 	}
-	if token != "" && scheme != "https" && !loopbackHost(u.Hostname()) {
+	if token != "" && scheme != "https" && !LoopbackHost(host) {
 		return fmt.Errorf("config: host: bearer token requires HTTPS for non-loopback host")
 	}
 	return nil
 }
 
-// loopbackHost reports whether h is one of the loopback spellings SelfTUI
-// treats as local: plain http may carry a bearer token only for these.
-func loopbackHost(h string) bool {
+// LoopbackHost reports whether host — an http(s) base URL or a bare
+// hostname — is one of the loopback spellings SelfTUI treats as local
+// (localhost, 127.0.0.1, ::1). The UI reuses it to warn when workspace
+// content could leave the machine; validateHost uses it for the plain-http
+// token rule.
+func LoopbackHost(host string) bool {
+	h := strings.TrimSpace(host)
+	if u, err := url.Parse(h); err == nil && u.Hostname() != "" {
+		h = u.Hostname()
+	}
 	switch strings.ToLower(h) {
 	case "localhost", "127.0.0.1", "::1":
 		return true
