@@ -913,3 +913,30 @@ per-process markdown transcript; `make check` + `go test -race` green.
 
 **Next action**
 - Fresh session: tag v0.1.0 + release notes.
+
+### 2026-09-06 — Polish fixes found live in the owner's session (follow-up)
+**Milestone:** owner task (their pasted 82x34 session) · **Result:** done —
+truncation now shows "…", no phantom caret during tool/thinking phases.
+
+**Work done**
+- `truncateToWidth` silently cut text without an ellipsis (lipgloss MaxWidth
+  truncates and fits, so the fallback never ran). Rewritten: rune-wise trim
+  to maxW-1 columns + "…", ANSI sequences copied whole and never split, wide
+  runes counted by lipgloss.Width. New unit tests (ellipsis, pass-through,
+  styled ANSI survival, wide runes, maxW=1).
+- Live assistant block in chatLines was gated on `streaming || text`; during
+  a tool run or qwen3 thinking it streamed no text yet still drew an empty
+  header + caret (seen as "◈ qwen3:8b▍" in the paste). Now the block renders
+  only when streamText is non-empty; the tool/thinking state lives on the
+  statusline. New test: no caret before text, caret rides text, gone at rest.
+
+**Commands + exit codes**
+- `go test ./... -count=1` `0` · `go test -race ./...` `0` · `make build` `0`
+- goldens unchanged (no regeneration needed)
+
+**Decisions**
+- Cut text always shows "…"; the transcript never invents an assistant block
+  that has no content.
+
+**Next action**
+- Fresh session: v0.1 tag + release notes (unchanged).

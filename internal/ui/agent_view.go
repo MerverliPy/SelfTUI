@@ -1142,7 +1142,11 @@ func (v AgentView) chatLines() []string {
 		lines = append(lines, strings.Split(block, "\n")...)
 		lines = append(lines, "") // separator after each message
 	}
-	if v.streaming || v.streamText != "" {
+	// Live block: rendered only once the model is actually producing text —
+	// no phantom empty header/caret while a tool runs or during qwen3's
+	// thinking phase (that state lives on the statusline). The caret rides
+	// the last line while text streams and disappears when the turn commits.
+	if v.streamText != "" {
 		sb := strings.Split(v.renderBlock(v.assistantHeader(v.model), v.streamText), "\n")
 		if v.streaming {
 			sb = withStreamingCaret(sb)
@@ -1158,8 +1162,8 @@ func (v AgentView) chatLines() []string {
 }
 
 // withStreamingCaret appends the streaming caret ("▍") to the live block. It
-// rides the last visible line while a turn streams and disappears the moment
-// the turn commits and streaming goes false (M7-B).
+// rides the last visible line while a turn streams text and disappears the
+// moment the turn commits and streaming goes false (M7-B).
 func withStreamingCaret(lines []string) []string {
 	if len(lines) == 0 {
 		return []string{"▍"}
@@ -1373,8 +1377,10 @@ func (v AgentView) statusRow(maxW int, segments []string, right string, warn boo
 	return styled + " · " + v.styles.mutedText().Render(right)
 }
 
-// truncateToWidth trims s to at most maxW visible columns, appending "…"
-// when cut. ANSI sequences count as zero width via lipgloss.Width.
+// truncateToWidth trims s to at most maxW visible columns and, when it had to
+// cut, appends "…" so truncated text is visibly truncated (lipgloss MaxWidth
+// alone cuts silently). ANSI sequences count as zero width and are never
+// split mid-sequence, so styled text keeps its styling.
 func truncateToWidth(s string, maxW int) string {
 	if maxW < 1 {
 		return ""
@@ -1382,19 +1388,40 @@ func truncateToWidth(s string, maxW int) string {
 	if lipgloss.Width(s) <= maxW {
 		return s
 	}
-	out := lipgloss.NewStyle().MaxWidth(maxW).Render(s)
-	if lipgloss.Width(out) <= maxW {
-		return out
-	}
-	// MaxWidth is byte-wise; fall back to a rune-wise trim.
-	out = ""
-	for _, r := range s {
-		if lipgloss.Width(out)+1 > maxW-1 {
+	runes := []rune(s)
+	var b strings.Builder
+	cols := 0
+	limit := maxW - 1 // reserve the ellipsis column
+	for i := 0; i < len(runes); {
+		r := runes[i]
+		if r == '\x1b' {
+			// Copy the whole escape sequence without counting width.
+			j := i + 1
+			for j < len(runes) && !isAnsiFinal(runes[j]) {
+				j++
+			}
+			if j < len(runes) {
+				j++
+			}
+			b.WriteString(string(runes[i:j]))
+			i = j
+			continue
+		}
+		w := lipgloss.Width(string(r))
+		if cols+w > limit {
 			break
 		}
-		out += string(r)
+		b.WriteRune(r)
+		cols += w
+		i++
 	}
-	return out + "…"
+	return b.String() + "…"
+}
+
+// isAnsiFinal reports whether r can end an ANSI escape sequence (final bytes
+// are letters; lipgloss only emits SGR sequences ending in 'm').
+func isAnsiFinal(r rune) bool {
+	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')
 }
 
 // fullSizePane renders the loading / error / empty model-list states.
