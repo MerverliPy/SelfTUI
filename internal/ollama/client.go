@@ -28,6 +28,11 @@ type Client struct {
 	token   string // optional bearer token
 	http    *http.Client
 	stream  *http.Client // no request timeout: long pulls (context governs)
+
+	// streamIdle is how long a streaming response may deliver no bytes
+	// before the client aborts it (phase 5). Set to the 90s default by New;
+	// tests inject short windows. Zero is treated as the default.
+	streamIdle time.Duration
 }
 
 // New builds a client for an Ollama base URL (e.g. "http://localhost:11434").
@@ -35,10 +40,11 @@ type Client struct {
 // sent as a Bearer Authorization header.
 func New(host, token string) *Client {
 	return &Client{
-		baseURL: strings.TrimRight(host, "/"),
-		token:   token,
-		http:    &http.Client{Timeout: requestTimeout},
-		stream:  &http.Client{},
+		baseURL:    strings.TrimRight(host, "/"),
+		token:      token,
+		http:       &http.Client{Timeout: requestTimeout},
+		stream:     &http.Client{},
+		streamIdle: streamIdleTimeout,
 	}
 }
 

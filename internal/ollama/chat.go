@@ -1,7 +1,6 @@
 package ollama
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -97,6 +96,11 @@ type ChatEvent struct {
 // (no request timeout): the caller's context is the only deadline, so the UI
 // can cancel mid-generation. Mirroring pull streams, an {"error": ...} line
 // inside the stream (HTTP 200) is the in-band error channel.
+//
+// Streams are bounded (phase 5): a single NDJSON event larger than 4 MiB, or
+// cumulative content+thinking beyond 16 MiB, aborts the call, and a body that
+// delivers no bytes for the 90s idle window times out (no total request
+// deadline, so long generations with steady deltas keep running).
 func (c *Client) Chat(ctx context.Context, req ChatRequest, onContent func(string)) error {
 	return c.ChatStream(ctx, req, func(ev ChatEvent) {
 		if ev.Message.Content != "" && onContent != nil {
@@ -122,19 +126,11 @@ func (c *Client) ChatStream(ctx context.Context, req ChatRequest, onEvent func(C
 	if err != nil {
 		return fmt.Errorf("ollama POST %s: encode request: %w", path, err)
 	}
-	r, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+path, bytes.NewReader(body))
+	resp, cancel, err := c.postStream(ctx, path, body)
 	if err != nil {
-		return fmt.Errorf("ollama POST %s: build request: %w", path, err)
+		return err
 	}
-	r.Header.Set("Content-Type", "application/json")
-	if c.token != "" {
-		r.Header.Set("Authorization", "Bearer "+c.token)
-	}
-
-	resp, err := c.stream.Do(r)
-	if err != nil {
-		return fmt.Errorf("ollama POST %s: %w", path, err)
-	}
+	defer cancel()
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
@@ -142,8 +138,20 @@ func (c *Client) ChatStream(ctx context.Context, req ChatRequest, onEvent func(C
 		return apiError(http.MethodPost, path, resp.StatusCode, raw)
 	}
 
-	dec := json.NewDecoder(resp.Body)
+	// Decode through the shared NDJSON stream decoder: a single event larger
+	// than 4 MiB, or cumulative content+thinking over 16 MiB, aborts the
+	// stream; a body silent for the idle window times out (no total request
+	// deadline, so long generations with steady deltas keep running).
+	dec := newNDJSONStream(resp.Body, cancel, c.streamIdle, path)
+	var contentBytes int64
 	for {
+		raw, err := dec.next()
+		if errors.Is(err, io.EOF) {
+			return fmt.Errorf("ollama POST %s: stream ended without done", path)
+		}
+		if err != nil {
+			return err
+		}
 		var wire struct {
 			Message struct {
 				Role      Role       `json:"role"`
@@ -156,14 +164,15 @@ func (c *Client) ChatStream(ctx context.Context, req ChatRequest, onEvent func(C
 			Thinking   string `json:"thinking"`
 			Error      string `json:"error"`
 		}
-		if err := dec.Decode(&wire); err != nil {
-			if errors.Is(err, io.EOF) {
-				return fmt.Errorf("ollama POST %s: stream ended without done", path)
-			}
+		if err := json.Unmarshal(raw, &wire); err != nil {
 			return fmt.Errorf("ollama POST %s: decode stream: %w", path, err)
 		}
 		if wire.Error != "" {
 			return fmt.Errorf("ollama POST %s: %s", path, wire.Error)
+		}
+		contentBytes += int64(len(wire.Message.Content) + len(wire.Message.Thinking) + len(wire.Thinking))
+		if contentBytes > maxChatStreamBytes {
+			return fmt.Errorf("ollama POST %s: %w", path, errChatStreamTooLarge)
 		}
 		ev := ChatEvent{
 			Message: ChatMessage{

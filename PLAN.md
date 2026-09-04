@@ -165,6 +165,18 @@ Thin typed wrapper over the REST API:
   presence is NOT a pull-completion signal; trust the stream's `success` line.
 - Pulls can run minutes: they use a client **without the 30s request timeout**
   (caller context = deadline); list/show/delete stay on the 30s client.
+- **Streams are bounded (Phase 5, hardening):** chat and pull decode through
+  the shared NDJSON reader (`internal/ollama/stream.go`) that caps one event
+  at 4 MiB on the wire (`stream event exceeds 4194304 bytes`) and aborts a
+  body silent for the 90s idle window (`stream idle timeout`). The timeout is
+  idle-only — there is deliberately **no total request deadline**, so pulls
+  keep running for minutes while progress lines keep arriving, and caller
+  cancellation always wins over the idle watchdog. Chat additionally caps
+  cumulative content+thinking at 16 MiB (`chat stream exceeds 16777216
+  bytes`); EOF before a terminal `done`/`success` event stays an error. The
+  idle window defaults to 90s per client and is injectable in tests
+  (`Client.streamIdle`); public `Client`/`Chat`/`ChatStream`/`Pull`
+  signatures are unchanged.
 
 ### Model list item
 ```go

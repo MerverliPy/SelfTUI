@@ -1169,3 +1169,88 @@ tick (hardening phases are owner-assigned steps, not PLAN.md §10 milestones).
 **Next action**
 - Fresh session: next owner-assigned step (v0.1 tag + release notes or the
   next hardening phase).
+
+### 2026-09-03 — v0.1 hardening, phase 5: bound and time out Ollama streams (owner task)
+**Milestone:** owner-assigned step on `hardening/v0.1` (phase 5 of the v0.1
+hardening plan; branch tip was `7fea64f`) · **Result:** done — see commit
+"fix: bound and time out Ollama streams". No §10 milestone row to tick
+(hardening phases are owner-assigned steps, not PLAN.md §10 milestones).
+
+**Work done**
+- New shared internal NDJSON stream decoder `internal/ollama/stream.go`, used
+  by both `ChatStream` and `Pull`: frames events line-by-line over a 32 KiB
+  bufio buffer and (a) rejects any single event whose raw wire bytes exceed
+  4 MiB (`stream event exceeds 4194304 bytes`), checked while accumulating so
+  memory stays ≤ cap; (b) enforces a per-byte **idle** timeout — an
+  `idleReader` wraps the response body, bounds every read with the idle
+  window, and on expiry cancels a *child* request context so net/http tears
+  down the blocked read; (c) honors caller cancellation throughout (the child
+  context derives from the caller's, so cancels propagate with the same
+  `context canceled` errors as before). No total request deadline exists: a
+  body delivering bytes at any cadence inside the window runs indefinitely.
+  Idle default 90s per client (`Client.streamIdle`, set by `New`, injectable
+  in tests); zero means default.
+- `ChatStream` tracks cumulative decoded `message.content` + `message.thinking`
+  + top-level `thinking` bytes and rejects > 16 MiB with `chat stream exceeds
+  16777216 bytes` before delivering the crossing event; the terminal `done`
+  requirement (EOF without `done` → `stream ended without done`) is unchanged.
+- `Pull` uses the same per-event + idle protections but keeps no cumulative
+  budget, so multi-minute downloads survive as long as progress lines keep
+  arriving (a test streams 25 events across 3+ idle windows and completes).
+- `postStream` helper (shared request build: child ctx + stream client)
+  deduplicates the chat/pull POST path; both decode loops now `json.Unmarshal`
+  per framed event, preserving every pre-existing error message shape
+  (`decode stream: …`, in-band `{"error": …}`, `stream ended without
+  done/success`, HTTP-error body parsing, Bearer header, non-2xx read). Public
+  `Client`, `Chat`, `ChatStream`, `Pull` signatures untouched; `Chat` wrapper
+  unchanged.
+- New `internal/ollama/stream_test.go` (10 httptest tests, short injected
+  idle): one oversized chat event, cumulative chat content+thinking overflow
+  (5 × ~4 MiB events; thinking event crosses the 16 MiB budget), one oversized
+  pull event, stalled chat body, stalled pull body (idle fires at 60 ms),
+  steady pull progress outliving the idle window (no total deadline), caller
+  cancellation beating a 5 s idle in both chat and pull, malformed pull NDJSON
+  (`decode stream`), pull EOF without `success`. The first five went
+  genuinely red (old code: no caps, no idle) then green; the last five guard
+  existing behavior through the rewrite (red-able only by regression), and the
+  pre-existing chat malformed/EOF/cancel tests stay green on the new decoder.
+- PLAN §5 "Confirmed stream behaviors" gained the phase-5 bounds bullet.
+
+**Commands + exit codes**
+- RED: focused run (`-run 'Test(Chat|Pull)(Oversized…|…)'`) → first compile
+  fail (`streamIdle` seam missing) → seam only → 5 behavioral FAILs (cap/idle
+  messages absent) `1`.
+- GREEN: focused run → 10/10 PASS `0`; `go test -count=1 ./internal/ollama`
+  `0`; `go test -race -count=1 ./internal/ollama` `0` (6/6 repeat runs clean);
+  `make check` `0` (build + `go test -count=1 ./...` + vet + gofmt).
+- Environmental note: this host runs a localhost port prober (observed as
+  `moshi-hook`; reproduced standalone with a raw `net.Listen` and zero client
+  traffic) that sends stray `GET /` ~0.6–1.1 s after a new 127.0.0.1 port
+  binds. It intermittently failed `TestChatOversizedEventRejected` /
+  `TestChatCumulativeOverflowRejected` under `-race` (they hold listeners
+  ~100 ms+ serving multi-MiB bodies and used the strict `fakeChatServer`
+  helper that `t.Errorfs` on non-POST requests). Those two tests now use
+  probe-tolerant inline handlers (stray requests get a silent 404; a genuine
+  client bug still fails via the client's own error). Not a code defect.
+
+**Decisions / lines to respect**
+- The idle watchdog is per-received-byte, not per-request: a read that
+  delivers nothing for the window aborts via child-context cancellation; a
+  read that delivers (any amount, however slowly) resets the window. The
+  90 s default is a constant; tests inject per client.
+- Per-event cap counts raw wire bytes of the JSON line (strictly stronger
+  than decoded size and the actual memory bound); the chat cumulative cap
+  counts decoded content+thinking across events.
+- The decoder returns clean `io.EOF` at an event boundary; "ended without
+  done/success" is the caller's decision, so chat and pull keep their own
+  terminal semantics on one shared framing path.
+- Large streaming bodies are read through a 32 KiB bufio fill, keeping the
+  per-read watchdog goroutine cheap on multi-GiB pulls.
+
+**Blockers / open decisions**
+- None. v0.1 (tag + release notes) still next; further hardening phases per
+  owner as assigned.
+
+**Next action**
+- Fresh session: next owner-assigned step (v0.1 tag/release notes or the
+  next hardening phase).
