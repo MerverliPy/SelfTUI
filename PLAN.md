@@ -563,6 +563,16 @@ and `go test -race` green, 10 new golden frames (17 total) at 72×30/120×40.
 (root cancellation, command execution removed, config validated + atomically
 saved, explicit workspace tool trust, bounded streams, enveloped UI events,
 product-contract docs) — see LEDGER for each dated phase entry.
+**Phase 8 — reproducible CI + release gates landed 2026-09-04**: Makefile
+targets (`race`, `vuln`, `release-check`, `build-linux-amd64`/
+`build-linux-arm64` with `CGO_ENABLED=0`/`GOOS=linux`/`-X main.Version`),
+`scripts/release-check.sh` (full gate, never tags) + shared
+`scripts/verify-binary-version.sh`, `.github/workflows/ci.yml` + `release.yml`
+(pinned Go 1.27.1, govulncheck v1.7.0), and dependency bumps closing two
+reachable advisories (goldmark v1.7.17 GO-2026-5320, x/text v0.39.0
+GO-2026-5970). Two code-review lanes: 0 hard violations, findings fixed in
+the separate commits listed in the LEDGER phase-8 entry; spec verdict
+`V0_1_RELEASE_CANDIDATE_READY`.
 Next: **v0.1 release** (tag `v0.1.0` + release notes) in a fresh session; do
 not tag in a hardening phase.
 

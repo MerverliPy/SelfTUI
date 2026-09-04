@@ -1440,3 +1440,152 @@ hardening plan; branch tip was `4ebd1fa`) · **Result:** done — commit
 **Next action**
 - Fresh session: next owner-assigned step (v0.1 tag/release notes or the
   next hardening phase).
+
+### 2026-09-04 — v0.1 hardening, phase 8: reproducible CI + release gates (owner task)
+**Milestone:** owner-assigned step on `hardening/v0.1` (phase 8 of the v0.1
+hardening plan; branch tip at start was `22271da`) · **Result:** done —
+commits listed below. No §10 milestone row to tick (hardening phases are
+owner-assigned steps, not PLAN.md §10 milestones). **No tag was created or
+pushed** — v0.1.0 tagging stays a separate owner step.
+
+**Work done**
+- **Toolchain pin (checked against the live official source).** Current
+  official stable Go on 2026-09-04 is **1.27.1** (go.dev/dl JSON). CI and the
+  release gates pin Go **1.27.1** (recorded in both workflows + README +
+  CONTRIBUTING); the local gate evidence below was produced under the same
+  toolchain (`GOTOOLCHAIN=go1.27.1`, its `bin` on PATH) so local == CI. The
+  module's `go 1.25.8` directive stays the language floor (no go.mod bump —
+  out of scope).
+- **govulncheck pin = v1.7.0.** The GitHub "latest release" endpoint
+  misleadingly reports v1.1.4; that release **panics** under Go 1.27.1
+  (`unexpected expr: *ast.KeyValueExpr` — its x/tools v0.29 SSA predates
+  Go 1.27 stdlib syntax). v1.7.0 (newest tag per the Go module proxy) scans
+  cleanly. Pinned in Makefile docs, README, CONTRIBUTING, both workflows,
+  and the release-check install hint.
+- **`make vuln` surfaced two reachable advisories (first run, v1.7.0):**
+  goldmark **GO-2026-5320** (XSS in the glamour markdown render path, trace
+  through `agent_view.go` renderBlock) and x/text **GO-2026-5970** (infinite
+  loop). Fixed by bumping the indirect deps to goldmark v1.7.17 and
+  golang.org/x/text v0.39.0 in their own commit; golden renders unchanged
+  after the bump. govulncheck now reports 0 affecting (7 in imported
+  packages + 3 in required modules remain, none reachable — non-blocking).
+- **Makefile.** New `VERSION ?= dev`; new targets `race`
+  (`go test -race -count=1 ./...`), `vuln` (`govulncheck ./...`),
+  `build-linux-amd64`/`build-linux-arm64` (`CGO_ENABLED=0 GOOS=linux GOARCH
+  <exact> go build -trimpath -ldflags "-s -w -X main.Version=$(VERSION)" -o
+  dist/selftui-linux-<arch>`), and `release-check` (runs
+  `scripts/release-check.sh`); smoke targets added to `.PHONY` (review fix).
+- **scripts/release-check.sh (new).** `set -euo pipefail`; requires
+  `VERSION` matching `^v[0-9]+\.[0-9]+\.[0-9]+$` and a clean worktree
+  (`git status --porcelain` empty; ignored `bin/`/`dist/` don't count), then:
+  go mod verify → gofmt check → go vet → `go test -count=1 ./...` → `go test
+  -race -count=1 ./...` → govulncheck → both Linux builds → per-binary
+  version-stamp check → deterministic archives → `dist/SHA256SUMS` (entries
+  `dist/`-prefixed so `sha256sum -c dist/SHA256SUMS` works from the root).
+  `dist/` is rebuilt fresh each run. **The script never creates or pushes a
+  git tag.** Two non-obvious engineering decisions, both verified: (1)
+  deterministic archives via `tar --sort=name --mtime=@0 --owner=0 --group=0
+  --numeric-owner` + `gzip -n` (two full gate runs produced byte-identical
+  SHA256SUMS); (2) the cross-arch (arm64-on-amd64) `-version` check cannot
+  exec without qemu/binfmt, and `go version -m` does not record `-ldflags`,
+  so the check falls back to the bytes the linker wrote — the exact version
+  as an isolated string plus the `selftui %s` format literal (Go packs
+  rodata without separators, so the format is a substring `-F` match).
+- **scripts/verify-binary-version.sh (new, review fix).** The exec-or-
+  embedded-string ladder was duplicated between release-check.sh step 8 and
+  release.yml; it now lives in one shared script both call.
+- **.github/workflows/ci.yml (new).** Triggers: pull_request + push to main.
+  Least privilege (`contents: read`, no secrets). Steps: go mod verify, make
+  fmt, make vet, make test, make race, govulncheck (pinned v1.7.0 install),
+  CGO-disabled Linux builds. Concurrency cancel-in-progress.
+- **.github/workflows/release.yml (new).** Triggers only on pushed `v*`
+  tags. `VERSION` = the tag. Runs the complete release gate
+  (`make release-check`), a dedicated step verifying the tag equals the
+  version stamped into both binaries (via the shared helper), generates
+  release notes from the CHANGELOG section for the version (tag or bare),
+  falling back to `[Unreleased]`, then to `gh release create --generate-
+  notes`; uploads the two `selftui-<version>-linux-<arch>.tar.gz` archives +
+  `SHA256SUMS`. Least privilege (`contents: write`, default GITHUB_TOKEN, no
+  secrets).
+- **.gitignore.** `/bin/` and `/dist/` were already ignored (verified with
+  `git check-ignore`); no change was needed.
+- **Docs.** README gained a "Release engineering (v0.1)" section (targets,
+  gate contract, artifacts, no-tag rule, Go/govulncheck pins, workflows);
+  CONTRIBUTING and CHANGELOG updated; a review nit (README overclaiming
+  ci.yml parity) and a CHANGELOG duplicate `### Added` heading were fixed in
+  a separate docs commit.
+
+**Code review (requested, complete `main..HEAD` diff).** Two parallel
+read-only reviewer lanes (standards + spec, fresh contexts):
+- Standards lane: **0 hard violations, 7 judgement calls** — the four
+  substantive ones were fixed in separate commits: duplicated version-check
+  ladder (extracted to `scripts/verify-binary-version.sh`), asymmetric
+  cross-arch fallback (now also requires the `selftui %s` format), govulncheck
+  probe after the expensive steps (moved up front), and the smoke `.PHONY`
+  omission. Supply-chain note on mutable action refs (@v4/@v5) left as-is
+  (no repo rule; documented).
+- Spec lane (Phase-8 brief as spec): all requirements present — the five
+  Makefile targets with the exact recipes, release-check step order +
+  invariants + no-tag guarantee, ci.yml trigger/check set + Go version in
+  workflow and README, release.yml v*-only trigger + tag-vs-version
+  verification + full gate + archive/SHA256SUMS upload + release notes +
+  least privilege/no secrets; `-trimpath` noted as an unasked-but-benign
+  addition (reproducibility). Verdict: **`V0_1_RELEASE_CANDIDATE_READY`**.
+- Both reviewers independently confirmed no local tag exists.
+
+**Commands + exit codes (all under Go 1.27.1; govulncheck v1.7.0)**
+- Pre-commit gates at the phase-8 commit: `git diff --check` → 0;
+  `make check` → 0; `make race` → 0; `make vuln` → 0 (0 affecting).
+- Full release gate before review: `VERSION=v0.1.0 make release-check` → 0
+  twice, with **byte-identical** `dist/SHA256SUMS` across runs
+  (reproducibility proven). One earlier run failed at the arm64 stamp check
+  (rc=1): `grep -Fxq` under `set -o pipefail` exits on first match and
+  SIGPIPEs `strings`, so the pipeline rc was 141 even on success — fixed by
+  reading the full stream (`grep -Fx … >/dev/null`); regression-tested
+  positive and negative.
+- Full release gate after the review fixes (final gate, clean tree at code
+  HEAD): `VERSION=v0.1.0 make release-check` → **0**; `git diff --check` → 0;
+  `make check` → 0; `make race` → 0; `make vuln` → 0;
+  `./dist/selftui-linux-amd64 -version` → `selftui v0.1.0` (rc 0);
+  `sha256sum -c dist/SHA256SUMS` → both OK (rc 0).
+- Helper checks: `scripts/verify-binary-version.sh dist/selftui-linux-{amd64,
+  arm64} v0.1.0` → ok (executed / embedded strings); negative test with
+  v9.9.9 → rc 1 as designed.
+- Artifacts at the final gate: `dist/selftui-linux-amd64`
+  `22bb92a6ea03ec3121d81f7fb579cb737fcb7a9ccefc3798a11d7426e3d1b092`,
+  `dist/selftui-linux-arm64`
+  `7766b6a19a6c6f8d4635f33b7524ec402bbd2eb1344f58e5a8594c1b58ccde86`,
+  `dist/selftui-v0.1.0-linux-amd64.tar.gz`
+  `c33c1c4829f538c8538a76eed6c8d7662d4d7114b5744fe2c3cbbec6d1ee3def`,
+  `dist/selftui-v0.1.0-linux-arm64.tar.gz`
+  `73510c83c78a9d50b35c4099833fa86ff592cb63db1aa634b3093b07192729ba`,
+  `dist/SHA256SUMS` (over the two archives).
+- Environmental note: two `internal/ui` cold-start runs failed before any
+  edit (settings-form tests stuck on "writing config…"), then passed 3/3 in
+  isolation and 2× full-suite — the documented localhost/timing flake
+  (phase-5 LEDGER note), not a code defect; all final-gate evidence is from
+  clean consecutive runs.
+
+**Decisions / lines to respect**
+- Pinned toolchain **Go 1.27.1** (current official stable, 2026-09-04) and
+  govulncheck **v1.7.0** govern CI + the release gate; the module floor stays
+  `go 1.25.8`.
+- `release-check` and both workflows **never tag**; `release.yml` only reacts
+  to a tag the owner pushes. No push/merge happened in this phase.
+- `-trimpath` and deterministic-archive flags are deliberate
+  reproducibility additions beyond the brief's literal recipes.
+- The cross-arch version check intentionally uses embedded-string evidence
+  (documented in the script header) because `go version -m` does not record
+  `-X`.
+- Mutable action refs (`actions/checkout@v4`, `setup-go@v5`) are an accepted
+  trade-off (no SHA pinning requirement documented); revisit if supply-chain
+  posture tightens.
+
+**Blockers / open decisions**
+- None. v0.1 tag + release notes remain the next owner step (fresh session);
+  when the owner tags `v0.1.0`, `release.yml` re-runs this exact gate and
+  uploads the artifacts + CHANGELOG-derived notes.
+
+**Next action**
+- Fresh session: owner pushes tag `v0.1.0` (after this gate is green at that
+  commit) and publishes the release; or the next owner-assigned step.
