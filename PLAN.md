@@ -588,9 +588,24 @@ protection enforced on `main` (required ci status check, PR flow,
 `enforce_admins: true`, zero required approvals). Full local release gate +
 CI both green on the merged commit (`VERSION=v0.1.0 make release-check`
 PASSED, 0 vulnerabilities, binaries stamp `selftui v0.1.0`).
-Next: **runbook step 5** — annotated tag `v0.1.0` on the `main` tip,
-`release.yml` publishes at the tag; independent asset/hash/version
-verification; history audit (gitleaks) before public visibility.
+**Runbook step 5 landed 2026-09-04 — v0.1.0 published**: annotated tag
+`v0.1.0` created and pushed on the `main` tip; the first `release.yml` run
+**failed the gate** on a rare test-harness deadlock (see LEDGER 2026-09-04
+step-5 entry) — `TestRunnerCancellationReturnsPromptly` parked its test
+server handler forever (net/http arms client-close detection only after the
+request body reaches EOF; the write-path drain is not guaranteed), hanging
+the `internal/agent` race suite for the full 10-minute package timeout on the
+2-vCPU runner. Root cause fixed in **PR #3** (`fix/cancel-test-hang`, merged
+`c70bf89`): the four write-then-park test handlers now drain the request
+body before parking, deterministically arming the background read. Flake
+reproduced locally (`GOMAXPROCS=2 go test -race -count=200`) and proven
+green with the fix; tag moved pre-release to `c70bf89`. Second `release.yml`
+run **SUCCESS** — gate passed at the tag, release **SelfTUI v0.1.0** created
+with both Linux archives + SHA256SUMS; assets independently downloaded and
+verified (hashes OK, `selftui v0.1.0` stamps). CI green on merged main.
+Next: **history audit (gitleaks) before any public-visibility change** — the
+repo stays private until `SECRET_HISTORY_SCAN` is resolved; changelog cut
+(`[Unreleased]` → `[v0.1.0]`) at the next release.
 
 ---
 
