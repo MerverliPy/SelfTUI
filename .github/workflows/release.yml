@@ -35,7 +35,9 @@ defaults:
 
 jobs:
   release:
-    name: Release ${{ env.VERSION }}
+    # Static job name (no env context): GitHub does not allow the `env`
+    # context in job names. The tag is already shown in the run title.
+    name: Release
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

@@ -34,7 +34,11 @@ defaults:
 
 jobs:
   gate:
-    name: Go ${{ env.GO_VERSION }} · fmt · vet · test · race · vuln · cross-build
+    # Static job name (no env context): GitHub does not allow the `env`
+    # context in job names, and the name doubles as the required-status-
+    # check context for branch protection, so it must not drift with the
+    # pinned Go version above.
+    name: Go fmt · vet · test · race · vuln · cross-build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
