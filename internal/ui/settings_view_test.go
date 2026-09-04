@@ -221,3 +221,44 @@ func TestSettingsSubmitPersistsAndApplies(t *testing.T) {
 		t.Errorf("file not persisted: host=%q want %q", reloaded.Host, cfg.Host)
 	}
 }
+
+// typeField feeds each rune into the focused huh input as a key press.
+func typeField(t *testing.T, m App, s string) App {
+	t.Helper()
+	for _, r := range s {
+		m = updateTab(t, m, tea.KeyPressMsg{Text: string(r)})
+	}
+	return m
+}
+
+// TestSettingsFieldValidationReusesConfigPolicy drives the form to the last
+// field (max tool iterations, seeded "12") and appends a digit so the value
+// becomes "120" — inside the OLD settings range (1..256, accepted) but outside
+// the config policy (1..100, rejected). The inline error must be
+// config.Validate's stable message: the form no longer keeps a validation
+// policy of its own (it once drifted: 256 here vs 100 in config).
+func TestSettingsFieldValidationReusesConfigPolicy(t *testing.T) {
+	m, cfg := settingsApp(t)
+	m = openSettings(t, m)
+
+	// Advance to the last field: 10 fields across 4 groups.
+	keys := make([]tea.Msg, 9)
+	for i := range keys {
+		keys[i] = tea.KeyPressMsg{Code: tea.KeyEnter}
+	}
+	m = drive(t, m, keys...).(App)
+	m = typeField(t, m, "0") // "12" + "0" = "120": > 100, still < 256
+	app := drive(t, m, tea.KeyPressMsg{Code: tea.KeyEnter}).(App)
+
+	if app.settings.state != settingsEditing {
+		t.Fatalf("state = %v, want editing (out-of-range value must be rejected inline)\n%s",
+			app.settings.state, view(t, app))
+	}
+	got := view(t, app)
+	if !strings.Contains(got, "max_tool_iterations must be between 1 and 100") {
+		t.Errorf("expected config.Validate's stable message inline, got:\n%s", got)
+	}
+	if _, err := os.Stat(cfg.ConfigPath()); !os.IsNotExist(err) {
+		t.Errorf("config file should not exist after a rejected edit (nothing was saved)")
+	}
+}

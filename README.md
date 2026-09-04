@@ -49,9 +49,15 @@ Resolution order: **flags > env > config file > defaults**.
 
 | Source | Examples |
 |--------|----------|
-| Flags | `selftui -host http://192.168.1.50:11434 -theme light -default-model qwen3:8b -temperature 0.4 -top-p 0.95 -num-ctx 8192 -max-tool-iterations 20 -workspace-root ~/proj -auth-token tok -system-prompt "…"` |
+| Flags | `selftui -host http://192.168.1.50:11434 -theme light -default-model qwen3:8b -temperature 0.4 -top-p 0.95 -num-ctx 8192 -max-tool-iterations 20 -workspace-root ~/proj -system-prompt "…"` |
 | Env | `SELFTUI_HOST`, `SELFTUI_THEME`, `SELFTUI_DEFAULT_MODEL`, `SELFTUI_WORKSPACE_ROOT`, `SELFTUI_AUTH_TOKEN`, `SELFTUI_AGENT_TEMPERATURE`, `SELFTUI_AGENT_TOP_P`, `SELFTUI_AGENT_NUM_CTX`, `SELFTUI_AGENT_SYSTEM_PROMPT`, `SELFTUI_AGENT_MAX_TOOL_ITERATIONS` |
 | File | `~/.config/selftui/config.toml` (`host`, `theme`, `default_model`, `auth_token`, `workspace_root`, `[agent]` table) |
+
+**Secrets (auth token):** set the token via `SELFTUI_AUTH_TOKEN` or put
+`auth_token` in the config file (written 0600, directory 0700) — the Settings →
+Connection form does this for you. The `-auth-token` flag is retained only for
+compatibility with older invocations; prefer the env var or config file, since a
+command-line secret shows up in process listings and shell history.
 
 ## Navigation
 
@@ -134,9 +140,10 @@ SelfTUI is a plain TUI over SSH — nothing runs on the phone itself.
    Login). Key-based login is easiest on a phone.
 3. SelfTUI talks to Ollama on the **same machine** (`http://localhost:11434`
    default) — nothing else needs exposing to the network. For a *remote*
-   Ollama, point at it with `-host http://…` plus `-auth-token` (or
-   `SELFTUI_HOST`/`SELFTUI_AUTH_TOKEN`), and set the same in Settings →
-   Connection.
+   Ollama, point at it with `-host http://…` and set
+   `SELFTUI_AUTH_TOKEN` (or put `auth_token` in the config file), and set the
+   same in Settings → Connection. (Remote hosts with a token should use
+   `https://`; plain-http bearer tokens are only accepted for localhost.)
 
 ### On the iPhone
 

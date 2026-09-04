@@ -999,3 +999,79 @@ with no way to approve.
 
 **Next action**
 - Fresh session: v0.1 tag + release notes (unchanged).
+
+### 2026-09-03 — v0.1 hardening, phase 3: validate + atomically save config (owner task)
+**Milestone:** owner-assigned step on `hardening/v0.1` (phase 3 of the v0.1
+hardening plan; branch tip was `6903003`) · **Result:** done — see commit
+"security: validate and atomically save configuration". No §10 milestone row to
+tick (hardening phases are owner-assigned steps, not PLAN.md §10 milestones).
+
+**Work done**
+- `config.Validate(Config) error` (new `internal/config/validate.go`) is now the
+  single configuration policy, with stable field-prefixed errors
+  (`config: host: …`, `config: agent: …`, `config: theme: …`,
+  `config: workspace_root: …`). Rules: host scheme exactly http/https, hostname
+  present, userinfo/query/fragment rejected, bearer token over plain http only
+  for localhost/127.0.0.1/::1; theme dark|light; temperature 0–2; top_p 0–1;
+  num_ctx 128–1,048,576; max_tool_iterations 1–100; non-empty workspace_root
+  must be an existing directory. First violation wins, in a fixed order.
+- `config.Load` calls `Validate` after all sources are applied (defaults → file
+  → env → overrides) and returns the error verbatim; `config.Save` validates
+  before marshaling. Every surface reports the identical message regardless of
+  the offending source.
+- `config.Save` now writes atomically via `writeFileAtomic`: same-directory
+  0600 temp file (`.selftui-config-*.tmp`) → write → Sync → Close → Chmod(0600)
+  → rename over target → Chmod(0600) on the final path; the temp file is
+  removed on every failure (deferred cleanup); created config directories are
+  0700 (pre-existing dirs untouched).
+- Settings form no longer keeps its own validation policy — it delegates every
+  field check to `config.Validate` (`policyValidator` in settings_view.go),
+  which also fixes a real drift: the form allowed max tool iterations up to 256
+  while the policy is 1–100. Fields keep only parse-shape checks (number /
+  integer) plus token and workspace-root checks that previously had none.
+- Tests (all table-driven where the task asked): every invalid rule is rejected
+  with the exact same stable error through each of TOML / env / Overrides
+  (15 rules × 3 sources + boundary/loopback acceptance matrix + host-level unit
+  cases + NaN); an existing 0644 config becomes 0600 after Save; a failed
+  validation leaves the old file byte-identical with no temp litter; a
+  mid-write failure (read-only dir) keeps the old file; a rename failure
+  cleans the temp file; a successful save reloads identically (every field).
+  UI test drives the form to max tool iterations, types "0" onto the seeded
+  "12" ("120": inside the old 1..256 band, outside the new 1..100) and asserts
+  config.Validate's stable message inline, with nothing written.
+- `-auth-token` removed from README examples; README + flag help now recommend
+  `SELFTUI_AUTH_TOKEN` or the 0600 config file and warn the flag (kept only for
+  compatibility) can leak argv secrets into process listings / shell history.
+- Existing priority tests updated to policy-valid sample values (env/flag/file
+  hosts now carry a scheme; token fixtures sit on https or loopback hosts;
+  TestSaveWritesConfig uses a real workspace dir).
+
+**Commands + exit codes**
+- RED: `go test -count=1 ./internal/config` → build fail `undefined: Validate`;
+  `go test ./internal/ui -run TestSettingsFieldValidationReusesConfigPolicy`
+  → FAIL (old policy accepted "120", saved). Green after implementation.
+- `go test -count=1 ./internal/config ./internal/ui ./cmd/self-tui` `0`
+- `go test -race -count=1 ./internal/config ./internal/ui` `0`
+- `make check` `0` (build + `go test -count=1 ./...` + vet + gofmt) · `make fmt` `0`
+- live boot checks: `SELFTUI_THEME=pink|SELFTUI_HOST=ftp://…|SELFTUI_AUTH_TOKEN`
+  over http remote → `selftui: load config: config: …` exit 1; `-version` `0`.
+
+**Decisions / lines to respect**
+- Validate errors flow **verbatim** out of Load and Save (no extra wrapping) so
+  any caller sees the exact stable message; main prints
+  `selftui: load config: config: host: …`.
+- Loopback = `localhost`, `127.0.0.1`, `::1` (case-insensitive hostname).
+  Empty `workspace_root` stays allowed (= cwd); non-empty must exist as a dir.
+- Created config parent dirs are 0700; a pre-existing parent is left alone
+  (never chmod a user's `-config` directory out from under them).
+- The Settings form shows config.Validate errors only when they belong to the
+  field being edited (matched by the stable marker substring); Save
+  re-validates as the backstop, surfacing any miss in the existing error panel.
+
+**Blockers / open decisions**
+- None. v0.1 (tag + release notes) still next; further hardening phases per
+  owner as assigned.
+
+**Next action**
+- Fresh session: next owner-assigned step (v0.1 tag/release notes or the next
+  hardening phase).

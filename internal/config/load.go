@@ -51,6 +51,9 @@ type Overrides struct {
 }
 
 // Load resolves the configuration: defaults -> config file -> env -> overrides.
+// The resolved value is validated with Validate (the single configuration
+// policy), so an invalid value is rejected with the same stable error no
+// matter which source supplied it.
 func Load(ov Overrides) (Config, error) {
 	cfg := Default()
 
@@ -82,6 +85,11 @@ func Load(ov Overrides) (Config, error) {
 
 	// 3. flags/overrides.
 	applyOverrides(&cfg, ov)
+
+	// 4. policy check on the fully resolved value.
+	if err := Validate(cfg); err != nil {
+		return cfg, err
+	}
 
 	return cfg, nil
 }
@@ -208,8 +216,15 @@ func applyOverrides(c *Config, ov Overrides) {
 	}
 }
 
-// Save writes the current Config state to the resolved config path.
+// Save writes the current Config state to the resolved config path. The value
+// is validated first — config.Validate is the single policy, reused by Load,
+// Save, and the Settings form — then written atomically via writeFileAtomic so
+// a failure at any point leaves any previous file untouched.
 func Save(c Config) error {
+	if err := Validate(c); err != nil {
+		return err
+	}
+
 	path := c.filePath
 	if path == "" {
 		p, err := xdg.ConfigFile(filepath.Join("selftui", "config.toml"))
@@ -239,13 +254,56 @@ func Save(c Config) error {
 		return fmt.Errorf("marshal config: %w", err)
 	}
 
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return fmt.Errorf("create config dir %s: %w", filepath.Dir(path), err)
-	}
-	if err := os.WriteFile(path, b, 0o600); err != nil {
-		return fmt.Errorf("write config %s: %w", path, err)
+	return writeFileAtomic(path, b)
+}
+
+// writeFileAtomic writes b to path through a temp file in the same directory
+// (0600), fsynced and renamed over the target, so a reader never observes a
+// partially written config and a crash cannot corrupt the file. The temp file
+// is removed on every failure; directories created along the way are 0700.
+func writeFileAtomic(path string, b []byte) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("create config dir %s: %w", dir, err)
 	}
 
+	f, err := os.CreateTemp(dir, ".selftui-config-*.tmp")
+	if err != nil {
+		return fmt.Errorf("write config %s: %w", path, err)
+	}
+	tmp := f.Name()
+	committed := false
+	defer func() {
+		if !committed {
+			_ = os.Remove(tmp) // best effort: never leave a temp file behind
+		}
+	}()
+
+	if _, err := f.Write(b); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("write config %s: %w", path, err)
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("write config %s: %w", path, err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("write config %s: %w", path, err)
+	}
+	if err := os.Chmod(tmp, 0o600); err != nil {
+		return fmt.Errorf("write config %s: %w", path, err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return fmt.Errorf("write config %s: %w", path, err)
+	}
+	committed = true
+
+	// The temp file is 0600 by construction (CreateTemp + chmod) and rename
+	// preserves the mode; re-assert 0600 on the final path so a config that
+	// may hold an auth token is never world-readable.
+	if err := os.Chmod(path, 0o600); err != nil {
+		return fmt.Errorf("write config %s: %w", path, err)
+	}
 	return nil
 }
 

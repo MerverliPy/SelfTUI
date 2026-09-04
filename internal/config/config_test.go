@@ -53,16 +53,16 @@ func TestFileOnly(t *testing.T) {
 }
 
 func TestEnvOverridesFile(t *testing.T) {
-	p := writeFile(t, "host = \"file-host\"\ntheme = \"light\"\n")
-	t.Setenv(envPrefix+"HOST", "env-host")
+	p := writeFile(t, "host = \"http://file.example:11434\"\ntheme = \"light\"\n")
+	t.Setenv(envPrefix+"HOST", "https://env.example:11434")
 	t.Setenv(envPrefix+"AUTH_TOKEN", "secret")
 	t.Setenv(envPrefix+"AGENT_TEMPERATURE", "0.11")
 	c, err := Load(Overrides{ConfigPath: &p})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Host != "env-host" {
-		t.Errorf("Host = %q, want env-host (env beats file)", c.Host)
+	if c.Host != "https://env.example:11434" {
+		t.Errorf("Host = %q, want https://env.example:11434 (env beats file)", c.Host)
 	}
 	if c.AuthToken != "secret" {
 		t.Errorf("AuthToken = %q", c.AuthToken)
@@ -76,10 +76,10 @@ func TestEnvOverridesFile(t *testing.T) {
 }
 
 func TestOverridesWinEverything(t *testing.T) {
-	p := writeFile(t, "host = \"file-host\"\ntheme = \"light\"\n[agent]\ntemperature = 0.11\n")
-	t.Setenv(envPrefix+"HOST", "env-host")
-	flagHost := "flag-host"
-	flagTheme := "flag-dark"
+	p := writeFile(t, "host = \"http://file.example:11434\"\ntheme = \"dark\"\n[agent]\ntemperature = 0.11\n")
+	t.Setenv(envPrefix+"HOST", "http://env.example:11434")
+	flagHost := "https://flag.example:11434"
+	flagTheme := "light"
 	flagTemp := 0.33
 	flagTopP := 0.88
 	flagNumCtx := 1234
@@ -100,11 +100,11 @@ func TestOverridesWinEverything(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Host != "flag-host" {
-		t.Errorf("Host = %q, want flag-host (flags beat env + file)", c.Host)
+	if c.Host != "https://flag.example:11434" {
+		t.Errorf("Host = %q, want https://flag.example:11434 (flags beat env + file)", c.Host)
 	}
-	if c.Theme != "flag-dark" {
-		t.Errorf("Theme = %q, want flag-dark", c.Theme)
+	if c.Theme != "light" {
+		t.Errorf("Theme = %q, want light", c.Theme)
 	}
 	if c.Agent.Temperature != 0.33 || c.Agent.TopP != 0.88 || c.Agent.NumCtx != 1234 || c.Agent.MaxToolIterations != 15 {
 		t.Errorf("agent fields = %+v", c.Agent)
@@ -135,11 +135,11 @@ func TestSaveWritesConfig(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "saved.toml")
 	c := Default()
 	c.filePath = p
-	c.Host = "http://example.test:11434"
+	c.Host = "https://example.test:11434"
 	c.AuthToken = "abc123"
 	c.Theme = "light"
 	c.DefaultModel = "gemma3:12b"
-	c.WorkspaceRoot = "/tmp/project"
+	c.WorkspaceRoot = t.TempDir() // must exist: non-empty workspace_root is validated
 	c.Agent.Temperature = 0.33
 	c.Agent.TopP = 0.81
 	c.Agent.NumCtx = 1234
