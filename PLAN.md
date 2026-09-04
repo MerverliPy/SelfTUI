@@ -575,6 +575,19 @@ the separate commits listed in the LEDGER phase-8 entry; spec verdict
 `V0_1_RELEASE_CANDIDATE_READY`.
 Next: **v0.1 release** (tag `v0.1.0` + release notes) in a fresh session; do
 not tag in a hardening phase.
+**Release runbook step 4 landed 2026-09-04**: `hardening/v0.1` merged to
+`main` via **PR #1** (commit `1a45554`, merge commit, branch kept); CI
+bring-up fixed two latent defects found by the first remote runs — job
+`name:` used the `env` context (invalid in GitHub's parser; both workflows
+fixed to static names in `9bd1e0c`) and a same-clock-tick transcript-file
+reuse race in `internal/session` (`5ad160a`, O_EXCL + retry). Branch
+protection enforced on `main` (required ci status check, PR flow,
+`enforce_admins: true`, zero required approvals). Full local release gate +
+CI both green on the merged commit (`VERSION=v0.1.0 make release-check`
+PASSED, 0 vulnerabilities, binaries stamp `selftui v0.1.0`).
+Next: **runbook step 5** — annotated tag `v0.1.0` on the `main` tip,
+`release.yml` publishes at the tag; independent asset/hash/version
+verification; history audit (gitleaks) before public visibility.
 
 ---
 

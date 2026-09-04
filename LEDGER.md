@@ -1662,3 +1662,114 @@ to tick (owner-assigned step). **No tag was created or pushed.**
 **Next action**
 - Owner (fresh session): push `hardening/v0.1`, watch the first CI run go green,
   then tag `v0.1.0` and publish — release.yml re-runs this gate at the tag.
+
+### 2026-09-04 — v0.1 runbook step 4: PR #1 merged to main; CI bring-up found two latent defects; branch protection enforced; gate green on merged main (owner task)
+**Milestone:** owner-assigned step (release runbook §4 "Push a Pull Request" —
+push branch, open PR vs `main`, require CI, review diff, merge, rerun the full
+release gate on the merged commit). No §10 row to tick (owner-assigned step);
+§12 tail updated. **Result:** done — `hardening/v0.1` merged into `main`
+(commit `1a45554`), first-ever remote CI runs green (PR + merged main), branch
+protection enforced on `main`, full release gate PASSED on the merged commit.
+**No tag was created or pushed** (runbook step 5 stays for a fresh session).
+
+**Work done**
+- Pushed `hardening/v0.1` (14 commits, +5,619/−813) and opened **PR #1**
+  (`v0.1 hardening: security, reproducible CI/release gates, RC fixes`) vs
+  `main` with a theme-grouped body; no PR template exists in the repo. This
+  was the repo's **first remote CI run ever** (LEDGER predicted this).
+- **CI bring-up found two latent defects** (both fixed on the branch before
+  merge; neither was catchable by the local release gate):
+  - **F1 — workflow parse error (both files).** `ci.yml` and `release.yml`
+    used the `env` context inside job `name:` — GitHub's parser rejects it
+    (job-name context is limited to github/inputs/matrix/needs/strategy/
+    vars), so every dispatch died in 0 s with "workflow file issue" and no
+    check ever attached to the PR. Caught with `actionlint` v1.7.7 (installed
+    out-of-repo). Fix `9bd1e0c`: static job names — which also keeps the
+    required-status-check context stable across Go version bumps. First remote
+    parse of these files; the local gate does not lint workflow YAML
+    (candidate addition for v0.1.1: run actionlint in ci.yml/`make check`).
+  - **F2 — session transcript same-tick reuse.** `TestAppendModeContinuesAfter
+    Reopen` failed on the runner: the transcript name is
+    `chat-<millisecond>-<pid>.md`, so a second `Open` in the same process
+    landing within one clock tick collides and `O_CREATE|O_APPEND` silently
+    reopened the previous run's file. Local runs (slower fsync) never hit the
+    ~1 ms window. Fix `5ad160a`: `O_EXCL` + retry on the next tick — a fresh
+    per-run file is now a guarantee, clock-granularity agnostic (plain
+    `UnixNano` would not help on a coarse VM clock). Regression test occupies
+    the current instant's candidate name and asserts Open never reuses it.
+    150× repeated + race ×5 green locally.
+- **CI on PR #1: green** (run `33875771938`, check "Go fmt · vet · test ·
+  race · vuln · cross-build" reported on head `5ad160a`).
+- **Branch protection on `main`** (PUT `branches/main/protection`):
+  required status check `Go fmt · vet · test · race · vuln · cross-build`
+  (strict false); required PR with `required_approving_review_count: 0`
+  (solo: the owner cannot approve their own PR, so enforcement comes from the
+  required check + PR flow, not approvals); **`enforce_admins: true`** so the
+  owner's merges are gated too (this is the binding part); no restrictions.
+  Applied while PR #1 was open → mergeStateStatus CLEAN, merged through the
+  gate. Owner retains the settings-level escape hatch (reversible).
+- **Merged PR #1 with a merge commit** (not squash — the 15-commit hardening
+  history is the auditable record), commit `1a45554`; branch
+  `hardening/v0.1` **kept** (not deleted), per the runbook.
+- **Full release gate on merged `main` (`1a45554`), pinned toolchain:**
+  `VERSION=v0.1.0 make release-check` → **PASSED** (0 reachable
+  vulnerabilities under go1.27.1; both binaries stamp `selftui v0.1.0`;
+  deterministic archives + SHA256SUMS). `make check` → 0; `make race` → 0;
+  `git diff --check` → 0; `./dist/selftui-linux-amd64 -version` →
+  `selftui v0.1.0`; `sha256sum -c dist/SHA256SUMS` → OK ×2.
+- **CI on merged `main` (push trigger): SUCCESS** (run `33876257480`) — first
+  CI run on the default branch.
+- New artifact hashes (differ from the phase-8 set because commits `9bd1e0c`
+  and `5ad160a` changed the tree): `dist/selftui-v0.1.0-linux-amd64.tar.gz`
+  `2d389a12fec85049fe0bad9f6406bf68bf4ca322af7790cd30bf25129af281be`,
+  `dist/selftui-v0.1.0-linux-arm64.tar.gz`
+  `b26e04bdef7d012b10775dc1e7a10e998f065e145f82d4bbe4208c299f1fd04d`.
+
+**Commands + exit codes (all on merged `main` content)**
+- `git push -u origin hardening/v0.1` 0 · `gh pr create …` → PR #1 ·
+  `actionlint v1.7.7` on both workflows → found F1 (2 findings); clean after
+  fix · `gh pr checks 1 --watch` → green · `go test ./internal/session
+  -count=150` 0 · `go test -race ./internal/session -count=5` 0 ·
+  `go test -count=1 ./...` 0 · PUT branch protection → 200.
+- `gh pr merge 1 --merge` → merged (`1a45554`) · `git checkout main && git
+  pull --ff-only` 0 · tree(main) == tree(hardening/v0.1) (`726a203…`).
+- With `GOTOOLCHAIN=go1.27.1` + module-cached toolchain bin + GOPATH on PATH:
+  `VERSION=v0.1.0 make release-check` 0 · `make check` 0 · `make race` 0 ·
+  `git diff --check` 0 · `sha256sum -c dist/SHA256SUMS` 0 · `gh run watch
+  33876257480` → success.
+- First gate attempt WITHOUT the pinned toolchain failed (govulncheck under
+  the shell's default go1.25.8 reported 13 stdlib advisories) — a toolchain
+  artifact of the run environment, not a repo defect; CI (go1.27.1) and the
+  pinned local gate are both green.
+
+**Decisions / lines to respect**
+- Enforcement model: required CI check + PR flow via branch protection with
+  `enforce_admins: true` and zero required approvals; branch protection
+  "require PR" for the owner comes from protection itself (direct pushes to
+  `main` are now rejected) — the docs commit for this entry lands via PR #2.
+- Job names in both workflows are now static; the required-check context
+  string is `Go fmt · vet · test · race · vuln · cross-build` and must stay
+  in sync if the job is ever renamed (else every PR blocks).
+- Release gate and CI must run under the pinned toolchain
+  (`GOTOOLCHAIN=go1.27.1`, govulncheck v1.7.0); the module floor `go 1.25.8`
+  is unchanged. Running govulncheck under an older Go reports stdlib
+  advisories that are environmental, not repo defects.
+- `actions/checkout@v4` / `actions/setup-go@v5` now emit a Node-20
+  deprecation warning (GitHub 2025-09-19, forced to Node 24) — still
+  functional; mutable action refs remain an accepted trade-off (recorded
+  phase 8); revisit action majors in v0.1.1.
+- Branch `hardening/v0.1` intentionally kept; delete after the v0.1.1 patch
+  milestone or once the owner has finished diff-reviewing merged PR #1.
+
+**Blockers / open decisions**
+- None (code/CI). `SECRET_HISTORY_SCAN=UNRESOLVED` persists (gitleaks never
+  installed) — required before the repo goes public (runbook step 5/6).
+- Owner review of the merged PR #1 diff in GitHub remains worthwhile (runbook
+  item 4) — the PR page is the auditable record; branch kept for that.
+
+**Next action**
+- Fresh session (runbook step 5): merged `main` passes the gate (this entry)
+  → create an annotated tag `v0.1.0` on the `main` tip, push it, watch
+  `release.yml` re-run the gate at the tag and publish assets; independently
+  download + verify SHA256SUMS and `selftui v0.1.0` version strings; then the
+  history audit (gitleaks) before any public-visibility change.
