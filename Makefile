@@ -7,7 +7,7 @@ BIN     := bin/selftui
 VERSION ?= dev
 
 .PHONY: build test race vuln lint vet fmt run check clean probe probe-build probe-raw probe-local \
-	release-check build-linux-amd64 build-linux-arm64
+	release-check build-linux-amd64 build-linux-arm64 smoke smoke-model smoke-reconnect
 
 build: ## compile the self-tui binary
 	$(GO) build -o $(BIN) ./cmd/self-tui
