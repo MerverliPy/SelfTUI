@@ -940,3 +940,40 @@ truncation now shows "…", no phantom caret during tool/thinking phases.
 
 **Next action**
 - Fresh session: v0.1 tag + release notes (unchanged).
+
+### 2026-09-06 — Root cause: mutation dialogs dropped at the App shell (owner bug)
+**Milestone:** owner bug fix · **Result:** done — write_file/edit_file/run_command
+approvals now reach the UI in the real binary.
+
+**Symptom (owner-reported):** asking the agent to write a script hangs forever —
+statusline stuck at "⚙ write_file … esc again to interrupt", no "Allow
+write_file?" dialog ever appears, no file is created. Reproduced live: runner
+and AgentView flows both pass against qwen3:8b, so the failure was upstream.
+
+**Root cause:** App.Update's forwarded-case list for agent messages omitted
+`agent.ToolConfirmMsg` and `agent.ToolOutputMsg`. Every mutation test drove
+AgentView.Update directly (or pumped its chatCh into the view, bypassing the
+shell), so the gap never surfaced: in the real app the runner emits
+ToolConfirmMsg, the root App drops it, the runner blocks forever on the
+approval channel, and the UI shows a perpetually "running/armed" tool line
+with no way to approve.
+
+**Fix**
+- Added `agent.ToolConfirmMsg` and `agent.ToolOutputMsg` to App.Update's
+  agent case list (app.go).
+- New App-level regression tests (routing_regression_test.go) that drive the
+  whole flow through App.Update: write_file confirm appears as the overlay,
+  y approves → file written + final reply; n declines → no file. These tests
+  would hang/fail on the old routing.
+- Note for future tests: fake NDJSON tool events must nest the function
+  object exactly like the agent package's toolEvent helper (fmt.Sprintf with
+  a separate `{"function":…}` arg), or Ollama decode fails and the run errors
+  before any tool call.
+
+**Commands + exit codes**
+- `make check` `0` · `go test -race ./...` `0` · `make build` `0`
+- live repros (temporary, removed): runner + UI two-turn timer against the
+  real qwen3:8b — both PASS (25.3s / 10.9s), confirming tool writes + edits
+
+**Next action**
+- Fresh session: v0.1 tag + release notes (unchanged).
