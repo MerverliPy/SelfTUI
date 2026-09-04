@@ -59,7 +59,11 @@ const tagsBody = `{
 func TestListParsesModels(t *testing.T) {
 	c, _ := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != "/api/tags" {
-			t.Errorf("got %s %s, want GET /api/tags", r.Method, r.URL.Path)
+			// Stray localhost prober traffic gets a silent 404, never a test
+			// error; a real client mistake still fails via the client's own
+			// error (phase-5 LEDGER note).
+			w.WriteHeader(404)
+			return
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(tagsBody))
@@ -93,6 +97,10 @@ func TestListParsesModels(t *testing.T) {
 func TestListSendsBearerToken(t *testing.T) {
 	var gotAuth string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/tags" {
+			w.WriteHeader(404)
+			return
+		}
 		gotAuth = r.Header.Get("Authorization")
 		w.Write([]byte(`{"models":[]}`))
 	}))
@@ -110,6 +118,10 @@ func TestListSendsBearerToken(t *testing.T) {
 func TestListNoTokenNoHeader(t *testing.T) {
 	var gotAuth string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/tags" {
+			w.WriteHeader(404)
+			return
+		}
 		gotAuth = r.Header.Get("Authorization")
 		w.Write([]byte(`{"models":[]}`))
 	}))
@@ -150,7 +162,8 @@ func TestShowPostsNameAndParses(t *testing.T) {
 	var gotBody string
 	c, _ := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.URL.Path != "/api/show" {
-			t.Errorf("got %s %s, want POST /api/show", r.Method, r.URL.Path)
+			w.WriteHeader(404)
+			return
 		}
 		var req map[string]string
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -268,6 +281,10 @@ func TestContextCancelled(t *testing.T) {
 func TestHostTrailingSlashNormalized(t *testing.T) {
 	var path string
 	c, _ := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/tags" {
+			w.WriteHeader(404)
+			return
+		}
 		path = r.URL.Path
 		w.Write([]byte(`{"models":[]}`))
 	}))
@@ -286,6 +303,10 @@ func TestHostTrailingSlashNormalized(t *testing.T) {
 func TestDeletePostsName(t *testing.T) {
 	got := struct{ method, path, name string }{}
 	c, _ := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete || r.URL.Path != "/api/delete" {
+			w.WriteHeader(404)
+			return
+		}
 		got.method, got.path = r.Method, r.URL.Path
 		var req struct{ Name string }
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -350,7 +371,8 @@ func TestPullStreamsProgress(t *testing.T) {
 	}{}
 	c, _ := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.URL.Path != "/api/pull" {
-			t.Errorf("got %s %s, want POST /api/pull", r.Method, r.URL.Path)
+			w.WriteHeader(404)
+			return
 		}
 		var req map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {

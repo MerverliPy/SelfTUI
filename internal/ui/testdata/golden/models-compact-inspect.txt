@@ -27,4 +27,4 @@
 │── MODEL INFO                                                         │
 │general.architecture = qwen3                                          │
 ╰──────────────────────────────────────────────────────────────────────╯
- ⏻ http://localhost:11434 · tools off          Models · 72x30 · compact 
+ ⏻ http://localhost:11434 · tools off · /tmp   Models · 72x30 · compact 

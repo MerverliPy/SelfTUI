@@ -27,4 +27,4 @@ Which Ollama host SelfTUI talks to; applied to new requests on save.
                                                                         
                                                                         
 enter next                                                              
- ⏻ http://localhost:11434 · tools off        Settings · 72x30 · compact 
+ ⏻ http://localhost:11434 · tools off · /tmp                            

@@ -21,7 +21,7 @@ func fakeChatServer(t *testing.T, body string) (*Client, *ChatRequest) {
 	_ = reqBody
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.URL.Path != "/api/chat" {
-			t.Errorf("got %s %s, want POST /api/chat", r.Method, r.URL.Path)
+			// Stray localhost prober traffic: silent 404, never a test error.
 			w.WriteHeader(404)
 			return
 		}

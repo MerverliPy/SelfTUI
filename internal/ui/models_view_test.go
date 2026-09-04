@@ -19,8 +19,11 @@ import (
 func fakeShowServer(t *testing.T, showFn func(w http.ResponseWriter, name string)) (*ollama.Client, *httptest.Server) {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Stray traffic to the fake host (this machine's localhost port
+		// prober sends GET / at freshly bound ports, phase-5 LEDGER note)
+		// must never fail a test for bytes the client did not send; a real
+		// client mistake still fails through the client's own 404 error.
 		if r.URL.Path != "/api/show" {
-			t.Errorf("path = %s, want /api/show", r.URL.Path)
 			w.WriteHeader(404)
 			return
 		}
@@ -45,7 +48,6 @@ func fakeDeleteServer(t *testing.T, deleteFn func(w http.ResponseWriter, name st
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodDelete || r.URL.Path != "/api/delete" {
-			t.Errorf("got %s %s, want DELETE /api/delete", r.Method, r.URL.Path)
 			w.WriteHeader(404)
 			return
 		}
@@ -66,7 +68,6 @@ func fakePullServer(t *testing.T, body string) (*ollama.Client, *httptest.Server
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.URL.Path != "/api/pull" {
-			t.Errorf("got %s %s, want POST /api/pull", r.Method, r.URL.Path)
 			w.WriteHeader(404)
 			return
 		}

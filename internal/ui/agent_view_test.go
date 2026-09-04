@@ -72,7 +72,9 @@ func fakeOllamaUI(t *testing.T) (*ollama.Client, *[][]ollama.ChatMessage, *int) 
 			w.Header().Set("Content-Type", "application/x-ndjson")
 			io.WriteString(w, uiChatBody)
 		default:
-			t.Errorf("unexpected path %s", r.URL.Path)
+			// Stray traffic (this host's localhost port prober sends GET / at
+			// fresh ports): silent 404, never a test error — a genuine client
+			// mistake still fails through the client's own error.
 			w.WriteHeader(404)
 		}
 	}))

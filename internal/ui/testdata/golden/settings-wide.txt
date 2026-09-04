@@ -19,4 +19,4 @@ on save.
                                                               num_ctx sent per request.                                 
                                                               > 4096                                                    
 enter next                                                                                                              
- ⏻ http://localhost:11434 · tools off · /home/calvin/SelfTUI/internal/ui                       Settings · 120x40 · wide 
+ ⏻ http://localhost:11434 · tools off · /tmp                                                   Settings · 120x40 · wide 

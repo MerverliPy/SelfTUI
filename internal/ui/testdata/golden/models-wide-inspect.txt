@@ -37,4 +37,4 @@
 │                                              ││                                                                      │
 │                                              ││                                                                      │
 ╰──────────────────────────────────────────────╯╰──────────────────────────────────────────────────────────────────────╯
- ⏻ http://localhost:11434 · tools off · /home/calvin/SelfTUI/internal/ui                         Models · 120x40 · wide 
+ ⏻ http://localhost:11434 · tools off · /tmp                                                     Models · 120x40 · wide 

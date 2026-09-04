@@ -26,5 +26,5 @@
 │◈ qwen3:8b                                    ctx ░░░░░ 0% · 0.0k/3.1k│
 │❯ / for commands, or chat with the selected model…                    │
 ╰──────────────────────────────────────────────────────────────────────╯
-tools off · /home/calvin/SelfTUI/internal/ui · enter send · / commands  
- ⏻ http://localhost:11434 · tools off           Agent · 72x30 · compact 
+tools off · /tmp · enter send · / commands · m model · r refresh        
+ ⏻ http://localhost:11434 · tools off · /tmp    Agent · 72x30 · compact 

@@ -27,4 +27,4 @@
                                                                         
                                                                         
                                                                         
- ⏻ http://localhost:11434 · tools off           Agent · 72x30 · compact 
+ ⏻ http://localhost:11434 · tools off · /tmp    Agent · 72x30 · compact 

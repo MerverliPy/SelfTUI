@@ -1589,3 +1589,76 @@ read-only reviewer lanes (standards + spec, fresh contexts):
 **Next action**
 - Fresh session: owner pushes tag `v0.1.0` (after this gate is green at that
   commit) and publishes the release; or the next owner-assigned step.
+
+### 2026-09-04 — v0.1 release-candidate audit fixes: portable goldens, whitespace carve-out, probe-tolerant fake hosts (owner task)
+**Milestone:** owner-assigned step on `hardening/v0.1` (follow-up to the read-only
+RC audit of the same branch) · **Result:** done — F1, F2, F3 fixed and verified;
+F4/F5 are environment-only (no repo defect, recorded below). No §10 milestone row
+to tick (owner-assigned step). **No tag was created or pushed.**
+
+**Work done**
+- **F1 (blocker): golden fixtures are now checkout-path independent.** The
+  fixtures byte-compare full shell renders whose status rows show the canonical
+  workspace; with the default empty `workspace_root` that label is the process
+  cwd, so the suite only passed from `/home/calvin/SelfTUI` — reproduced by
+  running `./internal/ui` from a `/tmp` copy (drift on every path-bearing
+  frame). Post-render cwd normalization alone was insufficient: status-row
+  layout depends on label *length*, so a different-length checkout reflows
+  padding before any token substitution. Fix: golden frames now build the App
+  through a new `goldenApp` helper with a fixed workspace root `/tmp` (exists on
+  every Linux/WSL host, passes config validation, stable length 4), and
+  `normalizeWorkspace` strips any accidental cwd text before store/compare as a
+  guard. 19 fixtures regenerated; the diff is workspace-label/padding only.
+- **F2 (minor): `git diff --check` is green again.** `internal/ui/testdata/golden/*.txt`
+  rows are padded to the full frame width, so trailing spaces are load-bearing
+  fixture content; a repo-root `.gitattributes` exempts exactly the
+  trailing-space checks for those files. Range check `main...HEAD` now exits 0
+  (was 2, 22 findings).
+- **F3 (environmental flake): fake-host HTTP helpers are probe-tolerant.** This
+  host's `moshi-hook` localhost port prober (reproduced live: a bare listener
+  on a fresh 127.0.0.1 port received `GET / HTTP/1.1` ~2 s after bind) made
+  strict fake hosts fail under `-race` intermittently (~1 in 3 full-suite runs;
+  observed on `TestAppRoutingPullCompletesAndReloads`, geometry, and chat
+  tests). Converted every handler-side mismatch error to a silent 404 across
+  `internal/ui` (`fakeShowServer`, `fakeDeleteServer`, `fakePullServer`,
+  `fakeOllamaUI`) and `internal/ollama` (List/Bearer/NoToken/Show/
+  HostTrailingSlash/Delete/Pull/chat servers). Genuine client mistakes still
+  fail through the client's own 404 error, and dedicated client-side
+  method/path assertions (e.g. `TestDeletePostsName`) are unchanged.
+- **F4/F5 (environment, no code change):** `govulncheck` was not on PATH —
+  installed the repo-pinned v1.7.0 out-of-repo (GOPATH) on go1.27.1 to run the
+  mandated gates. `gitleaks` is not installed → `SECRET_HISTORY_SCAN=UNRESOLVED`
+  (not installed, per audit instruction); a supplementary `git log --all -p`
+  scan over high-signal secret patterns found 0 matches.
+
+**Commands + exit codes**
+- `gofmt -l internal/ui internal/ollama` → empty `0`; `go vet ./internal/ui ./internal/ollama` `0`.
+- Golden regen `go test ./internal/ui -run TestGoldenRender -update` `0`; fixture diff reviewed (19 files, workspace-label/padding only).
+- `make test` `0` (uncached `./...` all ok); golden stability re-run `0`.
+- Portability proof: full `go test -count=1 ./...` (go1.27.1) from a fresh
+  `/tmp/selftui-verify.*` copy → all ok `0` (failed before the fix).
+- `go test -race -count=1 ./...` ×3 → `0` each (prober still running on the host;
+  previously ~1-in-3 full-suite runs flaked).
+- `git diff --check` (worktree) `0`; `git diff --check main...HEAD` `0`.
+- `make check` `0`; `make vuln` (govulncheck v1.7.0) `0` (0 reachable).
+- `VERSION=v0.1.0 make release-check` → gate runs on the clean commit (see below).
+
+**Decisions / lines to respect**
+- Golden frames pin layout for a fixed workspace root (`/tmp`), not the default
+  empty-root→cwd identity; the compact/wide presence of the label in some frames
+  shifted accordingly (shorter label fits more rows) — deterministic everywhere.
+- `.gitattributes` scopes the trailing-space exemption to
+  `internal/ui/testdata/golden/*.txt` only; all other whitespace checks stay on.
+- Silent-404 fake hosts keep real client bugs detectable via the client's own
+  error; positive client-side method/path assertions were preserved, not
+  weakened.
+
+**Blockers / open decisions**
+- None (code). `SECRET_HISTORY_SCAN=UNRESOLVED` until gitleaks is run on the
+  repo (owner decision — nothing installed automatically). GitHub CI has never
+  run on the remote (`gh run list` empty; only `main` is pushed); the first push
+  of `hardening/v0.1` will exercise `ci.yml` for the first time.
+
+**Next action**
+- Owner (fresh session): push `hardening/v0.1`, watch the first CI run go green,
+  then tag `v0.1.0` and publish — release.yml re-runs this gate at the tag.
