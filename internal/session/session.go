@@ -24,8 +24,8 @@ type Log struct {
 	path string
 }
 
-// Open creates the session directory (0700) and the transcript file (0600,
-// append mode) under dir, writing a small header. A nil-but-non-nil writer is
+// Open creates the session directory (0700) and a fresh per-run transcript
+// file (0600) under dir, writing a small header. A nil-but-non-nil writer is
 // never returned: any failure is returned as an error so the UI can surface
 // it once and keep chatting.
 func Open(dir, host string) (*Log, error) {
@@ -35,10 +35,27 @@ func Open(dir, host string) (*Log, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("session: mkdir %s: %w", dir, err)
 	}
-	name := filepath.Join(dir, fmt.Sprintf("chat-%s-%d.md", time.Now().Format("20060102-150405.000"), os.Getpid()))
-	f, err := os.OpenFile(name, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
-	if err != nil {
-		return nil, fmt.Errorf("session: open %s: %w", name, err)
+	// The name is a millisecond timestamp plus the pid, so two Opens in the
+	// same process can collide when they land within one clock tick (the
+	// reopen test, a fast restart). Never reuse an existing file: O_EXCL
+	// turns the collision into a retry on the next tick instead of silently
+	// appending into the previous run's transcript.
+	var f *os.File
+	var name string
+	for i := 0; i < 20; i++ {
+		candidate := sessionFileCandidate(dir)
+		fh, err := os.OpenFile(candidate, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		if err == nil {
+			f, name = fh, candidate
+			break
+		}
+		if !os.IsExist(err) {
+			return nil, fmt.Errorf("session: open %s: %w", candidate, err)
+		}
+		time.Sleep(time.Millisecond) // the next tick yields a fresh name
+	}
+	if f == nil {
+		return nil, fmt.Errorf("session: no fresh transcript name in %s after repeated same-tick collisions", dir)
 	}
 	l := &Log{f: f, path: name}
 	header := "# SelfTUI chat session\n"
@@ -52,6 +69,12 @@ func Open(dir, host string) (*Log, error) {
 		return nil, fmt.Errorf("session: header: %w", err)
 	}
 	return l, nil
+}
+
+// sessionFileCandidate returns the transcript name for the current instant
+// (millisecond timestamp + pid).
+func sessionFileCandidate(dir string) string {
+	return filepath.Join(dir, fmt.Sprintf("chat-%s-%d.md", time.Now().Format("20060102-150405.000"), os.Getpid()))
 }
 
 // Path returns the transcript file path (for the /export hint and error text).
