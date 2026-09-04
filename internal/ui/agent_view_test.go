@@ -72,7 +72,9 @@ func fakeOllamaUI(t *testing.T) (*ollama.Client, *[][]ollama.ChatMessage, *int) 
 			w.Header().Set("Content-Type", "application/x-ndjson")
 			io.WriteString(w, uiChatBody)
 		default:
-			t.Errorf("unexpected path %s", r.URL.Path)
+			// Stray traffic (this host's localhost port prober sends GET / at
+			// fresh ports): silent 404, never a test error — a genuine client
+			// mistake still fails through the client's own error.
 			w.WriteHeader(404)
 		}
 	}))
@@ -142,8 +144,7 @@ func TestAgentViewReadOnlyToolLoop(t *testing.T) {
 		}
 	}))
 	t.Cleanup(srv.Close)
-	cfg := config.Default()
-	v := NewAgentViewWithWorkspace(ollama.New(srv.URL, ""), NewStyles("dark"), "dark", "", root, cfg.Agent)
+	v := newAgentTools(t, ollama.New(srv.URL, ""), srv.URL, root)
 	v, _ = v.Update(tea.WindowSizeMsg{Width: 88, Height: 40})
 	v, _ = v.Update(agentModelsLoadedMsg{models: sampleModels()})
 	typeText(t, &v, "read note")
@@ -182,8 +183,7 @@ func TestAgentViewDeclinesMutationConfirmation(t *testing.T) {
 		}
 	}))
 	t.Cleanup(srv.Close)
-	cfg := config.Default()
-	v := NewAgentViewWithWorkspace(ollama.New(srv.URL, ""), NewStyles("dark"), "dark", "", root, cfg.Agent)
+	v := newAgentTools(t, ollama.New(srv.URL, ""), srv.URL, root)
 	v, _ = v.Update(tea.WindowSizeMsg{Width: 88, Height: 40})
 	v, _ = v.Update(agentModelsLoadedMsg{models: sampleModels()})
 	typeText(t, &v, "write no")
@@ -706,7 +706,7 @@ func TestAgentViewModalBlocksTabJump(t *testing.T) {
 	m = am.(App)
 
 	// Load the agent model list through the root, then open the Agent tab.
-	m = updateTab(t, m, agentModelsLoadedMsg{models: sampleModels()})
+	m = updateTab(t, m, agentEventMsg{msg: agentModelsLoadedMsg{models: sampleModels()}})
 	m = updateTab(t, m, tea.KeyPressMsg{Text: "2"})
 	if m.tab != 1 {
 		t.Fatalf("tab = %d, want 1", m.tab)

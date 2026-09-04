@@ -96,6 +96,37 @@ func TestUnknownRoleRejected(t *testing.T) {
 	}
 }
 
+func TestOpenNeverReusesOccupiedCandidate(t *testing.T) {
+	dir := t.TempDir()
+	// Occupy the exact transcript name Open would pick for this instant so
+	// the first O_EXCL attempt must collide; Open must fall through to a
+	// fresh name on the next tick instead of appending into our file. (If a
+	// clock-tick boundary slips between name and Open, Open simply picks a
+	// different fresh name and the invariant below still holds.)
+	blocked := sessionFileCandidate(dir)
+	if err := os.WriteFile(blocked, []byte("occupied\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	l, err := Open(dir, "h")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer l.Close()
+	if l.Path() == blocked {
+		t.Fatalf("Open reused the occupied candidate %s", blocked)
+	}
+	body, err := os.ReadFile(l.Path())
+	if err != nil {
+		t.Fatalf("read fresh transcript: %v", err)
+	}
+	if !strings.Contains(string(body), "# SelfTUI chat session") {
+		t.Errorf("fresh transcript missing header:\n%s", body)
+	}
+	if strings.Contains(string(body), "occupied") {
+		t.Errorf("Open appended into the occupied file:\n%s", body)
+	}
+}
+
 func TestAppendModeContinuesAfterReopen(t *testing.T) {
 	dir := t.TempDir()
 	l, err := Open(dir, "h")

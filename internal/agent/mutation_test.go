@@ -58,7 +58,7 @@ func TestMutationToolsNeedExplicitConfirmation(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	confirmed := false
-	r := NewRunner(ollama.New(srv.URL, ""), root, "", 2)
+	r := NewRunnerWithPolicy(ollama.New(srv.URL, ""), root, "", 2, &ToolPolicy{})
 	err := r.Run(context.Background(), Request{Model: "qwen3:8b", Messages: []ollama.ChatMessage{{Role: ollama.RoleUser, Content: "write"}}}, func(msg Msg) {
 		if confirmation, ok := msg.(ToolConfirmMsg); ok {
 			confirmed = confirmation.Name == "write_file" && confirmation.Workspace == root

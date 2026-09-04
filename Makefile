@@ -1,14 +1,25 @@
 # SelfTUI
 GO      ?= go
 BIN     := bin/selftui
+# Release version stamp. Release builds inject $(VERSION) via -X; the
+# release-check gate additionally requires VERSION=v<major>.<minor>.<patch>
+# (e.g. VERSION=v0.1.0) and a clean worktree.
+VERSION ?= dev
 
-.PHONY: build test lint vet fmt run check clean probe probe-build probe-raw probe-local
+.PHONY: build test race vuln lint vet fmt run check clean probe probe-build probe-raw probe-local \
+	release-check build-linux-amd64 build-linux-arm64 smoke smoke-model smoke-reconnect
 
 build: ## compile the self-tui binary
 	$(GO) build -o $(BIN) ./cmd/self-tui
 
 test: ## run all unit tests (uncached: golden fixture compares must always execute)
 	$(GO) test -count=1 ./...
+
+race: ## run the full suite under the race detector (uncached)
+	$(GO) test -race -count=1 ./...
+
+vuln: ## scan the module and its dependencies for known vulnerabilities (needs govulncheck on PATH)
+	govulncheck ./...
 
 vet: ## static analysis
 	$(GO) vet ./...
@@ -44,6 +55,21 @@ probe-local: probe-build ## local pty-based measurement at several sizes + mid-r
 	bash scripts/probe-local.sh
 
 check: build test lint ## canonical pre-commit gate
+
+# --- v0.1 release tooling --------------------------------------------------
+# Static, CGO-disabled Linux release binaries stamped with $(VERSION), plus
+# the full release gate. Artifacts land in dist/ (gitignored). None of these
+# targets ever creates or pushes a git tag - tagging is the owner's step.
+build-linux-amd64: ## CGO-disabled static Linux/amd64 release binary (stamped with $(VERSION))
+	mkdir -p dist
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GO) build -trimpath -ldflags "-s -w -X main.Version=$(VERSION)" -o dist/selftui-linux-amd64 ./cmd/self-tui
+
+build-linux-arm64: ## CGO-disabled static Linux/arm64 release binary (stamped with $(VERSION))
+	mkdir -p dist
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 $(GO) build -trimpath -ldflags "-s -w -X main.Version=$(VERSION)" -o dist/selftui-linux-arm64 ./cmd/self-tui
+
+release-check: ## full release gate; run as: VERSION=v0.1.0 make release-check
+	scripts/release-check.sh
 
 clean:
 	rm -rf $(BIN)

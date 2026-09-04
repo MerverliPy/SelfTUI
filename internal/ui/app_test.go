@@ -113,7 +113,7 @@ func TestAgentTabDigitsTypeNotJump(t *testing.T) {
 	}
 	// Resolve the model fetch deterministically (no live host in tests), then
 	// start composing so the digits below are prompt characters, not jumps.
-	m = updateTab(t, m, agentModelsLoadedMsg{models: sampleModels()})
+	m = updateTab(t, m, agentEventMsg{msg: agentModelsLoadedMsg{models: sampleModels()}})
 	m = updateTab(t, m, tea.KeyPressMsg{Text: "Count "})
 
 	for _, d := range []string{"1", "2", "3", "9", "0"} {

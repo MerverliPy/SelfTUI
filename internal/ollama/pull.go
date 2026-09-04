@@ -1,7 +1,6 @@
 package ollama
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -28,6 +27,11 @@ type PullProgress struct {
 // through the shared request-timeout client. The caller's context is the only
 // deadline (UI cancellation, Ctrl+C, or an explicit timeout), which matches
 // how `do` already binds every request to its context.
+//
+// Pull shares the phase-5 stream protections with chat — a single event
+// larger than 4 MiB or a body silent for the 90s idle window aborts — but has
+// no cumulative budget: downloads routinely take minutes, so the watchdog is
+// idle-only and progress arriving inside the window keeps the pull alive.
 func (c *Client) Pull(ctx context.Context, name string, onProgress func(PullProgress)) error {
 	const path = "/api/pull"
 	if name == "" {
@@ -38,19 +42,11 @@ func (c *Client) Pull(ctx context.Context, name string, onProgress func(PullProg
 	if err != nil {
 		return fmt.Errorf("ollama POST %s: encode request: %w", path, err)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+path, bytes.NewReader(body))
+	resp, cancel, err := c.postStream(ctx, path, body)
 	if err != nil {
-		return fmt.Errorf("ollama POST %s: build request: %w", path, err)
+		return err
 	}
-	req.Header.Set("Content-Type", "application/json")
-	if c.token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.token)
-	}
-
-	resp, err := c.stream.Do(req)
-	if err != nil {
-		return fmt.Errorf("ollama POST %s: %w", path, err)
-	}
+	defer cancel()
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
@@ -58,8 +54,19 @@ func (c *Client) Pull(ctx context.Context, name string, onProgress func(PullProg
 		return apiError(http.MethodPost, path, resp.StatusCode, raw)
 	}
 
-	dec := json.NewDecoder(resp.Body)
+	// Decode through the shared NDJSON stream decoder: the per-event size cap
+	// and the idle watchdog apply exactly as they do to chat, but pull has no
+	// cumulative budget — downloads may run minutes while progress lines keep
+	// arriving inside the idle window.
+	dec := newNDJSONStream(resp.Body, cancel, c.streamIdle, path)
 	for {
+		raw, err := dec.next()
+		if errors.Is(err, io.EOF) {
+			return fmt.Errorf("ollama POST %s: stream ended without success", path)
+		}
+		if err != nil {
+			return err
+		}
 		var ev struct {
 			Status    string `json:"status"`
 			Digest    string `json:"digest"`
@@ -67,10 +74,7 @@ func (c *Client) Pull(ctx context.Context, name string, onProgress func(PullProg
 			Completed int64  `json:"completed"`
 			Error     string `json:"error"`
 		}
-		if err := dec.Decode(&ev); err != nil {
-			if errors.Is(err, io.EOF) {
-				return fmt.Errorf("ollama POST %s: stream ended without success", path)
-			}
+		if err := json.Unmarshal(raw, &ev); err != nil {
 			return fmt.Errorf("ollama POST %s: decode stream: %w", path, err)
 		}
 		if ev.Error != "" {

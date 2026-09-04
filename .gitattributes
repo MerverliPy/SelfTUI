@@ -1,0 +1,6 @@
+# Golden render fixtures are byte-exact terminal frames: rows are padded to
+# the full frame width, so trailing spaces are load-bearing fixture content,
+# not editor noise. Exempt only the trailing-space checks for these files so
+# `git diff --check` / `git apply --check` hygiene gates stay green; every
+# other whitespace check remains enabled.
+internal/ui/testdata/golden/*.txt whitespace=-trailing-space

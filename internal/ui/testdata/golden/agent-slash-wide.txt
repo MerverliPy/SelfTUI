@@ -28,7 +28,7 @@
 │❯ /clear  clear the conversation (asks first)                                                                         │
 │  /model  pick a model (m)                                                                                            │
 │  /theme  toggle dark/light for this session                                                                          │
-│  /save  flush + show the chat-session file path                                                                      │
+│  /export  flush + reveal the transcript file path                                                                    │
 │  /help  list slash commands and keys                                                                                 │
 │  /refresh  reload the model list (r)                                                                                 │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
@@ -37,4 +37,4 @@
 │❯ /                                                                                                                   │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 enter send · shift+enter newline · esc clear draft                                                                      
- ⏻ http://localhost:11434                                                                         Agent · 120x40 · wide 
+ ⏻ http://localhost:11434 · tools off · /tmp                                                      Agent · 120x40 · wide 

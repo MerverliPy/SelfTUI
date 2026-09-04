@@ -13,6 +13,14 @@ import (
 
 const DefaultMaxIterations = 12
 
+// Approval-window bounds for the per-call mutation confirmation (write_file,
+// edit_file). The v0.1 executor removal left only these approval mechanics;
+// command execution itself no longer ships (see docs/run-command-containment.md).
+const (
+	defaultConfirmTimeout = 30 * time.Second
+	maxConfirmTimeout     = 60 * time.Second
+)
+
 // Msg is an event consumed by the UI. Concrete messages intentionally contain
 // presentation-neutral data so the agent loop can be tested without Bubble Tea.
 type Msg interface{}
@@ -45,14 +53,6 @@ func (m ToolConfirmMsg) Respond(approved bool) {
 	}
 }
 
-// ToolOutputMsg streams bounded command output to the UI while the command is
-// still running; the final ToolResultMsg carries the complete bounded result.
-type ToolOutputMsg struct {
-	Name   string
-	Stream string
-	Text   string
-}
-
 type FallbackMsg struct{ Reason string }
 
 // AgentDoneMsg is emitted exactly once, after the loop or any error. Reason
@@ -80,24 +80,47 @@ type Runner struct {
 	workspaceRoot string
 	systemPrompt  string
 	maxIterations int
+
+	// policy is nil when tools are disabled (the NewRunner compatibility
+	// constructor): the runner then never sends tool definitions and behaves
+	// as plain chat. NewRunnerWithPolicy arms the five v0.1 tools and gates
+	// every requested path with the policy before a tool executes.
+	policy *ToolPolicy
 }
 
+// NewRunner builds a runner with workspace tools DISABLED. It remains the
+// compatibility constructor for callers that predate the tool-trust policy;
+// the disabled default is deliberate — tools only exist when the user
+// explicitly enables them (config tools_enabled) and the code passes a real
+// policy through NewRunnerWithPolicy.
 func NewRunner(client *ollama.Client, workspaceRoot, systemPrompt string, maxIterations int) *Runner {
+	return NewRunnerWithPolicy(client, workspaceRoot, systemPrompt, maxIterations, nil)
+}
+
+// NewRunnerWithPolicy builds the runner used when workspace tools are
+// enabled. policy must be non-nil: it decides which tools the model may
+// request (Tools) and which paths those tools may touch (AuthorizePath). A
+// nil policy here is equivalent to NewRunner (plain chat).
+func NewRunnerWithPolicy(client *ollama.Client, workspaceRoot, systemPrompt string, maxIterations int, policy *ToolPolicy) *Runner {
 	if maxIterations <= 0 {
 		maxIterations = DefaultMaxIterations
 	}
 	return &Runner{
 		client: client, workspaceRoot: workspaceRoot,
 		systemPrompt: systemPrompt, maxIterations: maxIterations,
+		policy: policy,
 	}
 }
 
-// Run executes the agent tool loop (read-only first, then the confirmed
-// mutation set) with the plain-chat fallback. The first tools request doubles
-// as a capability probe: models that reject tools with HTTP 400 are explicitly
-// downgraded to plain chat instead of silently pretending to be an agent.
-// AgentDoneMsg is emitted exactly once, after the loop or any error, carrying
-// the terminal done_reason of the final stream when one arrived (M7-B).
+// Run executes one agent turn. With tools disabled (NewRunner, no policy) it
+// streams plain chat — no tools field reaches the wire. With tools armed
+// (NewRunnerWithPolicy) it runs the tool loop (read-only first, then the
+// confirmed mutation set) with the plain-chat fallback. The first tools
+// request doubles as a capability probe: models that reject tools with HTTP
+// 400 are explicitly downgraded to plain chat instead of silently pretending
+// to be an agent. AgentDoneMsg is emitted exactly once, after the loop or
+// any error, carrying the terminal done_reason of the final stream when one
+// arrived (M7-B).
 func (r *Runner) Run(ctx context.Context, req Request, emit func(Msg)) error {
 	if emit == nil {
 		emit = func(Msg) {}
@@ -132,7 +155,14 @@ func (r *Runner) run(ctx context.Context, req Request, emit func(Msg), reasonOut
 	}
 	messages = append(messages, req.Messages...)
 	options := &ollama.ChatOptions{Temperature: req.Temperature, TopP: req.TopP, NumCtx: req.NumCtx}
-	tools := AgentTools()
+
+	// Tools disabled (no policy): plain chat only. The request must not even
+	// carry a tools field, and nothing the model says — including an
+	// unsolicited tool_calls-shaped reply — may turn into an execution.
+	tools := r.tools()
+	if len(tools) == 0 {
+		return r.runPlainChat(ctx, req, messages, req.NumCtx, options, emit, reasonOut)
+	}
 
 	for iteration := 0; iteration < r.maxIterations; iteration++ {
 		if err := ctx.Err(); err != nil {
@@ -166,7 +196,7 @@ func (r *Runner) run(ctx context.Context, req Request, emit func(Msg), reasonOut
 		if err != nil {
 			if iteration == 0 && isToolUnsupported(err) {
 				emit(FallbackMsg{Reason: "model does not support tools; using plain chat"})
-				return r.runPlainChat(ctx, req, messages, req.NumCtx, options, emit)
+				return r.runPlainChat(ctx, req, messages, req.NumCtx, options, emit, reasonOut)
 			}
 			return err
 		}
@@ -215,7 +245,11 @@ func (r *Runner) run(ctx context.Context, req Request, emit func(Msg), reasonOut
 	return fmt.Errorf("agent: maximum tool iterations (%d) reached", r.maxIterations)
 }
 
-func (r *Runner) runPlainChat(ctx context.Context, req Request, messages []ollama.ChatMessage, numCtx int, options *ollama.ChatOptions, emit func(Msg)) error {
+// runPlainChat streams one tools-free request. It is the whole loop when
+// tools are disabled and the fallback when an enabled model rejects the tool
+// surface. The terminal done_reason is recorded so the plain-chat footer
+// shows why the turn ended, mirroring the tool loop.
+func (r *Runner) runPlainChat(ctx context.Context, req Request, messages []ollama.ChatMessage, numCtx int, options *ollama.ChatOptions, emit func(Msg), reasonOut *string) error {
 	return r.client.ChatStream(ctx, ollama.ChatRequest{
 		// The plain-chat fallback must honor the same context budget as the
 		// tool loop: a giant first message is truncated, never sent raw
@@ -225,7 +259,30 @@ func (r *Runner) runPlainChat(ctx context.Context, req Request, messages []ollam
 		if ev.Message.Content != "" {
 			emit(TokenMsg{Text: ev.Message.Content})
 		}
+		if ev.Done && ev.DoneReason != "" && reasonOut != nil {
+			*reasonOut = ev.DoneReason
+		}
 	})
+}
+
+// tools returns the definitions to advertise: the policy's five v0.1 tools
+// when one is set, nothing otherwise.
+func (r *Runner) tools() []ollama.ToolDefinition {
+	if r == nil || r.policy == nil {
+		return nil
+	}
+	return r.policy.Tools()
+}
+
+// authorizePath applies the policy's path rules when tools are armed; a nil
+// policy (disabled runner) has no rules to apply. The check happens before a
+// tool's own validation, confirmation, or executor so a sensitive request
+// never surfaces an approval dialog.
+func (r *Runner) authorizePath(path string) error {
+	if r.policy == nil {
+		return nil
+	}
+	return r.policy.AuthorizePath(path)
 }
 
 func (r *Runner) executeTool(ctx context.Context, call ollama.ToolCall, emit func(Msg)) (string, error) {
@@ -241,6 +298,9 @@ func (r *Runner) executeTool(ctx context.Context, call ollama.ToolCall, emit fun
 		if args.Path == "" {
 			return "", errors.New("read_file: path is required")
 		}
+		if err := r.authorizePath(args.Path); err != nil {
+			return "", err
+		}
 		return ReadFile(root, args.Path)
 	case "list_dir":
 		var args struct {
@@ -251,6 +311,9 @@ func (r *Runner) executeTool(ctx context.Context, call ollama.ToolCall, emit fun
 		}
 		if args.Path == "" {
 			return "", errors.New("list_dir: path is required")
+		}
+		if err := r.authorizePath(args.Path); err != nil {
+			return "", err
 		}
 		return ListDir(root, args.Path)
 	case "grep":
@@ -264,6 +327,9 @@ func (r *Runner) executeTool(ctx context.Context, call ollama.ToolCall, emit fun
 		if args.Pattern == "" || args.Path == "" {
 			return "", errors.New("grep: pattern and path are required")
 		}
+		if err := r.authorizePath(args.Path); err != nil {
+			return "", err
+		}
 		return Grep(root, args.Pattern, args.Path)
 	case "write_file":
 		var args struct {
@@ -276,6 +342,9 @@ func (r *Runner) executeTool(ctx context.Context, call ollama.ToolCall, emit fun
 		}
 		if args.Path == "" {
 			return "", errors.New("write_file: path is required")
+		}
+		if err := r.authorizePath(args.Path); err != nil {
+			return "", err
 		}
 		if err := r.confirm(ctx, call, 0, emit); err != nil {
 			return "", err
@@ -296,6 +365,9 @@ func (r *Runner) executeTool(ctx context.Context, call ollama.ToolCall, emit fun
 		if args.Path == "" || args.Old == "" {
 			return "", errors.New("edit_file: path and old are required")
 		}
+		if err := r.authorizePath(args.Path); err != nil {
+			return "", err
+		}
 		if err := r.confirm(ctx, call, 0, emit); err != nil {
 			return "", err
 		}
@@ -303,35 +375,20 @@ func (r *Runner) executeTool(ctx context.Context, call ollama.ToolCall, emit fun
 			return "", err
 		}
 		return "edited " + args.Path, nil
-	case "run_command":
-		var args struct {
-			Argv    []string `json:"argv"`
-			Timeout int      `json:"timeout"`
-		}
-		if err := decodeArgs(call.Function.Arguments, &args); err != nil {
-			return "", fmt.Errorf("run_command: %w", err)
-		}
-		if err := validateCommand(args.Argv); err != nil {
-			return "", err
-		}
-		if err := r.confirm(ctx, call, args.Timeout, emit); err != nil {
-			return "", err
-		}
-		return RunCommand(ctx, root, args.Argv, args.Timeout, func(stream, text string) {
-			emit(ToolOutputMsg{Name: "run_command", Stream: stream, Text: text})
-		})
 	default:
+		// The boundary is a closed set: any other name — including the
+		// pre-v0.1 run_command executor, which does not ship — is rejected.
 		return "", fmt.Errorf("tool %q is not allowed", call.Function.Name)
 	}
 }
 
 func (r *Runner) confirm(ctx context.Context, call ollama.ToolCall, seconds int, emit func(Msg)) error {
-	timeout := defaultCommandTimeout
+	timeout := defaultConfirmTimeout
 	if seconds > 0 {
 		timeout = time.Duration(seconds) * time.Second
 	}
-	if timeout > maxCommandTimeout {
-		return fmt.Errorf("%s: timeout exceeds %s", call.Function.Name, maxCommandTimeout)
+	if timeout > maxConfirmTimeout {
+		return fmt.Errorf("%s: timeout exceeds %s", call.Function.Name, maxConfirmTimeout)
 	}
 	msg := ToolConfirmMsg{Name: call.Function.Name, Input: string(call.Function.Arguments), Workspace: r.workspaceRoot, Timeout: timeout, reply: make(chan bool, 1)}
 	emit(msg)

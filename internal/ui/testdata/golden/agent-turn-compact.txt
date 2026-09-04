@@ -26,5 +26,5 @@
 │◈ qwen3:8b                                    ctx ░░░░░ 1% · 0.0k/3.1k│
 │❯ / for commands, or chat with the selected model…                    │
 ╰──────────────────────────────────────────────────────────────────────╯
-enter send · / commands · m model · r refresh · shift+enter newline     
- ⏻ http://localhost:11434                       Agent · 72x30 · compact 
+tools off · /tmp · enter send · / commands · m model · r refresh        
+ ⏻ http://localhost:11434 · tools off · /tmp    Agent · 72x30 · compact 

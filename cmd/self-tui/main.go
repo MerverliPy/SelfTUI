@@ -6,6 +6,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -21,9 +22,17 @@ import (
 	"selftui/internal/ui"
 )
 
-// Version identifies this build; it is logged at startup and printed by
-// selftui -version so release/smoke evidence is attributable (M6).
-const Version = "0.6.0-m6"
+// Version identifies this build; it is printed by `selftui -version` and
+// logged at startup so release/smoke evidence is attributable (M6). It is a
+// var so a build can stamp a concrete version (default "dev").
+var Version = "dev"
+
+// printVersion writes the `selftui -version` output. Kept as one function so
+// the formatting contract ("selftui <Version>") is testable against a
+// temporarily-set Version (see main_test.go).
+func printVersion(w io.Writer) {
+	fmt.Fprintf(w, "selftui %s\n", Version)
+}
 
 func main() {
 	if err := run(); err != nil {
@@ -36,7 +45,7 @@ func run() error {
 	// --- flags (highest config priority) ---
 	flagConfig := flag.String("config", "", "config file path (default: $XDG_CONFIG_HOME/selftui/config.toml)")
 	flagHost := flag.String("host", "", "Ollama base URL (overrides env + config file)")
-	flagAuthToken := flag.String("auth-token", "", "auth token (overrides env + config file)")
+	flagAuthToken := flag.String("auth-token", "", "auth token (compatibility only — prefer SELFTUI_AUTH_TOKEN or the 0600 config file; argv secrets appear in process listings and shell history)")
 	flagTheme := flag.String("theme", "", "theme: dark (default) or light")
 	flagDefaultModel := flag.String("default-model", "", "default model for new sessions")
 	flagWorkspaceRoot := flag.String("workspace-root", "", "agent workspace root")
@@ -50,7 +59,7 @@ func run() error {
 	flag.Parse()
 
 	if *flagVersion {
-		fmt.Printf("selftui %s\n", Version)
+		printVersion(os.Stdout)
 		return nil
 	}
 
@@ -129,13 +138,16 @@ func run() error {
 	rootLog.Info("session dir", "path", sessionDirForRun())
 
 	// --- cancellation plumbing: SIGINT/SIGTERM cancel a root context that
-	// the program and (from M1+) background jobs share ---
+	// the tea runtime (tea.WithContext below) and every Models/Agent
+	// operation — list/show/delete fetches, chat and pull streams — derive
+	// from, so a Ctrl+C aborts in-flight background work instead of
+	// stranding it. Constructed before the App so NewWithContext can bind it.
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
 	// --- bootstrap the program ---
 	client := ollama.New(cfg.Host, cfg.AuthToken)
-	m := ui.New(&cfg, ui.NewStyles(cfg.Theme), client)
+	m := ui.NewWithContext(ctx, &cfg, ui.NewStyles(cfg.Theme), client)
 	m = m.WithSessionDir(sessionDirForRun(), cfg.Host)
 	p := tea.NewProgram(m, tea.WithContext(ctx))
 	rootLog.Info("program running")

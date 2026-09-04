@@ -25,6 +25,12 @@ import (
 // rejects tools or returns no tool call.
 type AgentView struct {
 	client *ollama.Client
+
+	// ctx is the parent context every operation this view starts (model-list
+	// fetches, chat streams) derives from. NewWithContext binds it to the
+	// process root; the compatibility constructors leave it at Background.
+	ctx context.Context
+
 	runner *agent.Runner
 	styles Styles
 	dark   bool
@@ -73,6 +79,15 @@ type AgentView struct {
 	topP        float64
 	numCtx      int
 
+	// Workspace tool trust (Phase 4): toolsEnabled arms the jailed tool
+	// surface for the next send (false = plain chat, the default); workspace
+	// is the canonical root the status row advertises; host is the config
+	// Ollama base URL, used to warn when tools could send workspace content
+	// to a non-loopback host.
+	toolsEnabled bool
+	workspace    string
+	host         string
+
 	// Input + feedback.
 	input   textarea.Model
 	chatErr string
@@ -119,23 +134,32 @@ type AgentView struct {
 }
 
 // NewAgentView builds the Agent tab using the current directory as its
-// workspace. It remains as a small compatibility constructor for tests and
-// callers that predate workspace configuration.
+// workspace, with a background parent context and workspace tools DISABLED
+// (the default: no tool definitions reach the model until the user opts in
+// via cfg.ToolsEnabled — production wiring through NewWithContext). It
+// remains a compatibility constructor for tests and legacy callers.
 func NewAgentView(client *ollama.Client, styles Styles, theme, defaultModel string, agentCfg config.AgentConfig) AgentView {
-	root, _ := os.Getwd()
-	return newAgentView(client, styles, theme, defaultModel, root, "", agentCfg)
+	return newAgentView(nil, client, styles, theme, defaultModel, "", "", agentCfg, false, "")
 }
 
 // NewAgentViewWithWorkspace builds the Agent tab with the configured project
-// root and system prompt.
+// root and system prompt (background parent context; tools disabled — see
+// NewAgentView).
 func NewAgentViewWithWorkspace(client *ollama.Client, styles Styles, theme, defaultModel, workspaceRoot string, agentCfg config.AgentConfig) AgentView {
-	if workspaceRoot == "" {
-		workspaceRoot, _ = os.Getwd()
-	}
-	return newAgentView(client, styles, theme, defaultModel, workspaceRoot, agentCfg.SystemPrompt, agentCfg)
+	return newAgentView(nil, client, styles, theme, defaultModel, workspaceRoot, agentCfg.SystemPrompt, agentCfg, false, "")
 }
 
-func newAgentView(client *ollama.Client, styles Styles, theme, defaultModel, workspaceRoot, systemPrompt string, agentCfg config.AgentConfig) AgentView {
+// newAgentView is the private constructor: it stores ctx as the parent every
+// operation this view starts derives from, and arms the workspace tools
+// exactly when the caller says so (the App passes cfg.ToolsEnabled). host is
+// the config Ollama base URL, used for the remote-host warning; a compat
+// caller that cannot prove the host leaves it empty, which never warns.
+func newAgentView(ctx context.Context, client *ollama.Client, styles Styles, theme, defaultModel, workspaceRoot, systemPrompt string, agentCfg config.AgentConfig, toolsEnabled bool, host string) AgentView {
+	ctx = normalizeCtx(ctx)
+	root := workspaceRoot
+	if root == "" {
+		root, _ = os.Getwd()
+	}
 	ta := textarea.New()
 	ta.Prompt = "❯ "
 	ta.Placeholder = "/ for commands, or chat with the selected model…"
@@ -143,7 +167,8 @@ func newAgentView(client *ollama.Client, styles Styles, theme, defaultModel, wor
 	ta.Focus()                 // the input is the Agent tab's primary surface
 	return AgentView{
 		client:       client,
-		runner:       agent.NewRunner(client, workspaceRoot, systemPrompt, agentCfg.MaxToolIterations),
+		ctx:          ctx,
+		runner:       runnerFor(client, root, systemPrompt, agentCfg.MaxToolIterations, toolsEnabled),
 		styles:       styles,
 		dark:         theme != "light",
 		loading:      true,
@@ -152,12 +177,24 @@ func newAgentView(client *ollama.Client, styles Styles, theme, defaultModel, wor
 		topP:         agentCfg.TopP,
 		numCtx:       agentCfg.NumCtx,
 		systemPrompt: systemPrompt,
+		toolsEnabled: toolsEnabled,
+		workspace:    canonicalWorkspaceLabel(root),
+		host:         host,
 		follow:       true,
 		input:        ta,
 		selectorOpen: false,
 		selIdx:       0,
 		renderW:      -1,
 	}
+}
+
+// runnerFor builds the agent runner for one tools state: plain chat (no
+// policy) when disabled, the armed policy runner when enabled.
+func runnerFor(client *ollama.Client, root, systemPrompt string, maxIterations int, toolsEnabled bool) *agent.Runner {
+	if !toolsEnabled {
+		return agent.NewRunner(client, root, systemPrompt, maxIterations)
+	}
+	return agent.NewRunnerWithPolicy(client, root, systemPrompt, maxIterations, &agent.ToolPolicy{})
 }
 
 // --- messages -------------------------------------------------------------
@@ -171,6 +208,17 @@ type agentDoneMsg struct {
 	reason string // terminal ollama done_reason of the final stream (stop/length)
 }
 
+// agentEventMsg is the single envelope the root App accepts for every
+// asynchronous Agent command result: the model-list fetch results
+// (agentModelsLoadedMsg/agentModelsErrMsg) and every event the chat activity
+// channel delivers (agent.TokenMsg, agent.ToolStartMsg, agent.ToolResultMsg,
+// agent.ToolConfirmMsg, agent.FallbackMsg, agent.AgentDoneMsg, plus the
+// legacy agentTokenMsg/agentDoneMsg). App.Update has exactly one routing case
+// per child and unwraps before delegating, so any payload that is produced is
+// routed by construction — a newly added async result can no longer be
+// dropped at the shell (the 2026-09-06 ToolConfirmMsg routing bug).
+type agentEventMsg struct{ msg tea.Msg }
+
 // agentThemeMsg asks the root App to switch the whole shell theme. The Agent
 // view does not own the palette (settings do), so the slash command /theme
 // emits this and App applies it (M7-A).
@@ -183,22 +231,24 @@ func (v AgentView) Init() tea.Cmd {
 
 func (v AgentView) loadModelsCmd() tea.Cmd {
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		ctx, cancel := context.WithTimeout(v.ctx, 60*time.Second)
 		defer cancel()
 		models, err := v.client.List(ctx)
 		if err != nil {
-			return agentModelsErrMsg{err: err.Error()}
+			return agentEventMsg{msg: agentModelsErrMsg{err: err.Error()}}
 		}
-		return agentModelsLoadedMsg{models: models}
+		return agentEventMsg{msg: agentModelsLoadedMsg{models: models}}
 	}
 }
 
 // startChat begins a streaming agent turn in a background goroutine. The
-// activity channel carries tool events, token deltas, and one final
-// agentDoneMsg. turnStart anchors the per-turn elapsed footer (M7-B).
+// activity channel carries agentEventMsg-wrapped tool events, token deltas,
+// and one final agent.AgentDoneMsg (the shell unwraps before routing, so a
+// chat event can never be dropped at the App again). turnStart anchors the
+// per-turn elapsed footer (M7-B).
 func (v AgentView) startChat() (AgentView, tea.Cmd) {
 	ch := make(chan tea.Msg, 64)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(v.ctx)
 
 	v.chatCh = ch
 	v.stopCancel = cancel
@@ -221,7 +271,7 @@ func (v AgentView) startChat() (AgentView, tea.Cmd) {
 			Model: model, Messages: history,
 			Temperature: v.temperature, TopP: v.topP, NumCtx: v.numCtx,
 		}, func(msg agent.Msg) {
-			ch <- msg
+			ch <- agentEventMsg{msg: msg}
 		})
 	}()
 
@@ -251,6 +301,13 @@ func (v AgentView) Update(msg tea.Msg) (AgentView, tea.Cmd) {
 	cmds := make([]tea.Cmd, 0, 3)
 	var cmd tea.Cmd
 	switch msg := msg.(type) {
+	case agentEventMsg:
+		// The App shell normally unwraps the envelope before delegating; when
+		// the view runs standalone (or a test drives its commands directly)
+		// the wrapped result comes back as-is, so unwrap and re-dispatch to
+		// the same switch.
+		return v.Update(msg.msg)
+
 	case tea.WindowSizeMsg:
 		v.w, v.h = msg.Width, msg.Height
 		// Wrap width changed: recompose the textarea fit and force a renderer
@@ -297,12 +354,6 @@ func (v AgentView) Update(msg tea.Msg) (AgentView, tea.Cmd) {
 				prefix = "⚠ "
 			}
 			v.toolStatus = prefix + msg.Name + ": " + firstLine(msg.Summary)
-		}
-		return v, v.waitChatCmd()
-
-	case agent.ToolOutputMsg:
-		if v.streaming {
-			v.toolStatus = "⚙ " + msg.Name + " " + msg.Stream + ": " + firstLine(msg.Text)
 		}
 		return v, v.waitChatCmd()
 
@@ -682,8 +733,10 @@ func (v AgentView) WithSessionDir(dir, host string) AgentView {
 	return v
 }
 
-// saveSession flushes the transcript and returns a notice with its path.
-func (v AgentView) saveSession() (AgentView, tea.Cmd) {
+// exportSession flushes the Markdown transcript and reports its path. The
+// export is append-only and cannot be resumed (chat stays in-memory), so the
+// notice reports the file and never claims the conversation can be reloaded.
+func (v AgentView) exportSession() (AgentView, tea.Cmd) {
 	switch {
 	case v.session == nil && v.sessionDir == "":
 		v.notice = "session recording is off — no transcript is written"
@@ -694,7 +747,7 @@ func (v AgentView) saveSession() (AgentView, tea.Cmd) {
 			v.sessionErr = true
 			v.notice = "session log: " + err.Error()
 		} else {
-			v.notice = "session: " + v.session.Path()
+			v.notice = "transcript: " + v.session.Path()
 		}
 	}
 	return v, nil
@@ -713,7 +766,7 @@ func slashCommandList() []slashCommand {
 		{"clear", "clear the conversation (asks first)"},
 		{"model", "pick a model (m)"},
 		{"theme", "toggle dark/light for this session"},
-		{"save", "flush + show the chat-session file path"},
+		{"export", "flush + reveal the transcript file path"},
 		{"help", "list slash commands and keys"},
 		{"refresh", "reload the model list (r)"},
 	}
@@ -787,8 +840,8 @@ func (v AgentView) runSlashCommand() (AgentView, tea.Cmd) {
 	case "help":
 		v.helpOpen = true
 		return v, nil
-	case "save":
-		return v.saveSession()
+	case "export":
+		return v.exportSession()
 	case "refresh":
 		v.loading = true
 		v.modelsErr = ""
@@ -1330,16 +1383,46 @@ func (v AgentView) statusLine() string {
 		return v.statusRow(maxW, []string{left}, right, v.stopArmed)
 	case v.notice != "":
 		return v.styles.Placeholder.Render(truncateToWidth(v.notice, maxW))
+	case v.remoteHost():
+		// Persistent remote-host warning (Phase 4): tools against a
+		// non-loopback host can carry workspace content off the machine, so
+		// the statusline says so until the user turns tools off or points at
+		// a local host. It outranks the key legend on purpose.
+		warn := "⚠ tools on — workspace content may be sent to " + v.host
+		return v.styles.Error.Render(truncateToWidth(warn, maxW))
 	}
 
 	// Legend. While composing, the letter commands (m/r/u/d/f) are off; with
 	// an empty input they are advertised (the interrupt/stop hint only shows
-	// while running).
+	// while running). The leading identity segment — tools state + canonical
+	// workspace — is the one thing that survives width pressure (the legend
+	// drops from the tail first), so the Agent view always answers "what can
+	// this model touch?" even on a phone.
 	if v.input.Value() != "" {
 		return v.statusRow(maxW, []string{"enter send", "shift+enter newline", "esc clear draft"}, "", false)
 	}
-	segs := []string{"enter send", "/ commands", "m model", "r refresh", "shift+enter newline"}
+	identity := toolsChip(v.toolsEnabled)
+	if v.workspace != "" {
+		identity += " · " + v.workspace
+	}
+	segs := []string{identity, "enter send", "/ commands", "m model", "r refresh", "shift+enter newline"}
 	return v.statusRow(maxW, segs, "", false)
+}
+
+// toolsChip is the stable tools-state label shared by the status bar and the
+// Agent statusline.
+func toolsChip(on bool) string {
+	if on {
+		return "tools on"
+	}
+	return "tools off"
+}
+
+// remoteHost reports whether tools are armed against a host that is not
+// loopback — the only combination that can send workspace content off this
+// machine. An unknown (empty) host never warns.
+func (v AgentView) remoteHost() bool {
+	return v.toolsEnabled && v.host != "" && !config.LoopbackHost(v.host)
 }
 
 // statusRow styles one statusline: Placeholder legend segments joined with
@@ -1468,7 +1551,7 @@ func (v AgentView) renderConfirmationOverlay(bodyH int) string {
 }
 
 // slashMenuMaxRows fits the whole command set (six commands as of the
-// /save addition) so the menu never needs its own scroll.
+// /export rename) so the menu never needs its own scroll.
 const slashMenuMaxRows = 6
 
 // renderSelectorOverlay centers the model picker over the body. The picker
@@ -1533,7 +1616,7 @@ func (v AgentView) renderHelpOverlay(bodyH int) string {
 		" /clear    clear the conversation (asks first)",
 		" /model    pick a model",
 		" /theme    toggle dark/light for this session",
-		" /save     flush + show the chat-session file",
+		" /export   flush + reveal the transcript file path",
 		" /help     show this reference",
 		" /refresh  reload the model list",
 		"",
@@ -1659,12 +1742,13 @@ func (v AgentView) applyTheme(dark bool, styles Styles) AgentView {
 }
 
 // ApplyConfig applies a successful settings save in-session: scalar chat
-// parameters and the default model take effect for the next send, and the
-// runner is rebuilt so a new workspace root, system prompt, iteration cap,
-// and client apply. An in-flight turn keeps the runner it started with
-// (startChat copies the pointer before the goroutine runs), so swapping here
-// is safe mid-stream. reload=true (host/token change) clears the selector
-// models and refetches from the new host.
+// parameters, the default model, the workspace tool trust switch, and the
+// host take effect for the next send, and the runner is rebuilt so a new
+// workspace root, system prompt, iteration cap, tools state, and client
+// apply. An in-flight turn keeps the runner it started with (startChat copies
+// the pointer before the goroutine runs), so swapping here is safe
+// mid-stream. reload=true (host/token change) clears the selector models and
+// refetches from the new host.
 func (v AgentView) ApplyConfig(cfg config.Config, c *ollama.Client, reload bool) (AgentView, tea.Cmd) {
 	v.client = c
 	v.defaultModel = cfg.DefaultModel
@@ -1676,7 +1760,10 @@ func (v AgentView) ApplyConfig(cfg config.Config, c *ollama.Client, reload bool)
 	if root == "" {
 		root, _ = os.Getwd()
 	}
-	v.runner = agent.NewRunner(c, root, cfg.Agent.SystemPrompt, cfg.Agent.MaxToolIterations)
+	v.toolsEnabled = cfg.ToolsEnabled
+	v.host = cfg.Host
+	v.workspace = canonicalWorkspaceLabel(root)
+	v.runner = runnerFor(c, root, cfg.Agent.SystemPrompt, cfg.Agent.MaxToolIterations, cfg.ToolsEnabled)
 	if !reload {
 		return v, nil
 	}

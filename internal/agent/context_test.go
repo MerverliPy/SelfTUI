@@ -141,3 +141,14 @@ func TestToolCallArgumentsCountTowardBudget(t *testing.T) {
 		t.Errorf("no truncation marker after evicting tool-call history")
 	}
 }
+
+// messageContents extracts the content of each message (shared helper for
+// budget assertions; it lived in command_test.go before the v0.1 executor
+// removal deleted that file).
+func messageContents(in []ollama.ChatMessage) []string {
+	out := make([]string, len(in))
+	for i, msg := range in {
+		out[i] = msg.Content
+	}
+	return out
+}

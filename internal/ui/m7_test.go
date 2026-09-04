@@ -201,7 +201,7 @@ func TestEscClearsDraftWhenIdle(t *testing.T) {
 func TestPaletteOpensFiltersAndCloses(t *testing.T) {
 	m := newTestApp(t)
 	m = updateTab(t, m, tea.WindowSizeMsg{Width: 88, Height: 40})
-	m = updateTab(t, m, agentModelsLoadedMsg{models: sampleModels()})
+	m = updateTab(t, m, agentEventMsg{msg: agentModelsLoadedMsg{models: sampleModels()}})
 
 	// ctrl+p from the Models tab.
 	m = updateTab(t, m, tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
@@ -241,7 +241,7 @@ func TestPaletteOpensFiltersAndCloses(t *testing.T) {
 func TestPaletteOwnsKeysWhileOpen(t *testing.T) {
 	m := newTestApp(t)
 	m = updateTab(t, m, tea.WindowSizeMsg{Width: 88, Height: 40})
-	m = updateTab(t, m, agentModelsLoadedMsg{models: sampleModels()})
+	m = updateTab(t, m, agentEventMsg{msg: agentModelsLoadedMsg{models: sampleModels()}})
 	m = updateTab(t, m, tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
 
 	// Tab and digit jumps must not escape the palette; the digit feeds the
@@ -256,7 +256,7 @@ func TestPaletteOwnsKeysWhileOpen(t *testing.T) {
 func TestPaletteChangeModelGoesToAgentPicker(t *testing.T) {
 	m := newTestApp(t)
 	m = updateTab(t, m, tea.WindowSizeMsg{Width: 88, Height: 40})
-	m = updateTab(t, m, agentModelsLoadedMsg{models: sampleModels()})
+	m = updateTab(t, m, agentEventMsg{msg: agentModelsLoadedMsg{models: sampleModels()}})
 	m = updateTab(t, m, tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
 
 	// Filter to the one item whose description mentions the picker.
@@ -305,7 +305,7 @@ func TestAgentThemeMsgAppliesShellWide(t *testing.T) {
 	cfg.DefaultModel = "qwen3:8b"
 	m := New(&cfg, NewStyles("dark"), ollama.New(cfg.Host, cfg.AuthToken))
 	m = updateTab(t, m, tea.WindowSizeMsg{Width: 88, Height: 40})
-	m = updateTab(t, m, agentModelsLoadedMsg{models: sampleModels()})
+	m = updateTab(t, m, agentEventMsg{msg: agentModelsLoadedMsg{models: sampleModels()}})
 	m = updateTab(t, m, tea.KeyPressMsg{Text: "2"}) // Agent tab
 	if m.curTheme != "dark" {
 		t.Fatalf("curTheme = %q, want dark at boot", m.curTheme)

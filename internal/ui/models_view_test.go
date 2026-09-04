@@ -19,8 +19,11 @@ import (
 func fakeShowServer(t *testing.T, showFn func(w http.ResponseWriter, name string)) (*ollama.Client, *httptest.Server) {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Stray traffic to the fake host (this machine's localhost port
+		// prober sends GET / at freshly bound ports, phase-5 LEDGER note)
+		// must never fail a test for bytes the client did not send; a real
+		// client mistake still fails through the client's own 404 error.
 		if r.URL.Path != "/api/show" {
-			t.Errorf("path = %s, want /api/show", r.URL.Path)
 			w.WriteHeader(404)
 			return
 		}
@@ -45,7 +48,6 @@ func fakeDeleteServer(t *testing.T, deleteFn func(w http.ResponseWriter, name st
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodDelete || r.URL.Path != "/api/delete" {
-			t.Errorf("got %s %s, want DELETE /api/delete", r.Method, r.URL.Path)
 			w.WriteHeader(404)
 			return
 		}
@@ -66,7 +68,6 @@ func fakePullServer(t *testing.T, body string) (*ollama.Client, *httptest.Server
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.URL.Path != "/api/pull" {
-			t.Errorf("got %s %s, want POST /api/pull", r.Method, r.URL.Path)
 			w.WriteHeader(404)
 			return
 		}
@@ -170,9 +171,13 @@ func TestModelsViewEnterInspectsOnCompact(t *testing.T) {
 	}
 
 	msg := cmd()
-	show, ok := msg.(modelsShowMsg)
+	ev, ok := msg.(modelsEventMsg)
 	if !ok {
-		t.Fatalf("cmd() = %T, want modelsShowMsg", msg)
+		t.Fatalf("cmd() = %T, want modelsEventMsg envelope", msg)
+	}
+	show, ok := ev.msg.(modelsShowMsg)
+	if !ok {
+		t.Fatalf("envelope payload = %T, want modelsShowMsg", ev.msg)
 	}
 	if show.name != "qwen3:8b" {
 		t.Errorf("show name = %q, want qwen3:8b", show.name)
@@ -510,15 +515,18 @@ func TestModelsViewDialogSwallowsNavKeys(t *testing.T) {
 }
 
 // deleteResultFromCmd runs a command (and any batch of sub-commands the
-// runtime would execute) and extracts the modelsDeleteDoneMsg result.
+// runtime would execute) and extracts the modelsDeleteDoneMsg result from the
+// modelsEventMsg envelope every async command now returns.
 func deleteResultFromCmd(cmd tea.Cmd) (modelsDeleteDoneMsg, bool) {
 	if cmd == nil {
 		return modelsDeleteDoneMsg{}, false
 	}
 	msg := cmd()
 	switch m := msg.(type) {
-	case modelsDeleteDoneMsg:
-		return m, true
+	case modelsEventMsg:
+		if dm, ok := m.msg.(modelsDeleteDoneMsg); ok {
+			return dm, true
+		}
 	case tea.BatchMsg:
 		for _, sub := range m {
 			if dm, ok := deleteResultFromCmd(sub); ok {

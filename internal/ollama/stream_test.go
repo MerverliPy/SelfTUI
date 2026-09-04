@@ -1,0 +1,299 @@
+package ollama
+
+// Phase-5 (v0.1 hardening) stream tests: the shared NDJSON decoder must cap a
+// single event at 4 MiB, cap cumulative chat content+thinking at 16 MiB, and
+// abort a stream that delivers no bytes for the idle window — while never
+// imposing a total stream deadline and while caller cancellation always wins
+// over the idle timer. Idle is injected per client via c.streamIdle; nothing
+// here waits anywhere near the 90s production default.
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+)
+
+const miB = 1 << 20
+
+// stallServer serves prefix (optional first NDJSON line) then holds the
+// handler open without writing another byte until the client disconnects.
+func stallServer(t *testing.T, prefix string) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		if prefix != "" {
+			io.WriteString(w, prefix)
+		}
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		<-r.Context().Done()
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// chatReq is the canonical minimal chat request used by these tests.
+func chatReq() ChatRequest {
+	return ChatRequest{
+		Model:    "qwen3:8b",
+		Messages: []ChatMessage{{Role: RoleUser, Content: "hi"}},
+	}
+}
+
+func TestChatOversizedEventRejected(t *testing.T) {
+	// A single chat event whose raw NDJSON line exceeds the 4 MiB per-event
+	// cap must be rejected with the stable per-event message before anything
+	// is delivered.
+	content := strings.Repeat("a", 4*miB) // raw line is 4 MiB + JSON framing
+	body := fmt.Sprintf(`{"message":{"role":"assistant","content":"%s"},"done":false}`+"\n", content)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// This host's localhost port prober sends stray GET /; only the
+		// real POST matters, so ignore everything else without failing.
+		if r.Method != http.MethodPost || r.URL.Path != "/api/chat" {
+			w.WriteHeader(404)
+			return
+		}
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		io.WriteString(w, body)
+	}))
+	t.Cleanup(srv.Close)
+	c := New(srv.URL, "")
+
+	err := c.ChatStream(context.Background(), chatReq(), nil)
+	if err == nil {
+		t.Fatal("want per-event size error, got nil")
+	}
+	if !strings.Contains(err.Error(), "stream event exceeds 4194304 bytes") {
+		t.Errorf("error = %v, want per-event cap message", err)
+	}
+}
+
+func TestChatCumulativeOverflowRejected(t *testing.T) {
+	// Four content events of ~4 MiB each stay under both caps; a fifth event
+	// carrying thinking bytes crosses the 16 MiB cumulative content+thinking
+	// budget. The cap must count content and thinking together and reject the
+	// crossing event before it is delivered.
+	chunk := strings.Repeat("a", 4*miB-8*1024) // each event stays under 4 MiB raw
+	var b strings.Builder
+	for i := 0; i < 4; i++ {
+		fmt.Fprintf(&b, `{"message":{"role":"assistant","content":"%s"},"done":false}`+"\n", chunk)
+	}
+	fmt.Fprintf(&b, `{"message":{"role":"assistant","thinking":"%s"},"done":false}`+"\n", chunk)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Tolerate this host's localhost port prober (stray GET /); only the
+		// real POST matters. A genuine client bug still fails: the POST gets a
+		// 404 and ChatStream reports the HTTP error instead of the cap.
+		if r.Method != http.MethodPost || r.URL.Path != "/api/chat" {
+			w.WriteHeader(404)
+			return
+		}
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		io.WriteString(w, b.String())
+	}))
+	t.Cleanup(srv.Close)
+	c := New(srv.URL, "")
+
+	events := 0
+	err := c.ChatStream(context.Background(), chatReq(), func(ChatEvent) { events++ })
+	if err == nil {
+		t.Fatal("want cumulative cap error, got nil")
+	}
+	if !strings.Contains(err.Error(), "chat stream exceeds 16777216 bytes") {
+		t.Errorf("error = %v, want chat cumulative cap message", err)
+	}
+	if events != 4 {
+		t.Errorf("events delivered = %d, want 4 (overflow event rejected before delivery)", events)
+	}
+}
+
+func TestPullOversizedEventRejected(t *testing.T) {
+	// Pull events get the same per-event cap: one status line larger than
+	// 4 MiB must fail with the stable per-event message.
+	body := fmt.Sprintf(`{"status":"%s"}`+"\n", strings.Repeat("p", 4*miB+1))
+	c, _ := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		io.WriteString(w, body)
+	}))
+
+	err := c.Pull(context.Background(), "big-model", nil)
+	if err == nil {
+		t.Fatal("want per-event size error, got nil")
+	}
+	if !strings.Contains(err.Error(), "stream event exceeds 4194304 bytes") {
+		t.Errorf("error = %v, want per-event cap message", err)
+	}
+}
+
+func TestChatStalledBodyTimesOut(t *testing.T) {
+	// One delta arrives, then the body goes silent: the idle watchdog must
+	// abort with the idle message, not wait for any caller deadline.
+	srv := stallServer(t, `{"message":{"role":"assistant","content":"hi"},"done":false}`+"\n")
+	c := New(srv.URL, "")
+	c.streamIdle = 60 * time.Millisecond
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	err := c.ChatStream(ctx, chatReq(), nil)
+	if err == nil {
+		t.Fatal("want idle timeout error, got nil")
+	}
+	if !strings.Contains(err.Error(), "stream idle") {
+		t.Errorf("error = %v, want idle-timeout message", err)
+	}
+}
+
+func TestPullStalledBodyTimesOut(t *testing.T) {
+	// Same idle protection on the pull side: a manifest line then silence.
+	srv := stallServer(t, `{"status":"pulling manifest"}`+"\n")
+	c := New(srv.URL, "")
+	c.streamIdle = 60 * time.Millisecond
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	err := c.Pull(ctx, "big-model", nil)
+	if err == nil {
+		t.Fatal("want idle timeout error, got nil")
+	}
+	if !strings.Contains(err.Error(), "stream idle") {
+		t.Errorf("error = %v, want idle-timeout message", err)
+	}
+}
+
+func TestPullSteadyProgressOutlivesIdle(t *testing.T) {
+	// Progress lines keep arriving well inside the idle window: the pull must
+	// span several idle windows and still complete — the timeout is per idle
+	// gap, never a total request deadline (pulls can run minutes).
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		fl, _ := w.(http.Flusher)
+		for i := 0; i < 25; i++ {
+			fmt.Fprintf(w, `{"status":"pulling layer-%d","completed":%d}`+"\n", i, i*1000)
+			fl.Flush()
+			time.Sleep(10 * time.Millisecond)
+		}
+		io.WriteString(w, `{"status":"success"}`+"\n")
+		fl.Flush()
+	}))
+	t.Cleanup(srv.Close)
+	c := New(srv.URL, "")
+	c.streamIdle = 150 * time.Millisecond
+
+	start := time.Now()
+	count := 0
+	if err := c.Pull(context.Background(), "big-model", func(PullProgress) { count++ }); err != nil {
+		t.Fatalf("Pull with steady progress: %v", err)
+	}
+	if count != 26 {
+		t.Errorf("progress events = %d, want 26 (25 layer lines + success)", count)
+	}
+	if elapsed := time.Since(start); elapsed < 150*time.Millisecond {
+		t.Errorf("pull finished in %v; want it to span more than one idle window", elapsed)
+	}
+}
+
+func TestChatCancelBeatsIdle(t *testing.T) {
+	// A caller cancel arriving long before the idle window must win: the
+	// stream fails fast with the context error, never the idle error.
+	srv := stallServer(t, "")
+	c := New(srv.URL, "")
+	c.streamIdle = 5 * time.Second // idle far away; only cancellation can end this
+
+	ctx, cancelCtx := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- c.ChatStream(ctx, chatReq(), nil)
+	}()
+	time.Sleep(40 * time.Millisecond)
+	start := time.Now()
+	cancelCtx()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("want error after cancel, got nil")
+		}
+		if !strings.Contains(err.Error(), "context canceled") {
+			t.Errorf("error = %v, want context-canceled message", err)
+		}
+		if strings.Contains(err.Error(), "stream idle") {
+			t.Errorf("error = %v: idle won over caller cancellation", err)
+		}
+		if elapsed := time.Since(start); elapsed > 700*time.Millisecond {
+			t.Errorf("cancel took %v, want prompt return well before the idle window", elapsed)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("ChatStream did not return after context cancel")
+	}
+}
+
+func TestPullCancelBeatsIdle(t *testing.T) {
+	srv := stallServer(t, "")
+	c := New(srv.URL, "")
+	c.streamIdle = 5 * time.Second
+
+	ctx, cancelCtx := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- c.Pull(ctx, "big-model", nil)
+	}()
+	time.Sleep(40 * time.Millisecond)
+	start := time.Now()
+	cancelCtx()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("want error after cancel, got nil")
+		}
+		if !strings.Contains(err.Error(), "context canceled") {
+			t.Errorf("error = %v, want context-canceled message", err)
+		}
+		if strings.Contains(err.Error(), "stream idle") {
+			t.Errorf("error = %v: idle won over caller cancellation", err)
+		}
+		if elapsed := time.Since(start); elapsed > 700*time.Millisecond {
+			t.Errorf("cancel took %v, want prompt return well before the idle window", elapsed)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Pull did not return after context cancel")
+	}
+}
+
+func TestPullMalformedNDJSONRejected(t *testing.T) {
+	// A non-JSON line in the middle of a pull stream is a decode error with
+	// the endpoint context.
+	c, _ := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		io.WriteString(w, `{"status":"pulling manifest"}`+"\nnot-json\n")
+	}))
+
+	err := c.Pull(context.Background(), "big-model", nil)
+	if err == nil {
+		t.Fatal("want decode error, got nil")
+	}
+	if !strings.Contains(err.Error(), "decode stream") {
+		t.Errorf("error = %v, want decode-stream context", err)
+	}
+}
+
+func TestPullEOFWithoutSuccessRejected(t *testing.T) {
+	// Hitting EOF before the terminal "success" event is a hard error.
+	c, _ := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		io.WriteString(w, `{"status":"pulling manifest"}`+"\n")
+	}))
+
+	err := c.Pull(context.Background(), "big-model", nil)
+	if err == nil {
+		t.Fatal("want error when the stream ends without success, got nil")
+	}
+	if !strings.Contains(err.Error(), "stream ended without success") {
+		t.Errorf("error = %v, want ended-without-success message", err)
+	}
+}

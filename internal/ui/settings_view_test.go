@@ -142,8 +142,9 @@ func TestThemePreviewEmitsLiveThemeMsg(t *testing.T) {
 	}
 }
 
-// TestSettingsSubmitPersistsAndApplies walks the whole form (10 fields across
-// 4 groups) and submits unchanged values: the config file is written and the
+// TestSettingsSubmitPersistsAndApplies walks the whole form (11 fields across
+// 4 groups — the Agent group gained the workspace-tools toggle) and submits
+// unchanged values: the config file is written and the
 // saved panel shows (persist path of the M4 exit). Value-change/apply is
 // covered by TestSettingsApplyConfigLive.
 func TestSettingsSaveErrorSurfacedAndRetry(t *testing.T) {
@@ -155,7 +156,7 @@ func TestSettingsSaveErrorSurfacedAndRetry(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
 
 	m = openSettings(t, m)
-	keys := make([]tea.Msg, 10)
+	keys := make([]tea.Msg, 11)
 	for i := range keys {
 		keys[i] = tea.KeyPressMsg{Code: tea.KeyEnter}
 	}
@@ -181,7 +182,7 @@ func TestSettingsSaveErrorSurfacedAndRetry(t *testing.T) {
 	if !app.settings.Editing() {
 		t.Fatalf("enter on the error panel should reopen the editing form, got:\n%s", view(t, app))
 	}
-	keys = make([]tea.Msg, 10)
+	keys = make([]tea.Msg, 11)
 	for i := range keys {
 		keys[i] = tea.KeyPressMsg{Code: tea.KeyEnter}
 	}
@@ -196,7 +197,7 @@ func TestSettingsSubmitPersistsAndApplies(t *testing.T) {
 	path := cfg.ConfigPath()
 	m = openSettings(t, m)
 
-	keys := make([]tea.Msg, 10)
+	keys := make([]tea.Msg, 11)
 	for i := range keys {
 		keys[i] = tea.KeyPressMsg{Code: tea.KeyEnter}
 	}
@@ -219,5 +220,47 @@ func TestSettingsSubmitPersistsAndApplies(t *testing.T) {
 	}
 	if reloaded.Host != cfg.Host {
 		t.Errorf("file not persisted: host=%q want %q", reloaded.Host, cfg.Host)
+	}
+}
+
+// typeField feeds each rune into the focused huh input as a key press.
+func typeField(t *testing.T, m App, s string) App {
+	t.Helper()
+	for _, r := range s {
+		m = updateTab(t, m, tea.KeyPressMsg{Text: string(r)})
+	}
+	return m
+}
+
+// TestSettingsFieldValidationReusesConfigPolicy drives the form to the last
+// field (max tool iterations, seeded "12") and appends a digit so the value
+// becomes "120" — inside the OLD settings range (1..256, accepted) but outside
+// the config policy (1..100, rejected). The inline error must be
+// config.Validate's stable message: the form no longer keeps a validation
+// policy of its own (it once drifted: 256 here vs 100 in config).
+func TestSettingsFieldValidationReusesConfigPolicy(t *testing.T) {
+	m, cfg := settingsApp(t)
+	m = openSettings(t, m)
+
+	// Advance to the max-tool-iterations field (10th of 11 across 4 groups;
+	// the tools toggle follows it).
+	keys := make([]tea.Msg, 9)
+	for i := range keys {
+		keys[i] = tea.KeyPressMsg{Code: tea.KeyEnter}
+	}
+	m = drive(t, m, keys...).(App)
+	m = typeField(t, m, "0") // "12" + "0" = "120": > 100, still < 256
+	app := drive(t, m, tea.KeyPressMsg{Code: tea.KeyEnter}).(App)
+
+	if app.settings.state != settingsEditing {
+		t.Fatalf("state = %v, want editing (out-of-range value must be rejected inline)\n%s",
+			app.settings.state, view(t, app))
+	}
+	got := view(t, app)
+	if !strings.Contains(got, "max_tool_iterations must be between 1 and 100") {
+		t.Errorf("expected config.Validate's stable message inline, got:\n%s", got)
+	}
+	if _, err := os.Stat(cfg.ConfigPath()); !os.IsNotExist(err) {
+		t.Errorf("config file should not exist after a rejected edit (nothing was saved)")
 	}
 }

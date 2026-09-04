@@ -78,8 +78,8 @@ func TestRunnerExecutesNativeToolAndStreamsFinal(t *testing.T) {
 			t.Fatalf("decode request: %v", err)
 		}
 		if calls == 1 {
-			if len(req.Tools) != 6 {
-				t.Errorf("tools = %d, want 6", len(req.Tools))
+			if len(req.Tools) != 5 {
+				t.Errorf("tools = %d, want 5 (read/list/grep/write/edit; no run_command in v0.1)", len(req.Tools))
 			}
 			w.Header().Set("Content-Type", "application/x-ndjson")
 			io.WriteString(w, toolEvent(nativeCall("read_file", `{"path":"README.md"}`)))
@@ -92,7 +92,7 @@ func TestRunnerExecutesNativeToolAndStreamsFinal(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	var events []Msg
-	r := NewRunner(ollama.New(srv.URL, ""), root, "system", 4)
+	r := NewRunnerWithPolicy(ollama.New(srv.URL, ""), root, "system", 4, &ToolPolicy{})
 	err := r.Run(context.Background(), Request{
 		Model: "qwen3:8b", Messages: []ollama.ChatMessage{{Role: ollama.RoleUser, Content: "read README.md"}},
 	}, func(msg Msg) { events = append(events, msg) })
@@ -153,7 +153,7 @@ func TestRunnerParsesContentEmbeddedToolJSON(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	var got string
-	r := NewRunner(ollama.New(srv.URL, ""), root, "", 3)
+	r := NewRunnerWithPolicy(ollama.New(srv.URL, ""), root, "", 3, &ToolPolicy{})
 	if err := r.Run(context.Background(), Request{Model: "coder", Messages: []ollama.ChatMessage{{Role: ollama.RoleUser, Content: "find needle"}}}, func(msg Msg) {
 		if token, ok := msg.(TokenMsg); ok {
 			got += token.Text
@@ -181,7 +181,7 @@ func TestRunnerExplicitPlainChatFallbackOnToolRejection(t *testing.T) {
 	t.Cleanup(srv.Close)
 	var fallback bool
 	var got string
-	r := NewRunner(ollama.New(srv.URL, ""), t.TempDir(), "", 2)
+	r := NewRunnerWithPolicy(ollama.New(srv.URL, ""), t.TempDir(), "", 2, &ToolPolicy{})
 	if err := r.Run(context.Background(), Request{Model: "gemma3:12b", Messages: []ollama.ChatMessage{{Role: ollama.RoleUser, Content: "hi"}}}, func(msg Msg) {
 		switch event := msg.(type) {
 		case FallbackMsg:
@@ -204,7 +204,7 @@ func TestRunnerBoundsIterations(t *testing.T) {
 		io.WriteString(w, toolEvent(nativeCall("list_dir", `{"path":"."}`)))
 	}))
 	t.Cleanup(srv.Close)
-	r := NewRunner(ollama.New(srv.URL, ""), root, "", 2)
+	r := NewRunnerWithPolicy(ollama.New(srv.URL, ""), root, "", 2, &ToolPolicy{})
 	err := r.Run(context.Background(), Request{Model: "qwen3:8b", Messages: []ollama.ChatMessage{{Role: ollama.RoleUser, Content: "list"}}}, nil)
 	if err == nil || !strings.Contains(err.Error(), "maximum tool iterations (2)") {
 		t.Errorf("error = %v, want bounded iteration error", err)

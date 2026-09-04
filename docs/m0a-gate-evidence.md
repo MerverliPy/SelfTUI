@@ -4,6 +4,12 @@
 The gate gates the **agent scope**; model management + plain chat may proceed
 regardless. Verdict at the bottom.
 
+> **Historical evidence record (2026-09-03; label added 2026-09-04).** Gate
+> measurement evidence for M0a: device references (Moshi/iPhone 16 Pro) and
+> measured geometries are as-recorded. Where this file touches product scope
+> (agent tool breadth, the `run_command` containment design), the 2026-09-04
+> v0.1 product contract in `PLAN.md` governs — command execution does not ship.
+
 ## Gate definition (owner-fixed criteria)
 
 1. **one validated target workflow** on the target SSH client;

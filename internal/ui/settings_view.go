@@ -29,7 +29,7 @@ import (
 //   - esc (discard) or a write failure leaves the config file and in-session
 //     state untouched ("revert"); a theme preview is rolled back on discard.
 //
-// settingsValues holds the ten form-bound values on a shared allocation so
+// settingsValues holds the eleven form-bound values on a shared allocation so
 // the form's bindings (Value(&v.host)…) and the view read the same data. The
 // SettingsView value is copied on every Update; the pointer survives copies.
 type settingsValues struct {
@@ -42,6 +42,7 @@ type settingsValues struct {
 	topP              string
 	numCtx            string
 	maxToolIterations string
+	toolsEnabled      bool
 }
 
 type SettingsView struct {
@@ -122,6 +123,7 @@ func (s SettingsView) Begin() SettingsView {
 		topP:              strconv.FormatFloat(c.Agent.TopP, 'f', -1, 64),
 		numCtx:            strconv.Itoa(c.Agent.NumCtx),
 		maxToolIterations: strconv.Itoa(c.Agent.MaxToolIterations),
+		toolsEnabled:      c.ToolsEnabled,
 	}
 	s.state = settingsEditing
 	s.errMsg = ""
@@ -169,6 +171,70 @@ func (s SettingsView) applyTheme(dark bool, styles Styles) SettingsView {
 
 // --- form construction ----------------------------------------------------
 
+// policyValidator returns a huh validator that enforces the config package's
+// single validation policy for one form field: it builds the config the form
+// would currently save (snapshot of the bound values, which huh keeps live on
+// every keystroke) and asks config.Validate, surfacing only errors that belong
+// to this field via its stable marker substring. Settings no longer keeps its
+// own copy of ranges or URL rules — that policy drifted once (max tool
+// iterations 1..256 here vs 1..100 in config) — so Load, Save, and this form
+// all share config.Validate. shape, when non-nil, first rejects a value that
+// does not even parse as its type (config.Validate works on typed values).
+func (s SettingsView) policyValidator(marker string, shape func(string) error) func(string) error {
+	return func(raw string) error {
+		if shape != nil {
+			if err := shape(raw); err != nil {
+				return err
+			}
+		}
+		if err := config.Validate(s.snapshot()); err != nil {
+			if marker == "" || strings.Contains(err.Error(), marker) {
+				return err
+			}
+			// The config is invalid because of another field; that field's own
+			// validator will surface it, and Save re-validates regardless.
+		}
+		return nil
+	}
+}
+
+// policyValidatorBool is policyValidator for the workspace-tools toggle: the
+// Confirm field validates a bool, but the policy is checked on the whole
+// snapshot the form would save, surfacing only errors that belong to this
+// field (stable marker "config: tools_enabled:"). Enabling tools with an
+// empty / / / home workspace root is refused inline before any save.
+func (s SettingsView) policyValidatorBool(marker string) func(bool) error {
+	return func(_ bool) error {
+		if err := config.Validate(s.snapshot()); err != nil {
+			if marker == "" || strings.Contains(err.Error(), marker) {
+				return err
+			}
+		}
+		return nil
+	}
+}
+
+// numberShape rejects a value that does not parse as a number (the form fields
+// are strings; config.Validate operates on the typed config).
+func numberShape(name string) func(string) error {
+	return func(raw string) error {
+		if _, err := strconv.ParseFloat(strings.TrimSpace(raw), 64); err != nil {
+			return fmt.Errorf("%s must be a number", name)
+		}
+		return nil
+	}
+}
+
+// integerShape rejects a value that does not parse as an integer.
+func integerShape(name string) func(string) error {
+	return func(raw string) error {
+		if _, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64); err != nil {
+			return fmt.Errorf("%s must be an integer", name)
+		}
+		return nil
+	}
+}
+
 // buildForm assembles the editing form from the shared bound values (s.val),
 // which Begin seeded from the session config.
 func (s SettingsView) buildForm() *huh.Form {
@@ -177,16 +243,7 @@ func (s SettingsView) buildForm() *huh.Form {
 		Title("Host").
 		Description("Ollama base URL — must include http:// or https://.").
 		Placeholder("http://localhost:11434").
-		Validate(func(raw string) error {
-			if strings.TrimSpace(raw) == "" {
-				return fmt.Errorf("host is required")
-			}
-			if !strings.HasPrefix(strings.TrimSpace(raw), "http://") &&
-				!strings.HasPrefix(strings.TrimSpace(raw), "https://") {
-				return fmt.Errorf("host must start with http:// or https://")
-			}
-			return nil
-		}).
+		Validate(s.policyValidator("config: host:", nil)).
 		Value(&v.host)
 
 	tokenField := huh.NewInput().
@@ -194,32 +251,8 @@ func (s SettingsView) buildForm() *huh.Form {
 		Description("Optional bearer token for remote hosts. Empty = none.").
 		Placeholder("unset").
 		EchoMode(huh.EchoModePassword).
+		Validate(s.policyValidator("bearer token requires HTTPS", nil)).
 		Value(&v.authToken)
-
-	floatValidator := func(name string, lo, hi float64) func(string) error {
-		return func(raw string) error {
-			f, err := strconv.ParseFloat(strings.TrimSpace(raw), 64)
-			if err != nil {
-				return fmt.Errorf("%s must be a number", name)
-			}
-			if f < lo || f > hi {
-				return fmt.Errorf("%s must be between %.1f and %.1f", name, lo, hi)
-			}
-			return nil
-		}
-	}
-	intValidator := func(name string, lo, hi int64) func(string) error {
-		return func(raw string) error {
-			n, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
-			if err != nil {
-				return fmt.Errorf("%s must be an integer", name)
-			}
-			if n < lo || n > hi {
-				return fmt.Errorf("%s must be between %d and %d", name, lo, hi)
-			}
-			return nil
-		}
-	}
 
 	groupConnection := huh.NewGroup(
 		hostField,
@@ -236,19 +269,19 @@ func (s SettingsView) buildForm() *huh.Form {
 			Title("Temperature").
 			Description("Sampling randomness; 0 = deterministic.").
 			Placeholder("0.7").
-			Validate(floatValidator("temperature", 0, 2)).
+			Validate(s.policyValidator("config: agent: temperature", numberShape("temperature"))).
 			Value(&v.temperature),
 		huh.NewInput().
 			Title("Top-p").
 			Description("Nucleus sampling cutoff.").
 			Placeholder("0.9").
-			Validate(floatValidator("top-p", 0, 1)).
+			Validate(s.policyValidator("config: agent: top_p", numberShape("top-p"))).
 			Value(&v.topP),
 		huh.NewInput().
 			Title("Context window").
 			Description("num_ctx sent per request.").
 			Placeholder("4096").
-			Validate(intValidator("context window", 128, 1_048_576)).
+			Validate(s.policyValidator("config: agent: num_ctx", integerShape("context window"))).
 			Value(&v.numCtx),
 	).Title("Model defaults").Description("Session defaults for the Agent tab; applied live on save.")
 
@@ -273,13 +306,21 @@ func (s SettingsView) buildForm() *huh.Form {
 			Title("Workspace root").
 			Description("Project root the agent tools are jailed to. Empty = current directory.").
 			Placeholder("/home/you/project").
+			Validate(s.policyValidator("config: workspace_root:", nil)).
 			Value(&v.workspaceRoot),
 		huh.NewInput().
 			Title("Max tool iterations").
 			Description("Upper bound on tool calls inside one agent run.").
 			Placeholder("12").
-			Validate(intValidator("max tool iterations", 1, 256)).
+			Validate(s.policyValidator("config: agent: max_tool_iterations", integerShape("max tool iterations"))).
 			Value(&v.maxToolIterations),
+		huh.NewConfirm().
+			Title("Enable workspace tools").
+			Description("Let the agent read and edit files under the workspace root. Defaults off — requires a workspace root outside your home directory; against a remote host, workspace content may be sent to it.").
+			Affirmative("Enable").
+			Negative("Disable").
+			Validate(s.policyValidatorBool("config: tools_enabled:")).
+			Value(&v.toolsEnabled),
 	).Title("Agent").Description("Applied to the next agent run on save.")
 
 	km := huh.NewDefaultKeyMap()
@@ -430,6 +471,7 @@ func (s SettingsView) snapshot() config.Config {
 		a.MaxToolIterations = int(n)
 	}
 	c.Agent = a
+	c.ToolsEnabled = s.val.toolsEnabled
 	return c
 }
 

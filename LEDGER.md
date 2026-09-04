@@ -14,7 +14,16 @@ decisions/blockers → next action).
 > **One fresh session per step (binding — see `AGENTS.md`).** A "step" = one milestone
 > (`PLAN.md` §10) or one owner-assigned task. Do not chain a second step in the same
 > session. Finish the chosen step → append this file → commit → stop; start the next step
-> in a new `pi` session with cwd `/home/calvin/SelfTUI`.
+> in a new `pi` session with cwd at this repository's root.
+
+> **Historical record (label added 2026-09-04).** Every `##`/`###` entry below
+> is a dated, append-only record of work and claims **as they stood when the
+> entry was written**. Old product claims retained inside entries — e.g. the
+> transcript command's earlier name, pre-release version strings, the removed
+> `run_command` behavior, planning-era "chat sessions persist" framing, and
+> personal local paths — are **historical**: superseded where they conflict
+> with the 2026-09-04 v0.1 product contract in `PLAN.md` and the dated
+> release-hardening entry appended at the bottom of this log.
 
 ---
 
@@ -999,3 +1008,657 @@ with no way to approve.
 
 **Next action**
 - Fresh session: v0.1 tag + release notes (unchanged).
+
+### 2026-09-03 — v0.1 hardening, phase 3: validate + atomically save config (owner task)
+**Milestone:** owner-assigned step on `hardening/v0.1` (phase 3 of the v0.1
+hardening plan; branch tip was `6903003`) · **Result:** done — see commit
+"security: validate and atomically save configuration". No §10 milestone row to
+tick (hardening phases are owner-assigned steps, not PLAN.md §10 milestones).
+
+**Work done**
+- `config.Validate(Config) error` (new `internal/config/validate.go`) is now the
+  single configuration policy, with stable field-prefixed errors
+  (`config: host: …`, `config: agent: …`, `config: theme: …`,
+  `config: workspace_root: …`). Rules: host scheme exactly http/https, hostname
+  present, userinfo/query/fragment rejected, bearer token over plain http only
+  for localhost/127.0.0.1/::1; theme dark|light; temperature 0–2; top_p 0–1;
+  num_ctx 128–1,048,576; max_tool_iterations 1–100; non-empty workspace_root
+  must be an existing directory. First violation wins, in a fixed order.
+- `config.Load` calls `Validate` after all sources are applied (defaults → file
+  → env → overrides) and returns the error verbatim; `config.Save` validates
+  before marshaling. Every surface reports the identical message regardless of
+  the offending source.
+- `config.Save` now writes atomically via `writeFileAtomic`: same-directory
+  0600 temp file (`.selftui-config-*.tmp`) → write → Sync → Close → Chmod(0600)
+  → rename over target → Chmod(0600) on the final path; the temp file is
+  removed on every failure (deferred cleanup); created config directories are
+  0700 (pre-existing dirs untouched).
+- Settings form no longer keeps its own validation policy — it delegates every
+  field check to `config.Validate` (`policyValidator` in settings_view.go),
+  which also fixes a real drift: the form allowed max tool iterations up to 256
+  while the policy is 1–100. Fields keep only parse-shape checks (number /
+  integer) plus token and workspace-root checks that previously had none.
+- Tests (all table-driven where the task asked): every invalid rule is rejected
+  with the exact same stable error through each of TOML / env / Overrides
+  (15 rules × 3 sources + boundary/loopback acceptance matrix + host-level unit
+  cases + NaN); an existing 0644 config becomes 0600 after Save; a failed
+  validation leaves the old file byte-identical with no temp litter; a
+  mid-write failure (read-only dir) keeps the old file; a rename failure
+  cleans the temp file; a successful save reloads identically (every field).
+  UI test drives the form to max tool iterations, types "0" onto the seeded
+  "12" ("120": inside the old 1..256 band, outside the new 1..100) and asserts
+  config.Validate's stable message inline, with nothing written.
+- `-auth-token` removed from README examples; README + flag help now recommend
+  `SELFTUI_AUTH_TOKEN` or the 0600 config file and warn the flag (kept only for
+  compatibility) can leak argv secrets into process listings / shell history.
+- Existing priority tests updated to policy-valid sample values (env/flag/file
+  hosts now carry a scheme; token fixtures sit on https or loopback hosts;
+  TestSaveWritesConfig uses a real workspace dir).
+
+**Commands + exit codes**
+- RED: `go test -count=1 ./internal/config` → build fail `undefined: Validate`;
+  `go test ./internal/ui -run TestSettingsFieldValidationReusesConfigPolicy`
+  → FAIL (old policy accepted "120", saved). Green after implementation.
+- `go test -count=1 ./internal/config ./internal/ui ./cmd/self-tui` `0`
+- `go test -race -count=1 ./internal/config ./internal/ui` `0`
+- `make check` `0` (build + `go test -count=1 ./...` + vet + gofmt) · `make fmt` `0`
+- live boot checks: `SELFTUI_THEME=pink|SELFTUI_HOST=ftp://…|SELFTUI_AUTH_TOKEN`
+  over http remote → `selftui: load config: config: …` exit 1; `-version` `0`.
+
+**Decisions / lines to respect**
+- Validate errors flow **verbatim** out of Load and Save (no extra wrapping) so
+  any caller sees the exact stable message; main prints
+  `selftui: load config: config: host: …`.
+- Loopback = `localhost`, `127.0.0.1`, `::1` (case-insensitive hostname).
+  Empty `workspace_root` stays allowed (= cwd); non-empty must exist as a dir.
+- Created config parent dirs are 0700; a pre-existing parent is left alone
+  (never chmod a user's `-config` directory out from under them).
+- The Settings form shows config.Validate errors only when they belong to the
+  field being edited (matched by the stable marker substring); Save
+  re-validates as the backstop, surfacing any miss in the existing error panel.
+
+**Blockers / open decisions**
+- None. v0.1 (tag + release notes) still next; further hardening phases per
+  owner as assigned.
+
+**Next action**
+- Fresh session: next owner-assigned step (v0.1 tag/release notes or the next
+  hardening phase).
+
+### 2026-09-03 — v0.1 hardening, phase 4: require explicit workspace tool trust (owner task)
+**Milestone:** owner-assigned step on `hardening/v0.1` (phase 4 of the v0.1
+hardening plan; branch tip was `a98f1d8`) · **Result:** done — see commit
+"security: require explicit workspace tool trust". No §10 milestone row to
+tick (hardening phases are owner-assigned steps, not PLAN.md §10 milestones).
+
+**Work done**
+- `config.ToolsEnabled bool`, TOML `tools_enabled`, env `SELFTUI_TOOLS_ENABLED`
+  via `strconv.ParseBool` (garbage → `parse SELFTUI_TOOLS_ENABLED="…"` load
+  error; env beats file, so `false` can disable a file-enabled tools), default
+  `false`, persisted by `Save`. `config.Validate` now rejects
+  `tools_enabled=true` when `workspace_root` is empty (`config: tools_enabled:
+  workspace_root is required when tools are enabled`), `/` (`…must not be /…`)
+  or exactly the current user's home directory (`…must not be your home
+  directory…`, compared after `filepath.Clean` so a trailing slash cannot
+  dodge it); tools-off keeps those roots legal. Settings → Agent gained an
+  *Enable workspace tools* confirm toggle (11th field) whose validator is the
+  config policy (stable `config: tools_enabled:` marker), so enabling against
+  an unsafe root fails inline with the same message `Save`/`Load` produce.
+- `agent.ToolPolicy` (new `toolpolicy.go`): `Tools() []ollama.ToolDefinition`
+  returns the five Phase-1 v0.1 tools (read_file/list_dir/grep +
+  confirmed write_file/edit_file; closed — no run_command); `AuthorizePath`
+  rejects any requested path containing a component `.ssh`/`.gnupg`/`.aws`/
+  `.azure`/`.kube` or the `.config/gcloud` composite, and basenames `.env`/
+  `.env.*` except exactly `.env.example`, plus `credentials`/
+  `credentials.json`. Lexical and additive to the existing canonical
+  containment (`securePath`/`canonicalRoot`); `.`/empty-component paths pass
+  to containment (a model legitimately asks `list_dir "."`).
+- `Runner.policy *ToolPolicy`; `NewRunner` stays the compatibility wrapper
+  with tools DISABLED (nil policy → plain chat, no tools field on the wire —
+  proven by a test that inspects the raw JSON body, and by a test where a
+  hostile endpoint replies with a tool_calls event: nothing executes, no
+  confirmation, no file). Production wiring is `NewRunnerWithPolicy`;
+  `runPlainChat` now records the terminal done_reason so the tools-off footer
+  keeps its `· stop/· length` meta. Each of the five `executeTool` cases calls
+  `authorizePath(args.Path)` before its own validation/confirm/executor, so a
+  sensitive request never even surfaces an approval dialog.
+- UI: the Agent statusline (idle legend) and the root status bar both show the
+  canonical workspace (real path, symlinks resolved — `canonicalWorkspaceLabel`,
+  empty root → cwd) and `tools off`/`tools on`; the bar drops the workspace
+  (then the warning) under width pressure, host+tools survive. When tools are
+  enabled against a non-loopback host (`config.LoopbackHost`, exported and
+  reused by validateHost) the Agent statusline shows a persistent red
+  `⚠ tools on — workspace content may be sent to <host>` row, and the status
+  bar appends `⚠ workspace content may be sent to the remote host` when it
+  fits. Agent view/compat constructors default to tools off; the App passes
+  `cfg.ToolsEnabled`/`cfg.Host` through `newAgentView` and `ApplyConfig`
+  rebuilds the runner on a settings save. No onboarding wizard built (v0.1
+  stays out of that scope).
+- Golden fixtures regenerated (19 frames; only the status rows changed —
+  `· tools off · /home/calvin/SelfTUI/internal/ui` in the agent frames/bar).
+  Note: fixtures embed the test cwd as the canonical workspace (empty
+  workspace_root → cwd is the real default behavior), so they are
+  machine-path dependent like the existing behavior always was.
+- README (env/file config rows, agent tools = opt-in, Settings toggle,
+  sensitive-path refusal) and PLAN §5/§6 (tools_enabled row, policy, safety
+  rules, tool-table policy notes) updated.
+
+**Commands + exit codes**
+- RED: `go test -count=1 ./internal/config -run 'TestTools|…'` → build fail
+  `undefined: ToolsEnabled`; `go test ./internal/agent -run 'TestToolPolicy|…'`
+  → `undefined: ToolPolicy/NewRunnerWithPolicy`; `go vet ./internal/ui` →
+  `too many arguments in call to newAgentView` (all intended).
+- Green: `go test -count=1 ./internal/config ./internal/agent ./internal/ui` `0`
+- `go test -race -count=1 ./internal/config ./internal/agent ./internal/ui` `0`
+- `make check` `0` (build + `go test -count=1 ./...` + vet + gofmt); full
+  `go test -race -count=1 ./...` `0`; goldens regenerated via
+  `go test ./internal/ui -run TestGoldenRender -update` (diff reviewed: only
+  the status rows).
+
+**Decisions / lines to respect**
+- ToolPolicy zero value = fully armed; "enabled" is expressed by which
+  constructor arms it (nil policy vs `&ToolPolicy{}`), mirroring
+  NewRunner = disabled default.
+- AuthorizePath is lexical on the requested path, deliberately in addition to
+  containment; an in-workspace symlink alias to a forbidden file is out of
+  scope (the agent cannot create symlinks, so only a pre-existing user-made
+  alias could matter).
+- `.env.*`-prefixed basenames are refused except exactly `.env.example`
+  (future `.env` variants are credential files too).
+- The v0.1 tools stay the same closed five; nothing was added to the tool
+  surface, only an explicit trust gate in front of it.
+
+**Blockers / open decisions**
+- The referenced `docs/superpowers/plans/2026-09-04-v0.1-release-hardening.md`
+  does not exist in the repo (any branch) or on disk, as in phases 0–3; the
+  inline phase spec was treated as operative, and ToolPolicy's API was derived
+  from it + the codebase. If the owner's plan named different fields/methods,
+  the divergence is isolated to `internal/agent/toolpolicy.go`.
+
+**Next action**
+- Fresh session: next owner-assigned step (v0.1 tag + release notes or the
+  next hardening phase).
+
+### 2026-09-03 — v0.1 hardening, phase 5: bound and time out Ollama streams (owner task)
+**Milestone:** owner-assigned step on `hardening/v0.1` (phase 5 of the v0.1
+hardening plan; branch tip was `7fea64f`) · **Result:** done — see commit
+"fix: bound and time out Ollama streams". No §10 milestone row to tick
+(hardening phases are owner-assigned steps, not PLAN.md §10 milestones).
+
+**Work done**
+- New shared internal NDJSON stream decoder `internal/ollama/stream.go`, used
+  by both `ChatStream` and `Pull`: frames events line-by-line over a 32 KiB
+  bufio buffer and (a) rejects any single event whose raw wire bytes exceed
+  4 MiB (`stream event exceeds 4194304 bytes`), checked while accumulating so
+  memory stays ≤ cap; (b) enforces a per-byte **idle** timeout — an
+  `idleReader` wraps the response body, bounds every read with the idle
+  window, and on expiry cancels a *child* request context so net/http tears
+  down the blocked read; (c) honors caller cancellation throughout (the child
+  context derives from the caller's, so cancels propagate with the same
+  `context canceled` errors as before). No total request deadline exists: a
+  body delivering bytes at any cadence inside the window runs indefinitely.
+  Idle default 90s per client (`Client.streamIdle`, set by `New`, injectable
+  in tests); zero means default.
+- `ChatStream` tracks cumulative decoded `message.content` + `message.thinking`
+  + top-level `thinking` bytes and rejects > 16 MiB with `chat stream exceeds
+  16777216 bytes` before delivering the crossing event; the terminal `done`
+  requirement (EOF without `done` → `stream ended without done`) is unchanged.
+- `Pull` uses the same per-event + idle protections but keeps no cumulative
+  budget, so multi-minute downloads survive as long as progress lines keep
+  arriving (a test streams 25 events across 3+ idle windows and completes).
+- `postStream` helper (shared request build: child ctx + stream client)
+  deduplicates the chat/pull POST path; both decode loops now `json.Unmarshal`
+  per framed event, preserving every pre-existing error message shape
+  (`decode stream: …`, in-band `{"error": …}`, `stream ended without
+  done/success`, HTTP-error body parsing, Bearer header, non-2xx read). Public
+  `Client`, `Chat`, `ChatStream`, `Pull` signatures untouched; `Chat` wrapper
+  unchanged.
+- New `internal/ollama/stream_test.go` (10 httptest tests, short injected
+  idle): one oversized chat event, cumulative chat content+thinking overflow
+  (5 × ~4 MiB events; thinking event crosses the 16 MiB budget), one oversized
+  pull event, stalled chat body, stalled pull body (idle fires at 60 ms),
+  steady pull progress outliving the idle window (no total deadline), caller
+  cancellation beating a 5 s idle in both chat and pull, malformed pull NDJSON
+  (`decode stream`), pull EOF without `success`. The first five went
+  genuinely red (old code: no caps, no idle) then green; the last five guard
+  existing behavior through the rewrite (red-able only by regression), and the
+  pre-existing chat malformed/EOF/cancel tests stay green on the new decoder.
+- PLAN §5 "Confirmed stream behaviors" gained the phase-5 bounds bullet.
+
+**Commands + exit codes**
+- RED: focused run (`-run 'Test(Chat|Pull)(Oversized…|…)'`) → first compile
+  fail (`streamIdle` seam missing) → seam only → 5 behavioral FAILs (cap/idle
+  messages absent) `1`.
+- GREEN: focused run → 10/10 PASS `0`; `go test -count=1 ./internal/ollama`
+  `0`; `go test -race -count=1 ./internal/ollama` `0` (6/6 repeat runs clean);
+  `make check` `0` (build + `go test -count=1 ./...` + vet + gofmt).
+- Environmental note: this host runs a localhost port prober (observed as
+  `moshi-hook`; reproduced standalone with a raw `net.Listen` and zero client
+  traffic) that sends stray `GET /` ~0.6–1.1 s after a new 127.0.0.1 port
+  binds. It intermittently failed `TestChatOversizedEventRejected` /
+  `TestChatCumulativeOverflowRejected` under `-race` (they hold listeners
+  ~100 ms+ serving multi-MiB bodies and used the strict `fakeChatServer`
+  helper that `t.Errorfs` on non-POST requests). Those two tests now use
+  probe-tolerant inline handlers (stray requests get a silent 404; a genuine
+  client bug still fails via the client's own error). Not a code defect.
+
+**Decisions / lines to respect**
+- The idle watchdog is per-received-byte, not per-request: a read that
+  delivers nothing for the window aborts via child-context cancellation; a
+  read that delivers (any amount, however slowly) resets the window. The
+  90 s default is a constant; tests inject per client.
+- Per-event cap counts raw wire bytes of the JSON line (strictly stronger
+  than decoded size and the actual memory bound); the chat cumulative cap
+  counts decoded content+thinking across events.
+- The decoder returns clean `io.EOF` at an event boundary; "ended without
+  done/success" is the caller's decision, so chat and pull keep their own
+  terminal semantics on one shared framing path.
+- Large streaming bodies are read through a 32 KiB bufio fill, keeping the
+  per-read watchdog goroutine cheap on multi-GiB pulls.
+
+**Blockers / open decisions**
+- None. v0.1 (tag + release notes) still next; further hardening phases per
+  owner as assigned.
+
+**Next action**
+- Fresh session: next owner-assigned step (v0.1 tag/release notes or the
+  next hardening phase).
+### 2026-09-04 — v0.1 hardening, phase 6: envelope asynchronous UI events (owner task)
+**Milestone:** owner-assigned step on `hardening/v0.1` (phase 6 of the v0.1
+hardening plan; branch tip was `43698da`) · **Result:** done — commit
+"refactor: envelope asynchronous UI events". No §10 milestone row to tick
+(hardening phases are owner-assigned steps, not PLAN.md §10 milestones).
+
+**Work done**
+- New per-child envelopes `agentEventMsg{ msg tea.Msg }` (agent_view.go) and
+  `modelsEventMsg{ msg tea.Msg }` (models_view.go): the single message shape
+  the root App accepts for each child's asynchronous results.
+- Producer-side wrapping, so routing coverage is structural, not a per-type
+  case list: the Agent model-list loader and the chat activity goroutine post
+  `agentEventMsg` (model-list results + every chat-channel event —
+  Token/ToolStart/ToolResult/ToolConfirm/Fallback/AgentDone + legacy
+  agentTokenMsg/agentDoneMsg); the Models load/show/delete cmds, the pull
+  goroutine (progress + completion), and the pull dialog's spinner ticks all
+  post `modelsEventMsg`.
+- `App.Update` (app.go): the two concrete child case lists are replaced by
+  exactly one case per child that unwraps and delegates to
+  `ModelsView.Update`/`AgentView.Update`; bare `spinner.TickMsg` routing to
+  ModelsView is gone. Root-owned `settingsThemeMsg`, `agentThemeMsg`,
+  `settingsSaveDoneMsg`, `WindowSizeMsg`, `KeyMsg` remain root messages.
+- Each view keeps its concrete cases and adds a one-line unwrap for its own
+  envelope, so a standalone view (or a test that runs the view's commands
+  directly) is self-consistent: wrapped results that come straight back are
+  re-dispatched to the same switch.
+- Tests: new `TestAppEnvelopeRoutingTable` (18 rows — every currently defined
+  async payload, agent and models, injected through its envelope at the root
+  with per-row state assertions proving it reached the intended child,
+  including an enveloped spinner tick advancing the Models dialog spinner);
+  `TestUnrelatedSpinnerTickNotRoutedToModels` (a bare tick is dropped, not
+  silently animating ModelsView); explicit root-flow regressions
+  `TestAppRoutingChatCompletesTurn`, `TestAppRoutingPullCompletesAndReloads`,
+  `TestAppRoutingChatErrorSurfaced`; the existing tool-confirmation and
+  declined-write routing regressions were preserved (envelope-adapted
+  injections; `pumpAgent` unchanged — the chat channel now carries
+  envelopes, which is exactly what the shell routes). Root-level test
+  injections (app/agent_view/m7/golden) now use the envelopes; view-level
+  concrete injections and channel pumps are untouched; direct `cmd()` result
+  assertions (deleteResultFromCmd, show result, canceled list) unwrap the
+  envelope. PLAN §6 "Streaming to UI" gained the phase-6 envelope bullet.
+
+**Commands + exit codes**
+- RED: focused `-run 'TestAppEnvelopeRoutingTable|TestUnrelatedSpinnerTickNotRoutedToModels'`
+  → behavioral FAILs `1` (envelopes dropped at the shell; raw spinner tick
+  silently routed to ModelsView — frame advanced).
+- GREEN: same focused run → `ok` `0`; `go test -count=1 ./internal/ui` `0`;
+  `go test -race -count=1 ./internal/ui` `0` (8.98s, clean); `make check` `0`
+  (build + `go test -count=1 ./...` all packages ok + vet + gofmt).
+
+**Decisions / lines to respect**
+- The envelope is applied at the producer boundary (cmds return it; chat/pull
+  goroutines post it), and the App shell is the only unwrap point in
+  production; the views' own unwrap case exists purely so a standalone view
+  remains a coherent tea.Model when its own wrapped results return to it.
+- Root-bound messages produced by children (agentThemeMsg; settings'
+  settingsThemeMsg/settingsSaveDoneMsg; huh form internals) are deliberately
+  NOT wrapped — the shell routes them itself.
+- Channels stay typed `chan tea.Msg`; the payload is structural, so future
+  payload types are routed by construction.
+
+**Blockers / open decisions**
+- None. v0.1 (tag + release notes) still next; further hardening phases per
+  owner as assigned.
+
+**Next action**
+- Fresh session: next owner-assigned step (v0.1 tag/release notes or the
+  next hardening phase).
+
+### 2026-09-04 — v0.1 hardening, phase 7: align the product contract (owner task)
+**Milestone:** owner-assigned step on `hardening/v0.1` (phase 7 of the v0.1
+hardening plan; branch tip was `4ebd1fa`) · **Result:** done — commit
+"docs: align product contract for v0.1". No §10 milestone row to tick
+(hardening phases are owner-assigned steps, not PLAN.md §10 milestones).
+
+**Work done**
+- **Version identity.** `const Version = "0.6.0-m6"` → `var Version = "dev"`
+  in `cmd/self-tui/main.go`; the `-version` output is produced by a single
+  `printVersion(w io.Writer)` seam, and a new test temporarily sets `Version`
+  (`dev`, `1.2.3-rc1`, `0.7.0`) and proves the formatting stays exactly
+  `selftui <value>`. Live check: `go run ./cmd/self-tui -version` and
+  `bin/selftui -version` both print `selftui dev`. **No tag was created** in
+  this phase (v0.1.0 tagging stays a separate owner step).
+- **`/save` → `/export` rename.** The Agent slash command that flushes the
+  transcript is now `/export` ("flush + reveal the transcript file path"):
+  slash-command list, help overlay, dispatch case, notice prefix
+  (`session:` → `transcript:`), comments, tests, and the four golden fixtures
+  (agent-help compact/wide, agent-slash compact/wide) all updated. The
+  success notice reports the Markdown transcript path; the test now also
+  asserts the notice never claims the conversation can be resumed. Session
+  files remain append-only Markdown exports (`internal/session` untouched
+  beyond comments).
+- **Deterministic small-terminal state.** New App gate: when a `WindowSizeMsg`
+  arrives below `minTermW=40` or `minTermH=12` (layout.go), the shell stores
+  the geometry and does **not** forward a sub-minimum size to the children
+  (their layouts assume ≥40x12), keys are inert (only `ctrl+c` still quits),
+  and `App.View()` renders a bounded placeholder naming `terminal too small`,
+  the current dimensions, and `minimum: 40x12` — rows truncated to the window
+  width and capped at the window height, so it cannot overflow even at 1x1.
+  A zero-size frame (no pty size negotiated yet) is explicitly **not** "too
+  small" (M0a edge note preserved). New `small_terminal_test.go`: a
+  table-driven boundary suite (39x12 / 40x11 / 39x11 / 39x100 / 200x11 /
+  1x30 / 80x1 / 1x1 / 40x12 / 41x12 / 40x13 / 72x30 / 120x40) asserting the
+  message contract, the normal shell at/above the minimum, and frame
+  boundedness (no row wider than the window, no view taller), plus a Unicode
+  content case (CJK, box drawing, block shading, emoji, combining accent in
+  the Agent transcript) at 40x12/41x12/40x13/72x30/39x12/40x11.
+- **Public docs rewritten to the v0.1 contract** (README, PLAN §top +
+  §12): v0.1 is a single-process Linux/WSL TUI for Ollama; sessions are
+  in-memory with the Markdown transcript export surviving exit but **not**
+  resumable; tools are off by default and require an explicit workspace;
+  command execution is not shipped; non-loopback tokens require HTTPS;
+  native Windows/macOS not supported. README gains a "v0.1 product contract"
+  section and documents the 40x12 minimum + `/export`.
+- **Historical evidence preserved with a dated correction.** LEDGER.md gains
+  this entry + an explicit "Historical record" label at the top (all dated
+  entries below are as-written history; superseded claims are governed by the
+  PLAN contract note). PLAN.md's stale top-level "PLANNING. No implementation
+  code yet." was removed and replaced by a dated release-hardening correction;
+  the remaining old strings in PLAN.md (M3b `run_command`/read-only git row,
+  M6 `0.6.0-m6`, M7-follow-up-2 `/save`) are each annotated "(Historical
+  record…)". docs/reconnect.md and docs/m0a-gate-evidence.md carry explicit
+  historical-evidence labels (version strings there are as-captured);
+  docs/run-command-containment.md is now "historical deferred-design record".
+  COUNCIL-MEMO.md is labeled a historical advisory record and its audited
+  artifact path scrubbed.
+- **Personal absolute paths scrubbed** from README (none), the new
+  CONTRIBUTING/SECURITY, PLAN.md (repo path removed from §2, §10 M0, §11 #1),
+  AGENTS.md (session-ritual cwd now "this repository's root"), COUNCIL-MEMO.md,
+  and the LEDGER preamble (same reword); historical entries inside LEDGER keep
+  them only under the top historical label.
+- **New repo files:** `LICENSE` (Apache-2.0 — no recorded owner decision
+  specified another license), `SECURITY.md` (private vulnerability reporting
+  via GitHub's Security tab; no invented email), `CONTRIBUTING.md`, and
+  `CHANGELOG.md` (Unreleased section). README Project docs list updated.
+
+**Commands + exit codes**
+- `rg -n '0\.6\.0-m6|Chat sessions persist|/save|read-only git|PLANNING\. No
+  implementation' .` → every remaining hit is **historical and explicitly
+  labeled**: dated LEDGER entries (this one included, which quotes the gate
+  patterns), docs/reconnect.md (historical evidence label), and PLAN.md
+  inline "(Historical record…)" annotations; outside those, no hits for any
+  of the five patterns — README/CHANGELOG/docs carry none.
+- RED→GREEN per slice: version test (compile red → green `0`); `/export`
+  tests (behavioral red → green `0`); small-terminal tests (red → green `0`,
+  including 40x12 wide-rune frames with no overflow).
+- `go test -count=1 ./cmd/self-tui ./internal/ui ./internal/session` → ok `0`.
+- `go test -race -count=1 ./internal/ui ./internal/session` → ok `0`.
+- `make check` (build + `go test -count=1 ./...` all packages ok + vet +
+  gofmt) → exit `0`.
+- Golden fixtures regenerated with `go test ./internal/ui -run TestGoldenRender
+  -update`; `git diff` of testdata/golden touches only the four /export
+  fixture lines.
+- Environmental note: two cold-start full `internal/ui` runs failed before any
+  edit (no test named; view-frame output), then passed 10+ consecutive clean
+  runs incl. `-race` — consistent with the documented localhost port-prober
+  flake on strict fake-host tests (see phase-5 LEDGER note), not a code
+  defect; final gate evidence below is from clean runs.
+
+**Decisions / lines to respect**
+- `Version` is a `var` (default `dev`); release tagging stays a separate owner
+  step — **no `v0.1.0` tag in this phase**.
+- The transcript command is `/export` and its copy never claims resumability;
+  "session" naming survives only in internal package/field names.
+- The small-terminal floor is 40x12; sub-minimum sizes never reach child
+  views; zero-size frames are not "too small".
+- Old strings that remain anywhere are historical and explicitly labeled;
+  the v0.1 product contract in PLAN.md/README.md governs current claims.
+- Apache-2.0 LICENSE added (no other recorded owner license decision).
+
+**Blockers / open decisions**
+- None. v0.1 tag + release notes still next; further hardening phases per
+  owner as assigned.
+
+**Next action**
+- Fresh session: next owner-assigned step (v0.1 tag/release notes or the
+  next hardening phase).
+
+### 2026-09-04 — v0.1 hardening, phase 8: reproducible CI + release gates (owner task)
+**Milestone:** owner-assigned step on `hardening/v0.1` (phase 8 of the v0.1
+hardening plan; branch tip at start was `22271da`) · **Result:** done —
+commits listed below. No §10 milestone row to tick (hardening phases are
+owner-assigned steps, not PLAN.md §10 milestones). **No tag was created or
+pushed** — v0.1.0 tagging stays a separate owner step.
+
+**Work done**
+- **Toolchain pin (checked against the live official source).** Current
+  official stable Go on 2026-09-04 is **1.27.1** (go.dev/dl JSON). CI and the
+  release gates pin Go **1.27.1** (recorded in both workflows + README +
+  CONTRIBUTING); the local gate evidence below was produced under the same
+  toolchain (`GOTOOLCHAIN=go1.27.1`, its `bin` on PATH) so local == CI. The
+  module's `go 1.25.8` directive stays the language floor (no go.mod bump —
+  out of scope).
+- **govulncheck pin = v1.7.0.** The GitHub "latest release" endpoint
+  misleadingly reports v1.1.4; that release **panics** under Go 1.27.1
+  (`unexpected expr: *ast.KeyValueExpr` — its x/tools v0.29 SSA predates
+  Go 1.27 stdlib syntax). v1.7.0 (newest tag per the Go module proxy) scans
+  cleanly. Pinned in Makefile docs, README, CONTRIBUTING, both workflows,
+  and the release-check install hint.
+- **`make vuln` surfaced two reachable advisories (first run, v1.7.0):**
+  goldmark **GO-2026-5320** (XSS in the glamour markdown render path, trace
+  through `agent_view.go` renderBlock) and x/text **GO-2026-5970** (infinite
+  loop). Fixed by bumping the indirect deps to goldmark v1.7.17 and
+  golang.org/x/text v0.39.0 in their own commit; golden renders unchanged
+  after the bump. govulncheck now reports 0 affecting (7 in imported
+  packages + 3 in required modules remain, none reachable — non-blocking).
+- **Makefile.** New `VERSION ?= dev`; new targets `race`
+  (`go test -race -count=1 ./...`), `vuln` (`govulncheck ./...`),
+  `build-linux-amd64`/`build-linux-arm64` (`CGO_ENABLED=0 GOOS=linux GOARCH
+  <exact> go build -trimpath -ldflags "-s -w -X main.Version=$(VERSION)" -o
+  dist/selftui-linux-<arch>`), and `release-check` (runs
+  `scripts/release-check.sh`); smoke targets added to `.PHONY` (review fix).
+- **scripts/release-check.sh (new).** `set -euo pipefail`; requires
+  `VERSION` matching `^v[0-9]+\.[0-9]+\.[0-9]+$` and a clean worktree
+  (`git status --porcelain` empty; ignored `bin/`/`dist/` don't count), then:
+  go mod verify → gofmt check → go vet → `go test -count=1 ./...` → `go test
+  -race -count=1 ./...` → govulncheck → both Linux builds → per-binary
+  version-stamp check → deterministic archives → `dist/SHA256SUMS` (entries
+  `dist/`-prefixed so `sha256sum -c dist/SHA256SUMS` works from the root).
+  `dist/` is rebuilt fresh each run. **The script never creates or pushes a
+  git tag.** Two non-obvious engineering decisions, both verified: (1)
+  deterministic archives via `tar --sort=name --mtime=@0 --owner=0 --group=0
+  --numeric-owner` + `gzip -n` (two full gate runs produced byte-identical
+  SHA256SUMS); (2) the cross-arch (arm64-on-amd64) `-version` check cannot
+  exec without qemu/binfmt, and `go version -m` does not record `-ldflags`,
+  so the check falls back to the bytes the linker wrote — the exact version
+  as an isolated string plus the `selftui %s` format literal (Go packs
+  rodata without separators, so the format is a substring `-F` match).
+- **scripts/verify-binary-version.sh (new, review fix).** The exec-or-
+  embedded-string ladder was duplicated between release-check.sh step 8 and
+  release.yml; it now lives in one shared script both call.
+- **.github/workflows/ci.yml (new).** Triggers: pull_request + push to main.
+  Least privilege (`contents: read`, no secrets). Steps: go mod verify, make
+  fmt, make vet, make test, make race, govulncheck (pinned v1.7.0 install),
+  CGO-disabled Linux builds. Concurrency cancel-in-progress.
+- **.github/workflows/release.yml (new).** Triggers only on pushed `v*`
+  tags. `VERSION` = the tag. Runs the complete release gate
+  (`make release-check`), a dedicated step verifying the tag equals the
+  version stamped into both binaries (via the shared helper), generates
+  release notes from the CHANGELOG section for the version (tag or bare),
+  falling back to `[Unreleased]`, then to `gh release create --generate-
+  notes`; uploads the two `selftui-<version>-linux-<arch>.tar.gz` archives +
+  `SHA256SUMS`. Least privilege (`contents: write`, default GITHUB_TOKEN, no
+  secrets).
+- **.gitignore.** `/bin/` and `/dist/` were already ignored (verified with
+  `git check-ignore`); no change was needed.
+- **Docs.** README gained a "Release engineering (v0.1)" section (targets,
+  gate contract, artifacts, no-tag rule, Go/govulncheck pins, workflows);
+  CONTRIBUTING and CHANGELOG updated; a review nit (README overclaiming
+  ci.yml parity) and a CHANGELOG duplicate `### Added` heading were fixed in
+  a separate docs commit.
+
+**Code review (requested, complete `main..HEAD` diff).** Two parallel
+read-only reviewer lanes (standards + spec, fresh contexts):
+- Standards lane: **0 hard violations, 7 judgement calls** — the four
+  substantive ones were fixed in separate commits: duplicated version-check
+  ladder (extracted to `scripts/verify-binary-version.sh`), asymmetric
+  cross-arch fallback (now also requires the `selftui %s` format), govulncheck
+  probe after the expensive steps (moved up front), and the smoke `.PHONY`
+  omission. Supply-chain note on mutable action refs (@v4/@v5) left as-is
+  (no repo rule; documented).
+- Spec lane (Phase-8 brief as spec): all requirements present — the five
+  Makefile targets with the exact recipes, release-check step order +
+  invariants + no-tag guarantee, ci.yml trigger/check set + Go version in
+  workflow and README, release.yml v*-only trigger + tag-vs-version
+  verification + full gate + archive/SHA256SUMS upload + release notes +
+  least privilege/no secrets; `-trimpath` noted as an unasked-but-benign
+  addition (reproducibility). Verdict: **`V0_1_RELEASE_CANDIDATE_READY`**.
+- Both reviewers independently confirmed no local tag exists.
+
+**Commands + exit codes (all under Go 1.27.1; govulncheck v1.7.0)**
+- Pre-commit gates at the phase-8 commit: `git diff --check` → 0;
+  `make check` → 0; `make race` → 0; `make vuln` → 0 (0 affecting).
+- Full release gate before review: `VERSION=v0.1.0 make release-check` → 0
+  twice, with **byte-identical** `dist/SHA256SUMS` across runs
+  (reproducibility proven). One earlier run failed at the arm64 stamp check
+  (rc=1): `grep -Fxq` under `set -o pipefail` exits on first match and
+  SIGPIPEs `strings`, so the pipeline rc was 141 even on success — fixed by
+  reading the full stream (`grep -Fx … >/dev/null`); regression-tested
+  positive and negative.
+- Full release gate after the review fixes (final gate, clean tree at code
+  HEAD): `VERSION=v0.1.0 make release-check` → **0**; `git diff --check` → 0;
+  `make check` → 0; `make race` → 0; `make vuln` → 0;
+  `./dist/selftui-linux-amd64 -version` → `selftui v0.1.0` (rc 0);
+  `sha256sum -c dist/SHA256SUMS` → both OK (rc 0).
+- Helper checks: `scripts/verify-binary-version.sh dist/selftui-linux-{amd64,
+  arm64} v0.1.0` → ok (executed / embedded strings); negative test with
+  v9.9.9 → rc 1 as designed.
+- Artifacts at the final gate: `dist/selftui-linux-amd64`
+  `22bb92a6ea03ec3121d81f7fb579cb737fcb7a9ccefc3798a11d7426e3d1b092`,
+  `dist/selftui-linux-arm64`
+  `7766b6a19a6c6f8d4635f33b7524ec402bbd2eb1344f58e5a8594c1b58ccde86`,
+  `dist/selftui-v0.1.0-linux-amd64.tar.gz`
+  `c33c1c4829f538c8538a76eed6c8d7662d4d7114b5744fe2c3cbbec6d1ee3def`,
+  `dist/selftui-v0.1.0-linux-arm64.tar.gz`
+  `73510c83c78a9d50b35c4099833fa86ff592cb63db1aa634b3093b07192729ba`,
+  `dist/SHA256SUMS` (over the two archives).
+- Environmental note: two `internal/ui` cold-start runs failed before any
+  edit (settings-form tests stuck on "writing config…"), then passed 3/3 in
+  isolation and 2× full-suite — the documented localhost/timing flake
+  (phase-5 LEDGER note), not a code defect; all final-gate evidence is from
+  clean consecutive runs.
+
+**Decisions / lines to respect**
+- Pinned toolchain **Go 1.27.1** (current official stable, 2026-09-04) and
+  govulncheck **v1.7.0** govern CI + the release gate; the module floor stays
+  `go 1.25.8`.
+- `release-check` and both workflows **never tag**; `release.yml` only reacts
+  to a tag the owner pushes. No push/merge happened in this phase.
+- `-trimpath` and deterministic-archive flags are deliberate
+  reproducibility additions beyond the brief's literal recipes.
+- The cross-arch version check intentionally uses embedded-string evidence
+  (documented in the script header) because `go version -m` does not record
+  `-X`.
+- Mutable action refs (`actions/checkout@v4`, `setup-go@v5`) are an accepted
+  trade-off (no SHA pinning requirement documented); revisit if supply-chain
+  posture tightens.
+
+**Blockers / open decisions**
+- None. v0.1 tag + release notes remain the next owner step (fresh session);
+  when the owner tags `v0.1.0`, `release.yml` re-runs this exact gate and
+  uploads the artifacts + CHANGELOG-derived notes.
+
+**Next action**
+- Fresh session: owner pushes tag `v0.1.0` (after this gate is green at that
+  commit) and publishes the release; or the next owner-assigned step.
+
+### 2026-09-04 — v0.1 release-candidate audit fixes: portable goldens, whitespace carve-out, probe-tolerant fake hosts (owner task)
+**Milestone:** owner-assigned step on `hardening/v0.1` (follow-up to the read-only
+RC audit of the same branch) · **Result:** done — F1, F2, F3 fixed and verified;
+F4/F5 are environment-only (no repo defect, recorded below). No §10 milestone row
+to tick (owner-assigned step). **No tag was created or pushed.**
+
+**Work done**
+- **F1 (blocker): golden fixtures are now checkout-path independent.** The
+  fixtures byte-compare full shell renders whose status rows show the canonical
+  workspace; with the default empty `workspace_root` that label is the process
+  cwd, so the suite only passed from `/home/calvin/SelfTUI` — reproduced by
+  running `./internal/ui` from a `/tmp` copy (drift on every path-bearing
+  frame). Post-render cwd normalization alone was insufficient: status-row
+  layout depends on label *length*, so a different-length checkout reflows
+  padding before any token substitution. Fix: golden frames now build the App
+  through a new `goldenApp` helper with a fixed workspace root `/tmp` (exists on
+  every Linux/WSL host, passes config validation, stable length 4), and
+  `normalizeWorkspace` strips any accidental cwd text before store/compare as a
+  guard. 19 fixtures regenerated; the diff is workspace-label/padding only.
+- **F2 (minor): `git diff --check` is green again.** `internal/ui/testdata/golden/*.txt`
+  rows are padded to the full frame width, so trailing spaces are load-bearing
+  fixture content; a repo-root `.gitattributes` exempts exactly the
+  trailing-space checks for those files. Range check `main...HEAD` now exits 0
+  (was 2, 22 findings).
+- **F3 (environmental flake): fake-host HTTP helpers are probe-tolerant.** This
+  host's `moshi-hook` localhost port prober (reproduced live: a bare listener
+  on a fresh 127.0.0.1 port received `GET / HTTP/1.1` ~2 s after bind) made
+  strict fake hosts fail under `-race` intermittently (~1 in 3 full-suite runs;
+  observed on `TestAppRoutingPullCompletesAndReloads`, geometry, and chat
+  tests). Converted every handler-side mismatch error to a silent 404 across
+  `internal/ui` (`fakeShowServer`, `fakeDeleteServer`, `fakePullServer`,
+  `fakeOllamaUI`) and `internal/ollama` (List/Bearer/NoToken/Show/
+  HostTrailingSlash/Delete/Pull/chat servers). Genuine client mistakes still
+  fail through the client's own 404 error, and dedicated client-side
+  method/path assertions (e.g. `TestDeletePostsName`) are unchanged.
+- **F4/F5 (environment, no code change):** `govulncheck` was not on PATH —
+  installed the repo-pinned v1.7.0 out-of-repo (GOPATH) on go1.27.1 to run the
+  mandated gates. `gitleaks` is not installed → `SECRET_HISTORY_SCAN=UNRESOLVED`
+  (not installed, per audit instruction); a supplementary `git log --all -p`
+  scan over high-signal secret patterns found 0 matches.
+
+**Commands + exit codes**
+- `gofmt -l internal/ui internal/ollama` → empty `0`; `go vet ./internal/ui ./internal/ollama` `0`.
+- Golden regen `go test ./internal/ui -run TestGoldenRender -update` `0`; fixture diff reviewed (19 files, workspace-label/padding only).
+- `make test` `0` (uncached `./...` all ok); golden stability re-run `0`.
+- Portability proof: full `go test -count=1 ./...` (go1.27.1) from a fresh
+  `/tmp/selftui-verify.*` copy → all ok `0` (failed before the fix).
+- `go test -race -count=1 ./...` ×3 → `0` each (prober still running on the host;
+  previously ~1-in-3 full-suite runs flaked).
+- `git diff --check` (worktree) `0`; `git diff --check main...HEAD` `0`.
+- `make check` `0`; `make vuln` (govulncheck v1.7.0) `0` (0 reachable).
+- `VERSION=v0.1.0 make release-check` → gate runs on the clean commit (see below).
+
+**Decisions / lines to respect**
+- Golden frames pin layout for a fixed workspace root (`/tmp`), not the default
+  empty-root→cwd identity; the compact/wide presence of the label in some frames
+  shifted accordingly (shorter label fits more rows) — deterministic everywhere.
+- `.gitattributes` scopes the trailing-space exemption to
+  `internal/ui/testdata/golden/*.txt` only; all other whitespace checks stay on.
+- Silent-404 fake hosts keep real client bugs detectable via the client's own
+  error; positive client-side method/path assertions were preserved, not
+  weakened.
+
+**Blockers / open decisions**
+- None (code). `SECRET_HISTORY_SCAN=UNRESOLVED` until gitleaks is run on the
+  repo (owner decision — nothing installed automatically). GitHub CI has never
+  run on the remote (`gh run list` empty; only `main` is pushed); the first push
+  of `hardening/v0.1` will exercise `ci.yml` for the first time.
+
+**Next action**
+- Owner (fresh session): push `hardening/v0.1`, watch the first CI run go green,
+  then tag `v0.1.0` and publish — release.yml re-runs this gate at the tag.

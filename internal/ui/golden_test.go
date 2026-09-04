@@ -12,6 +12,14 @@ package ui
 // fail the compare; palette/theme drift is covered by the dedicated theme
 // tests below. Run with -count=1 (or after any source change) so a stale
 // test cache can never mask a fixture edit.
+//
+// Fixtures pin a fixed workspace root (goldenApp uses "/tmp") because the
+// shell renders the canonical workspace in its status rows: the row layout
+// depends on the label's length, so the root must be a constant absolute
+// path of stable length on every machine (never the checkout cwd).
+// normalizeWorkspace additionally strips any accidental cwd text before a
+// frame is stored or compared, so the fixtures can never pin the machine's
+// checkout path.
 
 import (
 	"encoding/json"
@@ -62,31 +70,45 @@ func sampleDetails() ollama.Details {
 	}
 }
 
+// goldenApp builds the App for one golden frame. It differs from newTestApp
+// only in the workspace root: the status rows render the canonical workspace
+// (empty workspace_root → the process cwd), and the row layout depends on the
+// label's length, so byte-exact frames must never render a machine-dependent
+// checkout path. "/tmp" exists everywhere v0.1 runs (Linux/WSL), passes
+// config validation when set, and has a stable length, keeping every frame
+// identical on any machine or CI runner. No frame reads or writes through it.
+func goldenApp(t *testing.T) App {
+	t.Helper()
+	cfg := config.Default()
+	cfg.WorkspaceRoot = "/tmp"
+	return New(&cfg, NewStyles(cfg.Theme), ollama.New(cfg.Host, cfg.AuthToken))
+}
+
 func bootApp(t *testing.T, w, h int) App {
 	t.Helper()
-	return updateTab(t, newTestApp(t), tea.WindowSizeMsg{Width: w, Height: h})
+	return updateTab(t, goldenApp(t), tea.WindowSizeMsg{Width: w, Height: h})
 }
 
 func buildModelsCompact(t *testing.T, w, h int) App {
 	m := bootApp(t, w, h)
-	return updateTab(t, m, modelsLoadedMsg{list: sampleModels()})
+	return updateTab(t, m, modelsEventMsg{msg: modelsLoadedMsg{list: sampleModels()}})
 }
 
 func buildModelsCompactInspect(t *testing.T, w, h int) App {
 	m := buildModelsCompact(t, w, h)
 	m = updateTab(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
-	return updateTab(t, m, modelsShowMsg{name: "qwen3:8b", details: sampleDetails()})
+	return updateTab(t, m, modelsEventMsg{msg: modelsShowMsg{name: "qwen3:8b", details: sampleDetails()}})
 }
 
 func buildModelsWideInspect(t *testing.T, w, h int) App {
 	m := buildModelsCompact(t, w, h)
-	return updateTab(t, m, modelsShowMsg{name: "qwen3:8b", details: sampleDetails()})
+	return updateTab(t, m, modelsEventMsg{msg: modelsShowMsg{name: "qwen3:8b", details: sampleDetails()}})
 }
 
 func buildAgent(t *testing.T, w, h int) App {
 	m := bootApp(t, w, h)
 	m = updateTab(t, m, tea.KeyPressMsg{Text: "2"})
-	return updateTab(t, m, agentModelsLoadedMsg{models: sampleModels()})
+	return updateTab(t, m, agentEventMsg{msg: agentModelsLoadedMsg{models: sampleModels()}})
 }
 
 // buildAgentTurn seeds one committed turn (user + assistant with a
@@ -221,13 +243,36 @@ func truncate(s string, n int) string {
 	return s[:n] + "…"
 }
 
+// workspaceToken is the deterministic placeholder golden fixtures use in
+// place of the test process's working directory. The shell renders the
+// canonical workspace — and with the default empty workspace_root that is
+// the process cwd (real path, symlinks resolved) — so a fixture that stored
+// the raw path byte-exactly would only pass when the suite runs from that
+// exact checkout location. normalizeWorkspace maps whatever cwd the suite
+// runs under to the same token, making fixtures portable (CI, a different
+// checkout, another machine) and regeneration churn-free on any machine.
+const workspaceToken = "<workspace>"
+
+func normalizeWorkspace(s string) string {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return s
+	}
+	s = strings.ReplaceAll(s, cwd, workspaceToken)
+	if real, err := filepath.EvalSymlinks(cwd); err == nil && real != cwd {
+		s = strings.ReplaceAll(s, real, workspaceToken)
+	}
+	return s
+}
+
 // TestGoldenRender compares each scenario's deterministic text against its
-// checked-in fixture; -update rewrites the fixtures.
+// checked-in fixture; -update rewrites the fixtures. The cwd is normalized
+// away (see normalizeWorkspace) on both the write and the compare.
 func TestGoldenRender(t *testing.T) {
 	dir := filepath.Join("testdata", "golden")
 	for _, f := range goldenFrames {
 		m := f.build(t, f.w, f.h)
-		got := stripANSI(strings.Join(viewRows(m), "\n"))
+		got := normalizeWorkspace(stripANSI(strings.Join(viewRows(m), "\n")))
 		path := filepath.Join(dir, f.name+".txt")
 		if *updateGolden {
 			if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -341,8 +386,7 @@ func TestApprovalOverlayFitsDevice(t *testing.T) {
 			}
 		}))
 		defer srv.Close()
-		cfg := config.Default()
-		v := NewAgentViewWithWorkspace(ollama.New(srv.URL, ""), NewStyles("dark"), "dark", "", root, cfg.Agent)
+		v := newAgentTools(t, ollama.New(srv.URL, ""), srv.URL, root)
 		v, _ = v.Update(tea.WindowSizeMsg{Width: w, Height: h})
 		v, _ = v.Update(agentModelsLoadedMsg{models: sampleModels()})
 		typeText(t, &v, "write big")
@@ -421,17 +465,17 @@ func TestLightThemeRendersEveryTab(t *testing.T) {
 		m = updateTab(t, m, tea.WindowSizeMsg{Width: f.w, Height: f.h})
 		switch f.name {
 		case "models-compact":
-			m = updateTab(t, m, modelsLoadedMsg{list: sampleModels()})
+			m = updateTab(t, m, modelsEventMsg{msg: modelsLoadedMsg{list: sampleModels()}})
 		case "models-compact-inspect":
-			m = updateTab(t, m, modelsLoadedMsg{list: sampleModels()})
+			m = updateTab(t, m, modelsEventMsg{msg: modelsLoadedMsg{list: sampleModels()}})
 			m = updateTab(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
-			m = updateTab(t, m, modelsShowMsg{name: "qwen3:8b", details: sampleDetails()})
+			m = updateTab(t, m, modelsEventMsg{msg: modelsShowMsg{name: "qwen3:8b", details: sampleDetails()}})
 		case "models-wide-inspect":
-			m = updateTab(t, m, modelsLoadedMsg{list: sampleModels()})
-			m = updateTab(t, m, modelsShowMsg{name: "qwen3:8b", details: sampleDetails()})
+			m = updateTab(t, m, modelsEventMsg{msg: modelsLoadedMsg{list: sampleModels()}})
+			m = updateTab(t, m, modelsEventMsg{msg: modelsShowMsg{name: "qwen3:8b", details: sampleDetails()}})
 		case "agent-compact", "agent-wide":
 			m = updateTab(t, m, tea.KeyPressMsg{Text: "2"})
-			m = updateTab(t, m, agentModelsLoadedMsg{models: sampleModels()})
+			m = updateTab(t, m, agentEventMsg{msg: agentModelsLoadedMsg{models: sampleModels()}})
 		case "settings-compact", "settings-wide":
 			m = updateTab(t, m, tea.KeyPressMsg{Text: "3"})
 		}

@@ -1,8 +1,25 @@
-# run_command containment design (M0a Spike 2)
+# run_command containment design — DEFERRED (not shipped in v0.1)
 
-**Status:** implemented in M3b. The containment controls landed inline with
-`run_command` (per `COUNCIL-MEMO.md` finding C). **Drives the M0a go/no-go item
-"command containment".**
+**Status: historical deferred-design record (2026-09-03, v0.1 hardening) —
+retained for reference; not current product behavior.**
+
+The executor described on this page is **not shipped in v0.1**. Per the public
+v0.1 security decision, SelfTUI exposes no command execution: `run_command` was
+removed from the tool schema, its dispatch case and executor were deleted from
+`internal/agent`, and the command-output UI path was dropped. The v0.1 tool
+surface is project-aware `read_file`/`list_dir`/`grep` plus confirmed
+`write_file`/`edit_file` only.
+
+**Why it is deferred:** a workspace `cwd` jail plus argv filtering is **not an
+OS sandbox**. A constrained executor still cannot stop a command from reading
+credentials, hitting the network, writing absolute paths, spawning children
+that outlive it, or escaping through its own bugs. Reintroducing command
+execution in a future release requires a real OS/container sandbox first.
+
+This page preserves the design that was built and evaluated during M0a–M3b, as
+the reference for that future work. It is a record, not a current capability.
+
+---
 
 ## Threat model (what containment must assume)
 
@@ -15,90 +32,65 @@ do not stop a command from:
 - spawning children that outlive the parent (daemonization);
 - escaping via a shell or interpreter (sh, python, perl, node …).
 
-Therefore **v1 `run_command` is a constrained executor, not a shell**:
+Therefore the (deferred) `run_command` was designed as a **constrained executor,
+not a shell**:
 
 > **argv allowlist · no shell or interpreter · scrubbed env · resource + output
 > limits · process-group kill · per-call confirmation · cwd jail · timeout ·
-> cancellation.** General shell stays disabled by default and is out of scope for
-> v1 (a real OS/container sandbox would be required first).
+> cancellation.** General shell stays disabled by default and is out of scope
+> (a real OS/container sandbox would be required first).
 
-## Design
+## Design (recorded for future reference)
 
 ### 1. Command model (what the model may request)
 
 `run_command` takes a **fixed argv** from the agent (not a command string), e.g.
 `["go", "test", "./..."]`. The runner:
 
-1. **Rejects** argv containing any of: `sh`, `bash`, `zsh`, `dash`, `python*`,
-   `perl`, `ruby`, `node*`, `deno`, `env`, `sudo`, `su`, `nohup`, `setsid`, or any
-   argv element with shell metacharacters — at the *element* level (see below), so
-   `run_command ["sh", "-c", "…"]` and `run_command ["echo", "x; rm -rf /"]` both
-   fail with a readable reason. This is the "no shell/interpreter" rule.
-2. **Allowlists** the executable: `internal/agent/command.go` permits only
-   `go` (`test`, `vet`, `build`, `list`, `env`, `version`) and read-only `git`
+1. **Rejects** argv containing shells/interpreters or shell metacharacters at the
+   *element* level.
+2. **Allowlists** the executable: `internal/agent/command.go` permitted only `go`
+   (`test`, `vet`, `build`, `list`, `env`, `version`) and read-only `git`
    (`status`, `diff`, `log`, `show`, `branch`, `rev-parse`, `ls-files`, `grep`).
-   `make`, `rg`, shells, interpreters, config injection, absolute paths, and
-   `..` escapes are rejected. Anything else is surfaced to the model before a
-   confirmation is shown.
-3. **Scrubs the environment**: passes only a fixed allowlist (e.g.
-   `PATH`, `HOME`→jail, `TMPDIR`→jail, `GOCACHE`→jail, `GOPATH`→jail, `TERM`,
-   `LANG`). Everything else (tokens, `OLLAMA_*`, `SSH_*`, `AWS_*`…) is stripped.
-   Variables whose secrets the tool needs (Ollama auth) stay in the agent process,
-   never the child.
+3. **Scrubs the environment**: a fixed allowlist only (`PATH`,
+   `HOME`/`TMPDIR`/`GOCACHE`/`GOPATH` jailed under the workspace, `TERM`, `LANG`);
+   tokens and `OLLAMA_*`/`SSH_*`/`AWS_*` secrets never reach the child.
 
 ### 2. Limits (hard, enforced by the runner, not the model)
 
 | Limit | Default | Mechanism |
 |-------|---------|-----------|
-| timeout | 30 s (configurable, capped) | `context.WithTimeout` + SIGKILL after grace |
+| timeout | 30 s (configurable, capped at 60 s) | `context.WithTimeout` + SIGKILL after grace |
 | output cap | 256 KB stdout + 256 KB stderr | bounded buffers; truncate with a marker line |
-| concurrency | 1 (serialized with other Ollama jobs) | single-flight mutex (plan risk #5) |
+| concurrency | 1 (serialized with other Ollama jobs) | single-flight mutex |
 | iterations | max tool loop 12 (global) | runner state machine |
 | cwd | `workspace_root` (jail) | resolved symlinks, `..` escape rejected before exec |
 
 ### 3. Lifecycle (process-group kill + cancellation)
 
-- The child starts in a **new process group** (`Setpgid`), so kill can target the
-  whole tree (`kill(-pid)`) — a child cannot orphan grandchildren.
+- Child starts in a **new process group** (`Setpgid`), so kill targets the whole
+  tree (`kill(-pid)`).
 - **Timeout** → `SIGTERM` to the group, 2 s grace, then `SIGKILL`.
-- **User cancel** (Esc / ctrl+c in the confirm UI, or app quit) uses the same
-  group-kill path via the shared root context (`tea.WithContext`).
-- **Streaming**: stdout/stderr are read incrementally into the bounded buffers and
-  emitted as `ToolResultMsg` chunks + a live status line; nothing waits for EOF
-  before the UI reacts.
+- **User cancel** uses the same group-kill path via the shared root context.
+- **Streaming**: stdout/stderr read incrementally into bounded buffers and
+  emitted to the UI (the removed `ToolOutputMsg` path).
 
-### 4. Confirmation (per-call, irreversible-operations-only)
+### 4. Confirmation (per-call)
 
-- **Read-only commands** (the M3a allowlist) run with a start-line notice but no
-  prompt.
-- **Every `run_command` call** requires an explicit in-TUI confirmation showing
-  the resolved argv, jail root, and timeout. File writes and exact edits use the
-  same per-call dialog. Default = **no**; there is no confirm-everything toggle.
-- The confirmation UI and the allowlist **ship in the same change as the tool**
-  (M3b), never later.
+Every `run_command` call required an explicit in-TUI confirmation showing the
+resolved argv, jail root, and timeout; default = **no**. Confirmation stays for
+the mutation tools that did ship (`write_file`, `edit_file`).
 
-### 5. Test plan (lands with M3b)
+## Resolved owner decisions (historic)
 
-1. argv rejection table: shell/interpreter binaries, metachars, absolute paths, `..`
-   escapes, empty/oversized argv — table-driven unit tests.
-2. env scrub: child sees only the allowlist (spawn `env` via the allowlist in tests).
-3. output cap: flood 1 MB → exactly cap + truncation marker (can be ~256 KB).
-4. timeout & group-kill: start `sleep 100` via the allowlist? (sleep isn't allowed —
-   use `go test` with a slow test or a test double) → TIMEOUT path kills the group;
-   assert no orphan process remains (`pgrep` in test).
-5. cancellation: cancel mid-run → same group-kill evidence.
-6. serialization: second command while first runs → queues, not interleave.
-7. confirmation: refusals by default; ack only after explicit confirm (UI test).
+- v1 (as designed) permitted the bounded `go` and read-only `git` subcommand sets;
+  `make`, `rg`, and all git mutations waited for a later decision.
+- Limits were fixed (30 s default, 60 s maximum; 256 KiB per stream) rather than
+  config-overridable trust levels.
 
-## Resolved owner decisions
+## Superseded by the v0.1 security decision
 
-- v1 permits the bounded `go` and read-only `git` subcommand sets above; `make`,
-  `rg`, and all git mutations wait for a later decision.
-- Limits are fixed in v1 (30s default, 60s maximum; 256 KiB per stdout/stderr)
-  rather than config-overridable trust levels.
-
-## Gate bearing
-
-Design satisfies the gate's "command containment" item: a constrained executor with
-no shell/interpreter, scrub/limits/kill/cancel/confirm, each control inline at M3b.
-**Verdict-eligible.** Anything looser (general shell) is explicitly out of v1.
+**2026-09-03:** the owner decided public v0.1 must not expose or retain
+`run_command`; the code was removed rather than shipped behind the guardrails
+above, because the guardrails are not an OS sandbox. Removal commit message:
+`security: remove command execution from v0.1`.

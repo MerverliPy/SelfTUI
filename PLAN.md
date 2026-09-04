@@ -6,7 +6,20 @@
 > identically on PC (native terminal) and iPhone 16 Pro (SSH into the host, responsive to
 > narrow screens).
 
-> **Status: PLANNING.** No implementation code yet.
+> **Status (2026-09-04):** v0.1 release hardening on `hardening/v0.1`.
+>
+> **Release-hardening correction (2026-09-04, owner task — phase 7 of the v0.1
+> hardening plan).** The public **v0.1 product contract** is: a **single-process
+> Linux/WSL TUI for Ollama** (native Windows/macOS not supported); **chat is
+> in-memory per process** — the per-process Markdown transcript under the XDG
+> state dir survives exit as an append-only export but **cannot be resumed**
+> (no reload/import path in v0.1); **workspace tools are off by default** and
+> require an explicitly trusted project workspace root; **command execution is
+> not shipped**; a bearer token on a **non-loopback host requires `https://`**.
+> Planning-era prose above and milestone rows below predate this note: they
+> are **historical records**, and where they conflict with this contract the
+> contract wins. See `CHANGELOG.md` (Unreleased) and the dated phase-7
+> `LEDGER.md` entry.
 
 ---
 
@@ -37,8 +50,8 @@
   so remote hosts (needed for iPhone-only workflows) are supported.
 - **Markdown rendering:** `glamour` for GitHub-flavored markdown with syntax-highlighted
   code blocks in agent/chat output.
-- **Repository:** standalone git repo at `/home/calvin/SelfTUI`; `/TUI` gitignored by the
-  parent dotfiles repo so the code never pollutes it.
+- **Repository:** standalone git repo (created 2026-09-03; rename/setup record
+  in LEDGER). It lives outside the dotfiles tree, so the code never pollutes it.
 
 ---
 
@@ -61,7 +74,7 @@
           │  ┌──────────────┐   ┌──────────────────────────┐  │
           │  │ Ollama client │   │ Agent runner (tool loop)│  │
           │  │  /api/tags,   │   │  chat + tool_calls +    │  │
-          │  │  pull stream, │   │  run_command/read/write │  │
+          │  │  pull stream, │   │  read/grep/write/edit    │  │
           │  │  delete, show │   │                          │  │
           │  └──────────────┘   └──────────────────────────┘  │
           └───────────────────────────────┬────────────────────┘
@@ -112,7 +125,6 @@ TUI/
 │   │   ├── runner.go             # the async tool-loop state machine
 │   │   ├── tools.go              # tool definitions (schema for Ollama)
 │   │   ├── exec.go               # read_file / write_file / edit_file / list_dir / grep
-│   │   ├── command.go            # run_command with streaming + timeout + cwd sandbox
 │   │   ├── context.go            # context window budgeting / truncation
 │   │   └── runner_test.go
 │   └── ui/
@@ -146,7 +158,9 @@ Resolved in priority order: **flags > env vars > config file (`~/.config/selftui
 | `agent.top_p` | `0.9` | nucleus sampling |
 | `agent.num_ctx` | `4096` | context window |
 | `agent.system_prompt` | built-in default | agent persona/system instructions |
+| `agent.max_tool_iterations` | `12` | upper bound on tool calls per run |
 | `agent.workspace_root` | cwd at launch | project root the agent operates on |
+| `tools_enabled` | `false` | **Phase 4 (workspace tool trust):** arms the jailed workspace tools. Off = plain chat (the Ollama request carries no tools). Enabling requires `workspace_root` to be a real project directory — empty, `/` or the user's home directory is rejected. Sources: config file, `SELFTUI_TOOLS_ENABLED` (strconv.ParseBool), Settings → Agent → *Enable workspace tools*. |
 
 ### Ollama client (`internal/ollama`)
 Thin typed wrapper over the REST API:
@@ -164,6 +178,18 @@ Thin typed wrapper over the REST API:
   presence is NOT a pull-completion signal; trust the stream's `success` line.
 - Pulls can run minutes: they use a client **without the 30s request timeout**
   (caller context = deadline); list/show/delete stay on the 30s client.
+- **Streams are bounded (Phase 5, hardening):** chat and pull decode through
+  the shared NDJSON reader (`internal/ollama/stream.go`) that caps one event
+  at 4 MiB on the wire (`stream event exceeds 4194304 bytes`) and aborts a
+  body silent for the 90s idle window (`stream idle timeout`). The timeout is
+  idle-only — there is deliberately **no total request deadline**, so pulls
+  keep running for minutes while progress lines keep arriving, and caller
+  cancellation always wins over the idle watchdog. Chat additionally caps
+  cumulative content+thinking at 16 MiB (`chat stream exceeds 16777216
+  bytes`); EOF before a terminal `done`/`success` event stays an error. The
+  idle window defaults to 90s per client and is injectable in tests
+  (`Client.streamIdle`); public `Client`/`Chat`/`ChatStream`/`Pull`
+  signatures are unchanged.
 
 ### Model list item
 ```go
@@ -198,8 +224,10 @@ background goroutine. No external agent framework.
 ### Tool loop (state machine in `internal/agent/runner.go`)
 ```
 start
+ ├─ 0. Tools disabled (no ToolPolicy / NewRunner): plain chat only — the
+ │     request carries no tools field and nothing can execute.
  ├─ 1. Build messages = system_prompt + conversation + tool results
- ├─ 2. POST /api/chat with { model, messages, tools, stream }
+ ├─ 2. POST /api/chat with { model, messages, tools, stream }  (armed runner)
  ├─ 3. Model responds:
  │     • finish_reason = "stop", content only → complete, emit final message
  │     • tool_calls present (native OR content-embedded) → validate → execute → append result → loop to 1
@@ -210,22 +238,41 @@ start
 ### Execution of tool calls (everything async, in goroutine, blocking-safe ops)
 | Tool | Signature | Notes |
 |------|-----------|-------|
-| `read_file` | path | assessor-resolved within workspace root |
-| `write_file` | path, content | atomic write, no overwrite unless `overwrite:true` |
-| `edit_file` | path, old, new | exact-match replace, verify applied |
-| `list_dir` | path | shallow dir listing |
-| `grep` | pattern, path | rg-backed over project |
-| `run_command` | argv, timeout | **v1: argv allowlist, no shell/interpreter**; scrubbed env, resource/output limits, process-group kill, per-call confirmation. General shell = labeled dangerous opt-in behind a real OS/container sandbox; otherwise disabled. Streaming stdout/stderr; cancellation. |
+| `read_file` | path | assessor-resolved within workspace root; policy-gated |
+| `write_file` | path, content | atomic write, no overwrite unless `overwrite:true`; policy-gated before confirmation |
+| `edit_file` | path, old, new | exact-match replace, verify applied; policy-gated before confirmation |
+| `list_dir` | path | shallow dir listing; policy-gated |
+| `grep` | pattern, path | rg-backed over project; policy-gated |
+| ~~`run_command`~~ | ~~argv, timeout~~ | **Deferred — not shipped in v0.1 (2026-09-03).** The executor, its schema, and its dispatch case were removed from the public release; no command execution ships. See `docs/run-command-containment.md`. A future release would need a real OS/container sandbox, since cwd + argv filtering is not one. |
 
 ### Safety rules
+- **Workspace tools are opt-in (Phase 4).** `NewRunner` (the compatibility
+  constructor) sends no tool definitions and behaves as plain chat;
+  production arms the tools through `NewRunnerWithPolicy` with a
+  `ToolPolicy`, driven by `config.ToolsEnabled` (default `false`).
 - All file access **jailed to `workspace_root`** (resolve symlinks, reject `..` escapes).
+- **Sensitive-path policy (`ToolPolicy.AuthorizePath`), applied before every
+  tool executes on top of containment (Phase 4):** a requested path
+  containing a component named `.ssh`, `.gnupg`, `.aws`, `.azure`, `.kube`,
+  or the `.config/gcloud` composite, or whose basename is `.env`/`.env.*`
+  (except `.env.example`), `credentials`, or `credentials.json` is refused
+  outright — credential trees are never worth touching even when they
+  resolve inside the workspace.
+- Enabling tools with `workspace_root` empty, `/`, or the user's home
+  directory is rejected at config validation: a model with file tools must
+  not be pointed at the whole filesystem or at the directory adjacent to
+  the user's credentials.
+- The UI shows the canonical workspace and `tools off`/`tools on` in the
+  status bar and Agent statusline; tools enabled against a non-loopback
+  host shows a persistent warning that workspace content may be sent to
+  that host. No onboarding wizard in v0.1.
 - **These are guardrails, not a sandbox.** A workspace cwd + timeout + denylist do *not* stop a
   command from reading credentials, hitting the network, writing absolute paths, spawning
   children, or escaping via interpreters. Per council audit (finding A): v1 `run_command` is
   an **argv allowlist with no shell/interpreter**, scrubbed env, resource + output limits,
-  process-group kill, cancellation, and per-call confirmation. If real isolation is
-  unavailable, `run_command` is **disabled by default / dropped**. Cwd confinement alone is
-  insufficient.
+  process-group kill, cancellation, and per-call confirmation. **Resolved for v0.1
+  (2026-09-03): `run_command` is dropped — no command execution ships**, since cwd + argv
+  filtering is not an OS sandbox; the design is deferred in `docs/run-command-containment.md`.
 - The safety controls for each tool ship **inline with that tool** in its milestone (not
   deferred to a final hardening milestone).
 - Max tool iterations and max tokens bound each run.
@@ -242,6 +289,17 @@ The runner emits an ordered stream of `tea.Msg`s:
 - `ToolResultMsg{ ok, summary }` — show result (truncated) inline
 - `AgentDoneMsg{ err }` — finalize
 The UI just reacts to messages; it never runs the loop.
+
+> **Phase 6 (2026-09-04): every async child result crosses the App shell in
+> one envelope per child.** All asynchronous results — the Agent's model-list
+> fetches and every chat activity-channel event, and the Models tab's
+> list/show/delete/pull results plus its dialog spinner ticks — are produced
+> wrapped in `agentEventMsg`/`modelsEventMsg` (payload `tea.Msg`).
+> `App.Update` has exactly one case per child (unwrap + delegate), so a newly
+> added async result can never be dropped at the shell again (the
+> 2026-09-06 `ToolConfirmMsg` routing bug). Root-owned messages
+> (`settingsThemeMsg`, `agentThemeMsg`, `settingsSaveDoneMsg`, `WindowSizeMsg`,
+> `KeyMsg`) stay root messages.
 
 ---
 
@@ -307,8 +365,8 @@ Re-cut per `COUNCIL-MEMO.md`. Principle: **each milestone is a ship gate**, safe
 controls ship inline with the tool that exposes them, and the **agent scope is gated on
 an evidence spike — model management + plain chat are not.**
 
-**M0 — Repo + skeleton + minimal config.** ✅ *done 2026-09-03 — see LEDGER* standalone git repo at `/home/calvin/SelfTUI`
-(dotfiles ignores it by default, so no `.gitignore` step needed there); `go.mod`, Charm
+**M0 — Repo + skeleton + minimal config.** ✅ *done 2026-09-03 — see LEDGER*
+standalone git repo (setup record in LEDGER 2026-09-03); `go.mod`, Charm
 dependency set pinned; root model + tab/status bar;
 config load; **responsive shell + breakpoint system at measured sizes** (not an assumed
 88-col); cancellation plumbing. ✅ *Exit: app boots, tabs work, clean build, Charm set compiles.*
@@ -348,7 +406,16 @@ mutation surfaced.**
 `go` and read-only `git` argv (no shell/interpreters), scrubbed environment, 30s
 default/60s cap, 256 KiB per stream, process-group cancellation, serialization,
 context budgeting, and focused UI/executor tests. ✅ *Exit: agent writes/edits files
-and runs allowed commands, all gated + tested.*
+and runs allowed commands, all gated + tested.* *(Historical milestone record:
+`run_command` — including the read-only `git` argv — was removed from v0.1 on
+2026-09-03; see the removal note below and the product contract at the top.)*
+
+> **2026-09-03 — v0.1 hardening: command execution removed.** Public v0.1 does not
+> expose or retain `run_command`. The executor, its tool schema, and its dispatch case
+> were deleted; `ToolOutputMsg` and the command-only UI routing went with them. v0.1
+> ships project-aware `read_file`/`list_dir`/`grep` plus confirmed `write_file`/
+> `edit_file` only. cwd + argv filtering is not an OS sandbox — see
+> `docs/run-command-containment.md`, now a dated deferred-design record.
 
 **M4 — Settings & persistence.** ✅ *done 2026-09-06:* huh (v2-aligned `charm.land/huh/v2 v2.0.3`) forms over the full config surface in four sections (Connection / Model defaults / Theme / Agent), two-column on wide screens (LayoutColumns), single-column pages otherwise; field validation (http(s) host, numeric ranges); esc-discard = nothing written (revert); submit writes the config file off-loop (`config.Save`, 0600 perms) and live-applies in-session — theme swap restyles the whole shell, host/token rebuild the Ollama client and reload both model lists, and agent params/default model/workspace/system prompt apply to the next agent run; Theme select previews live while arrowing (rolls back on discard). New flags/env for every config key. **Exit: settings persist & revert.**
 
@@ -383,6 +450,8 @@ in the Agent chat input switched tabs mid-prompt** — fixed: digits jump only
 from Models / an empty chat input (regression test). Dead `compactToolResult`
 helper removed. `selftui -version` prints `0.6.0-m6` and is logged at startup.
 `make check` + `go test -race` green; README ships the reconnect guidance.
+*(Historical record: that version string is what the M6 build printed; current
+builds default `Version` to `dev` — see the 2026-09-04 product-contract note.)*
 *(Hardening was pushed inline into each tool's milestone, so M6 is acceptance, not the
 first safety gate.)*
 
@@ -437,7 +506,10 @@ files under `$XDG_STATE_HOME/selftui/sessions/chat-<ts>-<pid>.md` (0600),
 conversation survives exit and is inspectable (the owner asked for this so
 past chats are recoverable). New `/save` slash command flushes + reveals the
 path; `SELFTUI_SESSION_DIR` overrides the dir, `SELFTUI_NO_SESSION=1`
-disables; errors disable once with one notice. Slash menu grew to six
+disables; errors disable once with one notice. *(Historical record: the
+`/save` command was renamed `/export` in the 2026-09-04 release-hardening
+pass; the transcript remains an append-only export that cannot be resumed.)*
+Slash menu grew to six
 commands (menu cap 6). Goldens 19 frames; `make check` + `go test -race`
 green. *Still next: v0.1 (tag + release notes).*
 
@@ -447,7 +519,7 @@ green. *Still next: v0.1 (tag + release notes).*
 
 | # | Item | Notes / needed decision |
 |---|------|--------------------------|
-| 1 | **Git ownership** ✅ *decided + set up* | Standalone repo at `/home/calvin/SelfTUI`; `git init` done (dotfiles `.gitignore` uses `*` default-ignore, so no extra step was needed). |
+| 1 | **Git ownership** ✅ *decided + set up* | Standalone repo; `git init` done (setup record in LEDGER 2026-09-03). |
 | 2 | **Markdown rendering** ✅ *decided* | Use `glamour` for GitHub-flavored markdown. |
 | 3 | **Agent tool breadth** | "Full coding agent" is large. v1 tool set is bounded by the read-only (M3a) then mutation (M3b) split. Confirm whether git-awareness/project-indexing/multi-file apply belong in v1 or later. |
 | 4 | **Coding model + dispatch** | *OD3 resolved:* default agent model = **`qwen3:8b`** (native tool PASS). Dual dispatch (native `tool_calls` + content-embedded tool-JSON) stays required for pick-any-model (`qwen2.5-coder` content-JSON; `gemma3` → 400 → explicit non-agent fallback). Agent loop must handle qwen3 `thinking` phase. |
@@ -487,7 +559,22 @@ right side when the opencode-composer follow-up landed (see §10 M7 note),
 pgup/pgdn + `f` follow (B), context meter
 + filter-as-you-type model picker with the default starred (C); `make check`
 and `go test -race` green, 10 new golden frames (17 total) at 72×30/120×40.
-Next: **v0.1 release** (tag `v0.1.0` + release notes) in a fresh session.
+**v0.1 hardening phases 1–7 landed 2026-09-03/04** on `hardening/v0.1`
+(root cancellation, command execution removed, config validated + atomically
+saved, explicit workspace tool trust, bounded streams, enveloped UI events,
+product-contract docs) — see LEDGER for each dated phase entry.
+**Phase 8 — reproducible CI + release gates landed 2026-09-04**: Makefile
+targets (`race`, `vuln`, `release-check`, `build-linux-amd64`/
+`build-linux-arm64` with `CGO_ENABLED=0`/`GOOS=linux`/`-X main.Version`),
+`scripts/release-check.sh` (full gate, never tags) + shared
+`scripts/verify-binary-version.sh`, `.github/workflows/ci.yml` + `release.yml`
+(pinned Go 1.27.1, govulncheck v1.7.0), and dependency bumps closing two
+reachable advisories (goldmark v1.7.17 GO-2026-5320, x/text v0.39.0
+GO-2026-5970). Two code-review lanes: 0 hard violations, findings fixed in
+the separate commits listed in the LEDGER phase-8 entry; spec verdict
+`V0_1_RELEASE_CANDIDATE_READY`.
+Next: **v0.1 release** (tag `v0.1.0` + release notes) in a fresh session; do
+not tag in a hardening phase.
 
 ---
 
