@@ -750,12 +750,18 @@ func (v ModelsView) targetSize(name string) string {
 // --- view -----------------------------------------------------------------
 
 // View renders list + inspect per the breakpoint layout. A modal state
-// (confirm / input / pull) replaces the whole body with a centered dialog.
+// (confirm / input / pull / deleting) replaces the whole body with a
+// centered dialog.
 func (v ModelsView) View() string {
 	layout := ForModels(v.w)
 	bodyH := v.h - 2 // tab bar + status bar
 
 	switch {
+	case v.deleting:
+		// M-07: the in-flight delete keeps its own busy overlay from approval
+		// until the DELETE completes; without this branch the view fell back
+		// to the interactive list while keys were ignored (a frozen look).
+		return v.renderOverlay(bodyH, "Deleting "+v.deleteTarget, v.deleteProgressLines())
 	case v.confirmDelete:
 		return v.renderOverlay(bodyH, "Delete model", v.confirmLines())
 	case v.inputMode:
@@ -906,9 +912,6 @@ func (v ModelsView) renderOverlay(bodyH int, title string, lines []string) strin
 
 // confirmLines builds the delete-confirm dialog body.
 func (v ModelsView) confirmLines() []string {
-	if v.deleting {
-		return []string{v.spinner.View() + " deleting " + v.deleteTarget + "…"}
-	}
 	lines := []string{"Delete " + v.deleteTarget + "?"}
 	if sz := v.targetSize(v.deleteTarget); sz != "" {
 		lines = append(lines, "size "+sz)
@@ -918,6 +921,13 @@ func (v ModelsView) confirmLines() []string {
 		lines = append(lines, "", v.styles.Error.Render("⚠ "+v.deleteErr))
 	}
 	return lines
+}
+
+// deleteProgressLines builds the in-flight delete dialog body (M-07): the
+// spinner plus the model being removed. Esc deliberately does not cancel —
+// the DELETE HTTP round-trip is not safely interruptible.
+func (v ModelsView) deleteProgressLines() []string {
+	return []string{v.spinner.View() + " deleting " + v.deleteTarget + "…"}
 }
 
 // inputLines builds the pull name-entry dialog body.

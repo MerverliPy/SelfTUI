@@ -541,6 +541,30 @@ func TestModelsViewDeleteConfirmFlow(t *testing.T) {
 		t.Fatal("y: expected delete command")
 	}
 
+	// M-07: from approval until the DELETE completes, the busy overlay must
+	// render — deleting title/spinner with the exact target — and the
+	// interactive list must not appear as the active body (the audit's gap:
+	// View() had no deleting branch, so the frame fell back to the list).
+	out = stripANSI(v.View())
+	for _, want := range []string{"Deleting qwen3:8b", "deleting qwen3:8b…"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("deleting overlay missing %q:\n%s", want, out)
+		}
+	}
+	if !strings.Contains(out, stripANSI(v.spinner.View())) {
+		t.Errorf("deleting overlay missing the spinner frame:\n%s", out)
+	}
+	if strings.Contains(out, "gemma3:12b") {
+		t.Errorf("interactive model list visible while deleting:\n%s", out)
+	}
+	// The busy state ignores keys: list navigation neither moves nor dismisses it.
+	idx := v.list.Index()
+	v, _ = v.Update(tea.KeyPressMsg{Text: "j"})
+	if v.list.Index() != idx || !v.deleting {
+		t.Errorf("keys acted on the list while deleting (idx %d → %d, deleting=%v)",
+			idx, v.list.Index(), v.deleting)
+	}
+
 	// The command performs the DELETE and posts the result (batched with the
 	// dialog spinner tick, which the tea runtime unwraps — so does the test).
 	dm, ok := deleteResultFromCmd(cmd)
@@ -560,6 +584,54 @@ func TestModelsViewDeleteConfirmFlow(t *testing.T) {
 	}
 	if cmd == nil {
 		t.Fatal("expected reload command after delete")
+	}
+}
+
+// TestModelsViewDeleteBusyOverlayFitsGeometries renders the in-flight delete
+// overlay at both canonical terminal geometries and asserts the busy frame is
+// bounded — exactly bodyH rows, no row wider than the terminal — while showing
+// the deleting title/spinner with the target model and hiding the list body.
+func TestModelsViewDeleteBusyOverlayFitsGeometries(t *testing.T) {
+	for _, geom := range [][2]int{{72, 30}, {120, 40}} {
+		w, h := geom[0], geom[1]
+		v := testModels(t, nil)
+		v, _ = v.Update(tea.WindowSizeMsg{Width: w, Height: h})
+		v, _ = v.Update(modelsLoadedMsg{list: sampleModels()})
+		v, cmd := v.Update(tea.KeyPressMsg{Text: "x"})
+		if cmd != nil {
+			t.Errorf("%dx%d: x returned a command", w, h)
+		}
+		v, cmd = v.Update(tea.KeyPressMsg{Text: "y"})
+		if !v.deleting || v.deleteTarget != "qwen3:8b" {
+			t.Fatalf("%dx%d: after y deleting=%v target=%q", w, h, v.deleting, v.deleteTarget)
+		}
+		if cmd == nil {
+			t.Fatalf("%dx%d: y returned no delete command", w, h)
+		}
+
+		out := stripANSI(v.View())
+		rows := frameRows(out)
+		if len(rows) != h-2 {
+			t.Errorf("%dx%d: deleting overlay body is %d rows, want exactly %d (body height)",
+				w, h, len(rows), h-2)
+		}
+		for i, r := range rows {
+			if lw := lipgloss.Width(r); lw > w {
+				t.Errorf("%dx%d: deleting overlay row %d is %d columns wide (terminal %d): %q",
+					w, h, i+1, lw, w, truncate(r, 48))
+			}
+		}
+		for _, want := range []string{"Deleting qwen3:8b", "deleting qwen3:8b…"} {
+			if !strings.Contains(out, want) {
+				t.Errorf("%dx%d: busy overlay missing %q:\n%s", w, h, want, out)
+			}
+		}
+		if !strings.Contains(out, stripANSI(v.spinner.View())) {
+			t.Errorf("%dx%d: busy overlay missing the spinner frame:\n%s", w, h, out)
+		}
+		if strings.Contains(out, "gemma3:12b") {
+			t.Errorf("%dx%d: interactive model list visible under the busy overlay:\n%s", w, h, out)
+		}
 	}
 }
 
