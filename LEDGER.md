@@ -2539,3 +2539,80 @@ branch `fix/v0.1.1-audit-remediation`, worktree clean, all gates exit 0. Code co
 - Fresh Pi session: runbook **Task 06 (H-05 — sanitize untrusted terminal control sequences)**:
   confirm branch `fix/v0.1.1-audit-remediation` + clean status, then follow the Task-06 block. Do not
   run `make smoke` until the owner runs it on a disposable model/tag or an isolated Ollama store.
+### 2026-09-05 — Runbook Task 06: H-05 terminal control-sequence sanitization — single pre-style boundary over every remote-derived render path
+**Milestone:** `SelfTUI-Pi-Audit-Remediation-Runbook-2026-09-04.md` Task 06 (H-05 — sanitize untrusted
+terminal control sequences). No §10 row to tick (runbook-owned step). **Result:** done — H-05
+REPRODUCED (all 11 render-level regressions failed pre-fix) then fixed with red-green TDD on branch
+`fix/v0.1.1-audit-remediation`; worktree clean, all gates exit 0. Code commit:
+`fix(ui): sanitize untrusted terminal control sequences` (2 new files + 2 modified + go.mod),
+docs commit follows this entry.
+
+**Reproduction (runtime-verified, not static)**
+- **Probe first** (throwaway `scratchprobe/`, deleted before commit): with `charm.land/glamour/v2`
+  v2.0.0, a hostile markdown body renders with its ESC bytes **embedded inside glamour's own styled
+  output** — OSC 52 `ESC ]52;c;evil BEL` survived as `…\x1b[m\x1b]52;c;evil\a…`, DCS `ESC P…ESC \`
+  survived intact (enters sixel/DCS mode mid-frame), and `a\rb` came through as raw CR. The
+  raw-markdown fallback returns md verbatim. So both glamour-success AND fallback paths leak;
+  ansi.Strip on the same corpus removed complete **and dangling** ESC/C1 sequences but left
+  standalone C0 (BEL/CR/BS/VT/FF) in place.
+- **Red:** 11 render-level tests driving hostile payloads through the real Update paths (chat
+  stream split across tokens + commit, model names in header/picker, done_reason, chat/fallback
+  notices, tool status + confirmation overlay, models list names, list/detail/pull/delete error
+  bodies, /api/show detail content, pull status text) all FAILED pre-fix with hostile bytes in
+  `View()` output (`go test … -run 'Test.*(Sanitize|Control|OSC|CSI)|TestAgent…'` → 11 FAIL).
+  JSON `\u001b` → ESC byte reachability confirmed: payloads were injected as raw Go strings on
+  the exact channels the async results use.
+
+**Green (minimum fix)**
+- **`sanitizeTerminalText(s)` (new `internal/ui/sanitize.go`)** is the single pre-style boundary:
+  (1) `github.com/charmbracelet/x/ansi` `Strip` — already pinned v0.11.8 transitively by the Charm
+  v2 set, promoted to a **direct** require (no new dependency, no version change) — parses the whole
+  string as an ECMA-48 stream and drops every complete *and dangling* ESC/C1-introduced sequence
+  (CSI/OSC/DCS/APC/PM/SOS); (2) a second pass drops the remaining unsafe C0 controls plus DEL/C1,
+  retaining only `\n` and `\t`. Idempotent; preserves newline/tab, ordinary Unicode (CJK/emoji),
+  and markdown text. Applied strictly BEFORE any SelfTUI styling (never to styled output).
+- **Ingress sites sanitized (before style/render-cache):** agent — model names at
+  `onModelsLoaded`, `modelsErr`, tool start/result status rows, ToolConfirm display copy
+  (runner keeps its raw copy), FallbackMsg notice, `done_reason` + error body in `onChatDone`;
+  models — names at `onLoaded`, list/detail/delete/pull error stores, pull status, and a
+  `sanitizeDetails` deep copy of the /api/show payload (license/modelfile/parameters/template/
+  capabilities/model-info keys+string leaves, projector info).
+- **Display-funnel defense in depth:** `renderBlock` sanitizes md before BOTH the glamour branch
+  and the raw fallback (audit-cited lines); `chatLines` sanitizes the raw-history fallback when a
+  render-cache entry is missing (cache-gap guard). `modelSummary` sanitizes list secondary rows /
+  picker summaries. `appendSessionTurn` mirrors the sanitized content into the transcript file.
+- **Dependency impact:** go.mod moves `github.com/charmbracelet/x/ansi v0.11.8` from indirect to
+  direct (already pinned, sum unchanged). No new module in go.sum.
+
+**Commands + exit codes**
+- `git status --short` → empty at start · branch `fix/v0.1.1-audit-remediation` · HEAD at start
+  `8cd50c8`. `make check` → 0 · `make race` → 0 · `PATH=$PATH:$(go env GOPATH)/bin make vuln` → 0
+  (0 vulnerabilities in called code) · `go test -count=1 ./internal/ui -run 'Test.*(Sanitize|Control|OSC|CSI)'`
+  → ok (12 focused tests) · `go test -count=1 ./internal/ui` → ok · `go test -race -count=1 ./internal/ui`
+  → ok · `git diff --check` → clean.
+
+**Decisions / lines to respect**
+- Sanitize remote-derived text **when stored**, plus at the two output funnels, so no future
+  display site can bypass it; SelfTUI's own SGR styles are added only after sanitization and are
+  never stripped.
+- Raw committed content stays raw in `v.history` (the runner's copy is untouched and re-sent on the
+  next turn); only display + the transcript mirror are sanitized.
+- Model names are sanitized at store, so the API request also carries the clean name — a hostile
+  control-byte name is unusable against Ollama anyway and now fails cleanly instead of leaking.
+- User-authored local text is not ingress-sanitized (same-terminal trust); it passes the same
+  renderBlock display funnel, which is idempotent.
+- `sanitizeTerminalText` keeps `\n`/`\t` (real layout in transcripts/detail/model file); drops CR
+  (line overwrite), BEL, BS, VT, FF, NUL, DEL, all C1, and every complete or dangling escape
+  sequence — split-token safety proven by unit test (two frames of a split OSC 52 cannot
+  re-execute) and by the render test feeding OSC/CSI across consecutive TokenMsgs.
+
+**Blockers / open decisions**
+- None for Task 06. Carried env note from Task 02/04: `make vuln` needs `$(go env GOPATH)/bin` on
+  PATH. The raw-markdown fallback branch is only reachable when glamour's renderer build fails
+  (style load), so it is tested through the sanitize-then-fallback construction plus the unit
+  corpus; no production path was contorted to force a glamour failure.
+
+**Next action**
+- Fresh Pi session: runbook **Task 07 (H-06 — make audit-pack creation manifest-complete)**:
+  confirm branch `fix/v0.1.1-audit-remediation` + clean status, then follow the Task-07 block. Do not
+  run `make smoke` until the owner runs it on a disposable model/tag or an isolated Ollama store.
