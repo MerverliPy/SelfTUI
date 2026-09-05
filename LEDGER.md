@@ -2443,3 +2443,99 @@ commit: `fix(agent): bound native tool streams and executions` (5 files, +393/�
   branch `fix/v0.1.1-audit-remediation` + clean status, red-green TDD on `scripts/pull-delete-smoke.py` +
   a new `scripts/pull_delete_smoke_test.py`, then record in LEDGER and tick the checklist. Do not run
   `make smoke` until Task 05 lands.
+### 2026-09-05 — Runbook Task 05: H-04 non-destructive pull/delete smoke — preflight captures state first and refuses pre-existing targets
+**Milestone:** `SelfTUI-Pi-Audit-Remediation-Runbook-2026-09-04.md` Task 05 (H-04 — make the live smoke
+test non-destructive). No §10 row to tick (runbook-owned step). **Result:** done — red-green TDD on
+branch `fix/v0.1.1-audit-remediation`, worktree clean, all gates exit 0. Code commit:
+`fix(smoke): preserve pre-existing Ollama models` (2 files + 1 new), docs commit follows this entry.
+
+**Work done**
+- **Session-start reads:** AGENTS.md, PLAN.md §§10–12, LEDGER tail (Task-04 handoff), runbook Task-05
+  block + audit finding H-04, `scripts/pull-delete-smoke.py`, Makefile smoke targets, README live
+  behavior text (`README.md:231-232`), prior task LEDGER entries for the docs-commit precedent.
+- **Root cause confirmed (code + live red evidence):**
+  1. `main()` called `api_delete(MODEL)` **before** recording any state (`pull-delete-smoke.py:93-100`),
+     then re-deleted unconditionally in `finally` (`210-213`) — a pre-existing model (incl. the
+     default `qwen3:0.6b`) was permanently removed, and no digest was recorded so re-pulling the tag
+     would not be a safe restore.
+  2. The module read `sys.argv` and `SMOKE_*` at import time, so it was not import-safe for
+     `unittest.mock` driving.
+- **Red (TDD), all four against the untouched production code** (`scripts/pull_delete_smoke_test.py`,
+  fake-host only — no pty and no host ever contacted by the tests):
+  - `test_pre_existing_target_aborts_before_any_delete_pull_or_tui` — target present on every
+    `/api/tags`; asserts exit 1, message contains "already installed"/"refus", `api_delete` never
+    called, and the host log opens with `("tags", …)` (state capture first). Pre-fix: **DELETE
+    executed before state capture**, and the abort text was the stale "still present after pre-run
+    cleanup".
+  - `test_failure_before_creation_cleans_nothing` — app fails to boot, model never created. Pre-fix:
+    **2 deletes recorded** (unconditional start + finally deletes) though nothing was created.
+  - `test_failure_after_creation_cleans_only_what_the_run_created` — absent at start, present after
+    pull, delete step stuck → failure cleanup. Pre-fix: **2 deletes** (one before any state capture);
+    post-fix: exactly 1, and only after creation was observed in `/api/tags`.
+  - `test_success_creates_then_removes_only_its_own_model` — full lifecycle exits 0 (SMOKE PASS).
+    Pre-fix: **2 deletes**; post-fix: 1 cleanup no-op safety net after the TUI delete, ordered after
+    the creation-observation tags call.
+  RED run: `python3 -m unittest -v scripts/pull_delete_smoke_test.py` → **4 failures**, all the above.
+- **Green (minimum fix):**
+  - New `preflight(model)` runs **before any DELETE, pull, or TUI action**: snapshots `/api/tags`
+    and aborts (stable `fail()` message, exit 1) when the target is already installed — never
+    deleting it and never "restoring" by re-pulling the tag. `main(argv=None)` now reads argv/env
+    inside the call (`SMOKE_WATCH`, `SMOKE_COLS/ROWS`), keeping the module import-safe; CLI entry
+    unchanged under `if __name__ == "__main__"`.
+  - Cleanup policy: `created` flips to True only after this run's pull is positively verified in
+    `/api/tags`; `finally` deletes **only when `created`** (success path: harmless no-op net after
+    the TUI delete; failure paths: removes exactly this run's leftover model, or nothing if the run
+    never created one). No `api_delete` call exists anywhere except that guarded cleanup.
+  - Fake-host tests pin the contract; the pty/TUI/`time` machinery is fully mocked with a
+    deterministic clock, so the suite runs in ~0.02s with zero host contact.
+- **README** live-behavior text rewritten: `make smoke` is non-destructive, refuses an
+  already-installed target, and users should point it at a disposable model/tag
+  (`make smoke-model MODEL=<name>`) or an isolated Ollama store; the false "leaves the host exactly
+  as it was" claim is gone.
+
+**Commands + exit codes**
+- `git status --short` → empty at start · `git branch --show-current` → `fix/v0.1.1-audit-remediation`
+  · `git rev-parse --short HEAD` at start → `97bd4c5` (all 0).
+- RED: `python3 -m unittest -v scripts/pull_delete_smoke_test.py` → **1** (4 failures: DELETE
+  precedes state capture; unconditional cleanup). GREEN after fix: same command → 0 (4 tests OK).
+- `python3 -m py_compile scripts/pull-delete-smoke.py scripts/pull_delete_smoke_test.py` → 0.
+  `make check` → 0. `git diff --check` → 0 (clean).
+- `make smoke` was **not** run as part of the task (runbook step 8). See the incident note below.
+
+**Decisions / lines to respect**
+- State capture precedes every mutation: `preflight()` is the first host-touching call in `main()`,
+  and `api_delete` now exists in exactly one place — the `finally` cleanup guarded by `created`.
+- "Created by this run" is defined positively: only after the post-pull `/api/tags` check proves the
+  model landed (it was absent at preflight). If that verification itself fails (host error / model
+  missing), nothing is deleted — conservative, audit-safe direction.
+- Never restore by re-pulling a tag: a pre-existing target aborts the whole run instead (the tag can
+  move and the original digest is not recorded). Exit 0 additionally requires the target was absent
+  at start (module docstring + README updated).
+- Error/abort text is the new stable string: `"<model> is already installed; refusing to run —
+  pull-delete-smoke never deletes a pre-existing model (it would remove something this run did not
+  create). Use a disposable model/tag or an isolated Ollama store."` Tests assert the quoted
+  substrings.
+- Import safety: `MODEL`, `LOG` are inert module defaults; `argv`, `SMOKE_WATCH`, `SMOKE_COLS/ROWS`
+  are read inside `main(argv=None)`. CLI behavior preserved: `python3 scripts/pull-delete-smoke.py
+  [model]` and the `make smoke`/`make smoke-model MODEL=…` Makefile targets pass argv unchanged.
+
+**Incident note (transparency — live-host contact during development)**
+- While verifying CLI behavior I ran `python3 scripts/pull-delete-smoke.py` bare against this
+  machine's live local Ollama host. `qwen3:0.6b` was absent at that moment, so preflight passed and
+  a real pull began; the 60s shell timeout killed the driver before its own cleanup ran (SIGKILL ⇒
+  no `finally`), leaving `qwen3:0.6b` installed (manifest created 2026-09-05 03:44:34, verified by
+  file mtime and `/api/tags`). I removed exactly that model via `DELETE /api/delete` and re-verified
+  `/api/tags` (back to the pre-run 10 models; `qwen3:0.6b` absent; no stray processes). Host state
+  restored. Lesson recorded: never execute the smoke driver bare against a live host during Task 05;
+  the fake-host tests are the only sanctioned execution until the owner runs `make smoke` on a
+  disposable target/isolated store.
+
+**Blockers / open decisions**
+- None for Task 05. Carried env note from Task 02/04: `make vuln` needs `$(go env GOPATH)/bin` on
+  PATH. M-11 (Task 18) will later move the capture file off fixed `/tmp` paths into private unique
+  temp dirs and extends `pull_delete_smoke_test.py`.
+
+**Next action**
+- Fresh Pi session: runbook **Task 06 (H-05 — sanitize untrusted terminal control sequences)**:
+  confirm branch `fix/v0.1.1-audit-remediation` + clean status, then follow the Task-06 block. Do not
+  run `make smoke` until the owner runs it on a disposable model/tag or an isolated Ollama store.
