@@ -176,21 +176,21 @@ func applyEnv(c *Config) error {
 	if v := os.Getenv(envPrefix + "AGENT_TEMPERATURE"); v != "" {
 		parsed, err := strconv.ParseFloat(v, 64)
 		if err != nil {
-			return fmt.Errorf("parse %sTEMPERATURE=%q: %w", envPrefix, v, err)
+			return fmt.Errorf("parse %sAGENT_TEMPERATURE=%q: %w", envPrefix, v, err)
 		}
 		c.Agent.Temperature = parsed
 	}
 	if v := os.Getenv(envPrefix + "AGENT_TOP_P"); v != "" {
 		parsed, err := strconv.ParseFloat(v, 64)
 		if err != nil {
-			return fmt.Errorf("parse %sTOP_P=%q: %w", envPrefix, v, err)
+			return fmt.Errorf("parse %sAGENT_TOP_P=%q: %w", envPrefix, v, err)
 		}
 		c.Agent.TopP = parsed
 	}
 	if v := os.Getenv(envPrefix + "AGENT_NUM_CTX"); v != "" {
 		parsed, err := strconv.Atoi(v)
 		if err != nil {
-			return fmt.Errorf("parse %sNUM_CTX=%q: %w", envPrefix, v, err)
+			return fmt.Errorf("parse %sAGENT_NUM_CTX=%q: %w", envPrefix, v, err)
 		}
 		c.Agent.NumCtx = parsed
 	}
@@ -200,7 +200,7 @@ func applyEnv(c *Config) error {
 	if v := os.Getenv(envPrefix + "AGENT_MAX_TOOL_ITERATIONS"); v != "" {
 		parsed, err := strconv.Atoi(v)
 		if err != nil {
-			return fmt.Errorf("parse %sMAX_TOOL_ITERATIONS=%q: %w", envPrefix, v, err)
+			return fmt.Errorf("parse %sAGENT_MAX_TOOL_ITERATIONS=%q: %w", envPrefix, v, err)
 		}
 		c.Agent.MaxToolIterations = parsed
 	}

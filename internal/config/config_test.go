@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/adrg/xdg"
@@ -267,5 +268,33 @@ func TestInvalidFileErrors(t *testing.T) {
 	p := writeFile(t, "host = [unclosed")
 	if _, err := Load(Overrides{ConfigPath: &p}); err == nil {
 		t.Fatal("want error on malformed TOML, got nil")
+	}
+}
+
+// P1-12 regression: a bad SELFTUI_AGENT_* value must be reported under its
+// real variable name, not a nonexistent unprefixed one — otherwise the user
+// "fixes" SELFTUI_TEMPERATURE and the config still fails to load.
+func TestAgentEnvParseErrorsNameTheAgentPrefixedVar(t *testing.T) {
+	cases := []struct {
+		env    string
+		wantIn string
+	}{
+		{envPrefix + "AGENT_TEMPERATURE", `parse SELFTUI_AGENT_TEMPERATURE=`},
+		{envPrefix + "AGENT_TOP_P", `parse SELFTUI_AGENT_TOP_P=`},
+		{envPrefix + "AGENT_NUM_CTX", `parse SELFTUI_AGENT_NUM_CTX=`},
+		{envPrefix + "AGENT_MAX_TOOL_ITERATIONS", `parse SELFTUI_AGENT_MAX_TOOL_ITERATIONS=`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.env, func(t *testing.T) {
+			blankEnv(t)
+			t.Setenv(tc.env, "not-a-number")
+			_, err := Load(Overrides{})
+			if err == nil || !strings.Contains(err.Error(), tc.wantIn) {
+				t.Fatalf("Load error = %v, want it to name %s in %q", err, tc.env, tc.wantIn)
+			}
+			if err != nil && strings.Contains(err.Error(), "SELFTUI_TEMPERATURE=") && !strings.Contains(err.Error(), "AGENT_") {
+				t.Fatalf("error names the nonexistent unprefixed var: %v", err)
+			}
+		})
 	}
 }
