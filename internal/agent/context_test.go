@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"selftui/internal/ollama"
 )
@@ -449,5 +450,58 @@ func assistantParallelCalls(argsA, argsB string) ollama.ChatMessage {
 			{Function: ollama.ToolCallFunction{Name: "read_file", Arguments: jsonRaw(argsA)}},
 			{Function: ollama.ToolCallFunction{Name: "list_dir", Arguments: jsonRaw(argsB)}},
 		},
+	}
+}
+
+// P1-7 regression: content truncation must never split a multibyte UTF-8
+// rune. The budget math is byte-based, so a byte-exact cut can land inside a
+// CJK/emoji sequence and hand the model invalid UTF-8 (which json.Marshal
+// would silently replace). BudgetMessages must produce only valid UTF-8
+// output regardless of how a cut lands.
+func TestBudgetTruncationKeepsValidUTF8(t *testing.T) {
+	// Build one oversized user turn from multibyte content so any shortening
+	// path must cut inside rune-dense text. 你好 is 3 bytes per rune.
+	filler := strings.Repeat("你", 3000) // 9000 bytes
+	in := []ollama.ChatMessage{
+		sysMsg("be brief"),
+		userMsg("prefix " + filler + " 世界"),
+		asstMsg("ok"),
+	}
+	got := BudgetMessages(in, 2000) // tiny budget: forces truncation
+
+	for i, m := range got {
+		if !utf8.ValidString(m.Content) {
+			t.Errorf("message %d has invalid UTF-8 after budgeting: %q", i, m.Content)
+		}
+	}
+	if len(got) != len(in) {
+		t.Errorf("len = %d, want %d (in-place bounding, not eviction)", len(got), len(in))
+	}
+	// The oversized user turn (index 1) is shortened in place with the tail
+	// convention: a clean, valid suffix (prefix + rune-aligned tail).
+	user := got[1]
+	if user.Role != ollama.RoleUser || !strings.HasPrefix(user.Content, "[truncated] ") {
+		t.Fatalf("user turn not truncated: role=%v content=%q", user.Role, user.Content)
+	}
+	if !strings.HasSuffix(user.Content, "世界") {
+		t.Errorf("user turn lost its (valid) tail end: %q", user.Content)
+	}
+}
+
+// trim helpers unit-level: the byte-keep math must align to a rune boundary
+// even when the natural cut point is mid-sequence.
+func TestTrimTailAlignsToRuneBoundary(t *testing.T) {
+	// 9 runes x 3 bytes = 27 bytes; cutting to 10 bytes lands at byte 10,
+	// which is inside rune 4. The tail must start at a rune boundary.
+	s := "你你你你你你你你你" // 27 bytes
+	got := contentTailWithin(s, 10)
+	if !utf8.ValidString(got) {
+		t.Errorf("tail %q is invalid UTF-8", got)
+	}
+	if len(got) > 10 {
+		t.Errorf("tail len = %d > budget 10", len(got))
+	}
+	if got != s[len(s)-9:] {
+		t.Errorf("tail = %q, want the last 3 full runes %q", got, s[len(s)-9:])
 	}
 }

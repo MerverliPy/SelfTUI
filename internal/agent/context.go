@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"unicode/utf8"
+
 	"selftui/internal/ollama"
 )
 
@@ -163,6 +165,24 @@ func boundToLimit(messages []ollama.ChatMessage, limit, convStart int) []ollama.
 	return work
 }
 
+// contentTailWithin returns the longest tail (suffix) of content that fits in
+// maxBytes and starts on a UTF-8 rune boundary (P1-7). The budget math is
+// byte-based, so a byte-exact cut can split a multibyte rune and hand the
+// model invalid UTF-8 (json.Marshal would silently replace the broken bytes).
+// Advancing the cut to the next rune start keeps the output valid and only
+// ever makes it shorter, so the byte budget stays respected. On a tail that
+// is already aligned (or an all-ASCII cut) the rune start is unchanged.
+func contentTailWithin(content string, maxBytes int) string {
+	start := len(content) - maxBytes
+	if start < 0 {
+		return content
+	}
+	for start < len(content) && !utf8.RuneStart(content[start]) {
+		start++ // step past a continuation byte onto the next rune's lead
+	}
+	return content[start:]
+}
+
 // trimNewestContent shortens the newest message in [lo, hi) whose Content can
 // actually shrink the estimate, using the deterministic "[truncated] " tail
 // convention. It reports whether any message was shortened.
@@ -178,7 +198,7 @@ func trimNewestContent(messages []ollama.ChatMessage, limit, lo, hi int) bool {
 			continue // this message is not the overflow; leave it alone
 		}
 		keep := maxInt(0, room-len(truncatedContentPrefix))
-		next := truncatedContentPrefix + content[maxInt(0, len(content)-keep):]
+		next := truncatedContentPrefix + contentTailWithin(content, keep)
 		if tokenOfContent(next) >= tokenOfContent(content) {
 			continue // no strict decrease at these sizes; try an older message
 		}
@@ -223,7 +243,7 @@ func trimSystemContent(messages []ollama.ChatMessage, limit, convStart int) bool
 			continue
 		}
 		keep := maxInt(0, room-len(truncatedContentPrefix))
-		next := truncatedContentPrefix + content[maxInt(0, len(content)-keep):]
+		next := truncatedContentPrefix + contentTailWithin(content, keep)
 		if tokenOfContent(next) >= tokenOfContent(content) {
 			continue
 		}
