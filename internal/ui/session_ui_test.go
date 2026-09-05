@@ -504,12 +504,17 @@ func TestAgentViewSessionFailureSurfacesOnce(t *testing.T) {
 		t.Errorf("writer saw %d appends, want exactly 1 (no writes after the failure)", fw.calls)
 	}
 
-	// /export now reports the disabled state synchronously (no second error).
+	// /export now reports the disabled state synchronously (no second error),
+	// echoing the real failure — not the dead-end "send a message first" hint
+	// (recording is permanently off, so more messages would never help; P1-5).
 	ve, cmd3 := v2.exportSession()
 	if cmd3 != nil {
 		t.Fatal("export after a failure must not arm a flush command")
 	}
-	if !strings.Contains(ve.notice, "nothing recorded yet") {
-		t.Errorf("export notice after failure = %q, want the nothing-recorded hint", ve.notice)
+	if !strings.Contains(ve.notice, "simulated transcript write failure") {
+		t.Errorf("export notice after failure = %q, want the recorded failure echoed", ve.notice)
+	}
+	if strings.Contains(ve.notice, "send a message first") {
+		t.Errorf("export notice after failure = %q, want no dead-end send-message advice", ve.notice)
 	}
 }

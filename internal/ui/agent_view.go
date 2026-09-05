@@ -108,6 +108,11 @@ type AgentView struct {
 	sessionHost string // recorded in the transcript header (best effort)
 	recorder    *session.Recorder
 	sessionErr  bool
+	// sessionErrMsg retains the one surfaced recorder failure so later
+	// surfaces (e.g. /export) can echo the real cause instead of giving
+	// dead-end advice — recording is permanently off for the run once the
+	// first failure lands (P1-5).
+	sessionErrMsg string
 
 	// Composer (M7-A): slash-command drafting. The menu is derived from the
 	// live input value (typing "/cl" filters to clear), so there is no
@@ -380,6 +385,7 @@ func (v AgentView) Update(msg tea.Msg) (AgentView, tea.Cmd) {
 		// learned of the failure) are ignored (M-04).
 		if msg.err != nil && !v.sessionErr {
 			v.sessionErr = true
+			v.sessionErrMsg = msg.err.Error()
 			v.notice = "session log: " + msg.err.Error()
 		}
 		return v, nil
@@ -826,6 +832,7 @@ func (v AgentView) enqueueSessionTurn(role, model, content, meta string, at time
 	if err != nil {
 		// Backlog full: the sink is wedged; recording is over for this run.
 		v.sessionErr = true
+		v.sessionErrMsg = err.Error()
 		v.notice = "session log: " + err.Error()
 		return v, nil
 	}
@@ -847,6 +854,7 @@ func (v AgentView) WithSessionDir(dir, host string) AgentView {
 	v.sessionHost = host
 	v.recorder = nil
 	v.sessionErr = false
+	v.sessionErrMsg = ""
 	return v
 }
 
@@ -872,13 +880,20 @@ func (v AgentView) exportSession() (AgentView, tea.Cmd) {
 	case v.sessionDir == "":
 		v.notice = "session recording is off — no transcript is written"
 		return v, nil
-	case v.sessionErr || v.recorder == nil:
+	case v.sessionErr:
+		// Recording failed earlier and is permanently off for this run, so
+		// "send a message first" would be dead-end advice: echo the real
+		// failure instead (P1-5).
+		v.notice = "session recording failed: " + v.sessionErrMsg
+		return v, nil
+	case v.recorder == nil:
 		v.notice = "nothing recorded yet — send a message first"
 		return v, nil
 	}
 	done, err := v.recorder.Flush()
 	if err != nil {
 		v.sessionErr = true
+		v.sessionErrMsg = err.Error()
 		v.notice = "session log: " + err.Error()
 		return v, nil
 	}
@@ -894,6 +909,7 @@ func (v AgentView) exportSession() (AgentView, tea.Cmd) {
 func (v AgentView) applySessionExport(m sessionExportMsg) AgentView {
 	if m.err != nil {
 		v.sessionErr = true
+		v.sessionErrMsg = m.err.Error()
 		v.notice = "session log: " + m.err.Error()
 		return v
 	}
