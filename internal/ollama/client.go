@@ -37,15 +37,33 @@ type Client struct {
 
 // New builds a client for an Ollama base URL (e.g. "http://localhost:11434").
 // host is used verbatim modulo trailing slashes; token, when non-empty, is
-// sent as a Bearer Authorization header.
+// sent as a Bearer Authorization header. Both the finite and the streaming
+// client refuse every HTTP redirect (M-08): a redirect would either point at
+// a different origin that must not receive the bearer token or downgrade the
+// scheme, and the initial non-loopback https/token validation in
+// internal/config cannot see either case.
 func New(host, token string) *Client {
 	return &Client{
 		baseURL:    strings.TrimRight(host, "/"),
 		token:      token,
-		http:       &http.Client{Timeout: requestTimeout},
-		stream:     &http.Client{},
+		http:       &http.Client{Timeout: requestTimeout, CheckRedirect: redirectPolicy},
+		stream:     &http.Client{CheckRedirect: redirectPolicy},
 		streamIdle: streamIdleTimeout,
 	}
+}
+
+// redirectPolicy is the CheckRedirect policy shared by the finite and the
+// streaming client. Ollama serves its API from one origin, so a redirect
+// means either a different origin (which must never receive the bearer token)
+// or a scheme/port change on the same hostname — and Go 1.27 forwards the
+// Authorization header whenever the redirect hostname equals the original or
+// is a subdomain of it, regardless of scheme (so an https endpoint can leak
+// the token to a plain http target). Returning an error makes http.Client
+// abort the request before the redirect target is contacted and close the
+// previous response body; the stable "refusing redirect" text lets callers
+// and tests recognize the refusal. M-08.
+func redirectPolicy(req *http.Request, _ []*http.Request) error {
+	return fmt.Errorf("refusing redirect to %s: ollama API calls must not follow redirects", req.URL)
 }
 
 // do performs one JSON request and returns the raw response body for the

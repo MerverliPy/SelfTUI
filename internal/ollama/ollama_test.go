@@ -575,3 +575,232 @@ func TestPullContextCancelled(t *testing.T) {
 		t.Fatal("Pull did not return after context cancellation")
 	}
 }
+
+// --- M-08: redirect-safe bearer-token policy -------------------------------
+//
+// Pinned Go behavior (go1.27.1, net/http client.go): the default policy
+// follows up to ten redirects, and the Authorization header is forwarded
+// whenever the redirect target's hostname equals the original hostname or is
+// a subdomain of it (shouldCopyHeaderOnRedirect / isDomainOrSubdomain) — the
+// scheme and port are ignored. An https endpoint can therefore redirect to
+// plain http on the same hostname and the bearer token travels in the clear;
+// a redirect to a genuinely foreign hostname is still followed, only with the
+// token stripped. M-08 policy: both clients (finite and streaming) refuse
+// every redirect with one stable error, so a redirect target is never
+// contacted and no Authorization header can leak. Each test logs the observed
+// pre-policy behavior (target hits + captured Authorization) as evidence.
+
+// assertRedirectRefused checks the shared post-policy shape: the call fails
+// with the stable refusal message and the redirect target was never reached.
+func assertRedirectRefused(t *testing.T, err error, targetHits *int, gotAuth *string, call string) {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("%s: want redirect-refused error, got nil", call)
+	}
+	if !strings.Contains(err.Error(), "refusing redirect") {
+		t.Errorf("%s error = %v, want stable redirect refusal", call, err)
+	}
+	if targetHits != nil && *targetHits != 0 {
+		t.Errorf("%s: redirect target contacted %d time(s) with auth=%q; want 0", call, *targetHits, *gotAuth)
+	}
+}
+
+func TestRedirectSameHostRefused(t *testing.T) {
+	// Same-origin redirect: GET /api/tags 302s to /api/final on the same
+	// server. Go forwards the token to an identical hostname, so before the
+	// policy the bearer header followed the redirect.
+	var got struct {
+		hits int
+		auth string
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/tags":
+			w.Header().Set("Location", "/api/final")
+			w.WriteHeader(http.StatusFound)
+		case "/api/final":
+			got.hits++
+			got.auth = r.Header.Get("Authorization")
+			w.Write([]byte(`{"models":[]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	c := New(srv.URL, "sekrit")
+	_, err := c.List(context.Background())
+	t.Logf("same-origin redirect: target hits=%d auth=%q err=%v", got.hits, got.auth, err)
+	assertRedirectRefused(t, err, &got.hits, &got.auth, "List")
+}
+
+func TestRedirectCrossOriginRefused(t *testing.T) {
+	// Cross-origin redirect (different server/port on the same loopback
+	// hostname): Go still treats 127.0.0.1 as one host for header purposes,
+	// so before the policy the token followed to the second server.
+	var got struct {
+		hits int
+		auth string
+	}
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got.hits++
+		got.auth = r.Header.Get("Authorization")
+		w.Write([]byte(`{"models":[]}`))
+	}))
+	t.Cleanup(target.Close)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Location", target.URL+"/api/tags")
+		w.WriteHeader(http.StatusFound)
+	}))
+	t.Cleanup(srv.Close)
+
+	c := New(srv.URL, "sekrit")
+	_, err := c.List(context.Background())
+	t.Logf("cross-origin redirect: target hits=%d auth=%q err=%v", got.hits, got.auth, err)
+	assertRedirectRefused(t, err, &got.hits, &got.auth, "List")
+}
+
+func TestRedirectHTTPSDowngradeRefused(t *testing.T) {
+	// The M-08 core: an https endpoint redirects to a plain http target on
+	// the same hostname. Go's hostname-only rule forwards the Authorization
+	// header across the scheme downgrade, so before the policy the bearer
+	// token went out in the clear over http.
+	var got struct {
+		hits int
+		auth string
+	}
+	plain := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got.hits++
+		got.auth = r.Header.Get("Authorization")
+		w.Write([]byte(`{"models":[]}`))
+	}))
+	t.Cleanup(plain.Close)
+
+	tlsSrv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Location", plain.URL+"/api/tags")
+		w.WriteHeader(http.StatusFound)
+	}))
+	t.Cleanup(tlsSrv.Close)
+
+	c := tlsClient(t, tlsSrv, "tok-downgrade")
+	_, err := c.List(context.Background())
+	t.Logf("https->http downgrade redirect: plain target hits=%d auth=%q err=%v", got.hits, got.auth, err)
+	assertRedirectRefused(t, err, &got.hits, &got.auth, "List")
+}
+
+func TestRedirectHostnameAliasRefused(t *testing.T) {
+	// Foreign-hostname redirect (127.0.0.1 -> localhost, same interface and
+	// port): Go's isDomainOrSubdomain treats the different hostname as
+	// foreign, so before the policy the redirect was followed with the token
+	// stripped. This is the practical stand-in for the subdomain rule — real
+	// DNS subdomains are not available to httptest, but the header seam is
+	// the same one Go applies to foo.com -> sub.foo.com.
+	var got struct {
+		hits int
+		auth string
+	}
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/tags":
+			// Re-target the same listener under the localhost name.
+			w.Header().Set("Location", "http://localhost"+strings.TrimPrefix(srv.URL, "http://127.0.0.1")+"/api/final")
+			w.WriteHeader(http.StatusFound)
+		case "/api/final":
+			got.hits++
+			got.auth = r.Header.Get("Authorization")
+			w.Write([]byte(`{"models":[]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	c := New(srv.URL, "sekrit")
+	_, err := c.List(context.Background())
+	t.Logf("hostname-alias redirect: target hits=%d auth=%q err=%v", got.hits, got.auth, err)
+	assertRedirectRefused(t, err, &got.hits, &got.auth, "List")
+}
+
+func TestRedirectRefusedWithoutToken(t *testing.T) {
+	// The refusal is uniform — it does not depend on a configured token. A
+	// redirecting endpoint is a misconfigured API origin either way.
+	var got struct {
+		hits int
+		auth string
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Location", "/api/final")
+		w.WriteHeader(http.StatusFound)
+	}))
+	t.Cleanup(srv.Close)
+	_ = got
+
+	c := New(srv.URL, "")
+	_, err := c.List(context.Background())
+	if err == nil {
+		t.Fatal("List: want redirect-refused error even without a token, got nil")
+	}
+	if !strings.Contains(err.Error(), "refusing redirect") {
+		t.Errorf("List error = %v, want stable redirect refusal", err)
+	}
+}
+
+func TestStreamingRedirectSameHostRefused(t *testing.T) {
+	// Streaming POST /api/pull gets the same policy through the no-timeout
+	// stream client: a 307 keeps the POST and, before the policy, the token
+	// followed to the sibling path on the same host.
+	var got struct {
+		hits int
+		auth string
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/pull":
+			w.Header().Set("Location", "/api/pull-final")
+			w.WriteHeader(http.StatusTemporaryRedirect)
+		case "/api/pull-final":
+			got.hits++
+			got.auth = r.Header.Get("Authorization")
+			w.Header().Set("Content-Type", "application/x-ndjson")
+			io.WriteString(w, pullStream)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	c := New(srv.URL, "sekrit")
+	err := c.Pull(context.Background(), "qwen3:0.6b", nil)
+	t.Logf("streaming same-origin redirect: target hits=%d auth=%q err=%v", got.hits, got.auth, err)
+	assertRedirectRefused(t, err, &got.hits, &got.auth, "Pull")
+}
+
+func TestStreamingRedirectCrossOriginRefused(t *testing.T) {
+	// Streaming downgrade/cross-origin: an https /api/pull 307-redirects to a
+	// plain http target on the same hostname; Go would keep the token on the
+	// redirected POST before the policy.
+	var got struct {
+		hits int
+		auth string
+	}
+	plain := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got.hits++
+		got.auth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		io.WriteString(w, pullStream)
+	}))
+	t.Cleanup(plain.Close)
+
+	tlsSrv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Location", plain.URL+"/api/pull")
+		w.WriteHeader(http.StatusTemporaryRedirect)
+	}))
+	t.Cleanup(tlsSrv.Close)
+
+	c := tlsClient(t, tlsSrv, "tok-stream-downgrade")
+	err := c.Pull(context.Background(), "qwen3:0.6b", nil)
+	t.Logf("streaming https->http redirect: plain target hits=%d auth=%q err=%v", got.hits, got.auth, err)
+	assertRedirectRefused(t, err, &got.hits, &got.auth, "Pull")
+}
