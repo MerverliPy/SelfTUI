@@ -78,13 +78,26 @@ make vuln      # govulncheck ./... (needs govulncheck on PATH)
 selftui -version  # print the build version ("dev" on dev builds)
 ```
 
-Requires Go ≥ 1.25 (`GOTOOLCHAIN=auto` fetches it on demand). **CI and the
-release gates pin Go 1.27.1** — the current official stable release at
-phase-8 time (2026-09-04) — so run the gates locally with the same toolchain
-(`export GOTOOLCHAIN=go1.27.1`, with its `bin` on `PATH`) and your local
-result is the CI result. `make vuln` additionally needs `govulncheck` on
-`PATH` (pinned install: `go install golang.org/x/vuln/cmd/govulncheck@v1.7.0`).
-Logs go to `$XDG_STATE_HOME/selftui/log.txt` — never stderr, so the TUI stays
+Requires Go ≥ 1.25 for day-to-day development (`GOTOOLCHAIN=auto` fetches it
+on demand). The **release gate enforces the pinned toolchain** — Go 1.27.1
+and govulncheck v1.7.0, the same versions CI pins — and fails fast with the
+exact fix before any gate work if `go version` is not go1.27.1, if the
+`gofmt` on `PATH` is not the gofmt from that same Go distribution (gofmt has
+no version flag, so the pin is enforced by identity), or if govulncheck is
+missing or the wrong version. Before running the gate locally, put the
+pinned Go distribution's `bin` first on `PATH`, e.g. from the repo root:
+
+```sh
+go version                                   # must report go1.27.1
+# Go's own gofmt only resolves from its distribution's bin, so make PATH
+# point at the distribution the `go` above actually runs:
+export PATH="$(go env GOROOT)/bin:$PATH"     # gofmt now matches the pin
+govulncheck -version                         # must report v1.7.0
+```
+
+`make vuln` additionally needs `govulncheck` on `PATH` (pinned install:
+`go install golang.org/x/vuln/cmd/govulncheck@v1.7.0`). Logs go to
+`$XDG_STATE_HOME/selftui/log.txt` — never stderr, so the TUI stays
 clean over SSH.
 
 ## Release engineering (v0.1)
@@ -99,22 +112,36 @@ VERSION=v0.1.0 make release-check          # the full gate; never tags
 ```
 
 `scripts/release-check.sh` (`VERSION=v0.1.0 make release-check`) is the gate
-a release must pass before the owner tags it. It requires a clean worktree
-and a `VERSION` of the form `v<major>.<minor>.<patch>`, then runs `go mod
+a release must pass before the owner tags it. It requires a clean worktree,
+a `VERSION` of the form `v<major>.<minor>.<patch>`, and the enforced
+toolchain pin above (fails fast, before any gate work, if go/gofmt/
+govulncheck do not match the documented versions). It then runs `go mod
 verify`, the gofmt check, `go vet`, uncached tests, race tests,
 `govulncheck`, both Linux builds, a version-stamp check of each binary
 (executed where the host can run it, otherwise the exact string `-X` linked
 in), and writes deterministic archives plus `dist/SHA256SUMS`. The script
 **never creates or pushes a git tag** — tagging `v0.1.0` and publishing the
-release is the owner's separate step.
+release is the owner's separate step. Regression suite:
+`bash scripts/release-check-test.sh` (fake go/gofmt/govulncheck fixtures
+proving wrong versions fail fast, cross-umask byte-identical archives, and
+flat-checksum verification — it never touches this tree's `dist/`).
 
 Artifacts (all under the gitignored `dist/`):
 
 - `dist/selftui-linux-amd64`, `dist/selftui-linux-arm64` — raw static binaries
 - `dist/selftui-<version>-linux-<arch>.tar.gz` — deterministic archives
-  (binary + `LICENSE` + `README.md`)
-- `dist/SHA256SUMS` — sha256 over both archives; verify from the repo root
-  with `sha256sum -c dist/SHA256SUMS`
+  (binary + `LICENSE` + `README.md`) with **fixed member modes** — binary
+  0755, documents 0644 — so two builders or umasks produce byte-identical
+  archives
+- `dist/SHA256SUMS` — sha256 over both archives with **flat archive names**
+  (no `dist/` prefix), generated from inside `dist/`, so verification works
+  in a flat download directory:
+
+```sh
+cd dist && sha256sum -c SHA256SUMS     # repo-side verification
+# …or beside downloaded GitHub Release assets (download the two archives +
+# SHA256SUMS into one directory and run the same command there)
+```
 
 Audit packages (H-06):
 
@@ -144,8 +171,11 @@ version-stamp, archives, `SHA256SUMS`) on every pull request and push to
 complete release gate, verifies the tag is exactly the version stamped into
 both binaries, uploads the two archives + `SHA256SUMS`, and publishes
 release notes generated from `CHANGELOG.md`. Both workflows pin **Go 1.27.1**
-and govulncheck **v1.7.0** and use only GitHub's default `GITHUB_TOKEN` with
-least-privilege permissions — no secrets.
+and govulncheck **v1.7.0** as workflow configuration (env + `setup-go`); the
+local gate now enforces the same versions itself, so CI configuration and the
+documented local prerequisites cannot drift apart. Both workflows use only
+GitHub's default `GITHUB_TOKEN` with least-privilege permissions — no
+secrets.
 
 ## Config
 

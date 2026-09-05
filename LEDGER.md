@@ -3678,3 +3678,118 @@ by this task).
   branch `fix/v0.1.1-audit-remediation` + clean status, then follow the Task-17 block. Do not run
   `make smoke` until the owner runs it on a disposable model/tag or an isolated Ollama store; do not
   run the full release-check until Task 22 and a clean worktree.
+
+### 2026-09-05 — Runbook Task 17: M-10 release gate portability/reproducibility (owner task)
+**Milestone:** `SelfTUI-Pi-Audit-Remediation-Runbook-2026-09-04.md` Task 17 (M-10). No §10 row to tick
+(runbook-owned step; the runbook's Task-17 progress checkbox stays unticked — the runbook file is not in
+this task's allowed-files list). **Result:** done — red-green on branch `fix/v0.1.1-audit-remediation`;
+harness RED 41 fails/11 ok against the pre-fix script, GREEN 52/52 after the fix; code+docs commit
+(see below). Worktree clean after commit; `bash -n` both scripts, harness, and `make check` all exit 0.
+
+**Context (what M-10 actually was)**
+- Audit evidence `scripts/release-check.sh:14-16,62-71,123-140`: the gate used whatever `go`/`gofmt`/
+  `govulncheck` PATH had (presence-only checks while README claimed pinning); archive staging used `cp`
+  (member modes not normalized); SHA256SUMS entries were `dist/`-prefixed (release assets download flat).
+- Verified on this host: `go` (distro `/usr/lib/go-1.22/bin/go`) auto-switches to the pinned go1.27.1
+  toolchain inside the module (`go version go1.27.1 linux/amd64`; GOROOT = module-cache toolchain dir
+  that ships its own `bin/gofmt`), while PATH `gofmt` stays the distro go1.22.2 one — the exact
+  go/gofmt split the finding worried about. `gofmt` has **no -version flag** (usage error, verified), so
+  gofmt pinning is enforced by **identity** with the pinned distribution's gofmt.
+- Plain GNU `cp` applies the umask to a newly-created destination (dest mode = source & ~umask), so
+  cp-based staging baked the builder's umask into tar members: 0002 → selftui 0764 + docs 0664, 0022 →
+  selftui 0744 + docs 0644 (reproduced manually). `install -m 0755/0644` forces fixed modes.
+
+**Work done (red-green, per the Task-17 contract)**
+1. **New `scripts/release-check-test.sh`** (52 checks, self-contained, temp fixtures only — never touches
+   the real tree's `dist/`): a fake go/gofmt/govulncheck toolchain whose behaviour is env-driven
+   (`GO_VER_LINE`, `GOVULN_VER_LINE`, `FAKE_GOROOT`, `FAKE_LOG`, `FAKE_STAMP`), with the fake `go`
+   emitting umask-sensitive "built" binaries (models a non-normalizing builder); fixture PATH hygiene via
+   a symlinked `$sys` dir of only the real tools release-check needs, **excluding** go/gofmt/govulncheck,
+   so a "missing X" case is genuinely missing (real `/usr/bin/go` had been leaking through PATH and
+   turned the missing cases into wrong-distribution cases — fixed in the harness, not the script).
+   Cases: (a) missing go / go1.28.0 / go1.27.2 / go1.25.8 / unparseable output → exit 2 with the stable
+   pin message, `FAKE_LOG` empty (no slow gate reached), fixture `dist/` never created; (b) missing gofmt
+   and foreign-distribution gofmt (decoy first on PATH) → exit 2, actionable PATH fix; (c) missing
+   govulncheck → exit 2 + `@v1.7.0` install hint (regression of the old presence check); govulncheck
+   v1.6.0 / v1.7.1 / no-version-token usage output → exit 2, `-version`-only invocation, dist untouched;
+   (d) correct versions → gate runs to a stubbed PASS inside the fixture (fake go builds the stamped
+   binaries, real git/make/tar/gzip/sha256sum/install do the rest); (e) `SHA256SUMS` = exactly the two
+   flat `selftui-v0.1.1-linux-{amd64,arm64}.tar.gz` entries, no paths; `sha256sum -c SHA256SUMS` verifies
+   from inside `dist/` **and** from a flat download dir of just the assets + manifest; (f) umask 0002 vs
+   0022 fixtures → byte-identical archives and manifest, exact member modes `-rwxr-xr-x` /
+   `-rw-r--r--` / `-rw-r--r--`.
+2. **`scripts/release-check.sh` fix** — step 0 toolchain pin placed **before** `rm -rf dist` (a
+   version-bad invocation no longer wipes dist) and before every slow gate: `go version` 3rd field must
+   equal `go1.27.1` (defensive first-line parse, output echoed on failure); gofmt presence + realpath
+   identity vs `$(go env GOROOT)/bin/gofmt`; govulncheck presence + `-version` parsed defensively for a
+   `vX.Y.Z` token that must equal `v1.7.0`; `strings` presence kept. Every failure exits 2 with the
+   exact remediation (e.g. `export PATH="$(go env GOROOT)/bin:$PATH"`). Step 9 stages with `install -m
+   0755` (binary) / `install -m 0644` (LICENSE/README). Step 10 generates the manifest from **inside**
+   `dist/` (`( cd dist && LC_ALL=C sha256sum selftui-… > SHA256SUMS )`) → flat entries.
+3. **README.md + CONTRIBUTING.md** — distinguish enforced local prerequisites (gate fails fast unless go
+  1.27.1 + same-distribution gofmt + govulncheck v1.7.0) from CI configuration (workflow env +
+  `setup-go`); document the `export PATH="$(go env GOROOT)/bin:$PATH"` recipe; fixed-mode archives and
+  flat-manifest verification (`cd dist && sha256sum -c SHA256SUMS` / beside downloaded assets); point to
+  the new regression harness. Makefile and `.github/workflows/*` untouched (not needed; workflows not in
+  the allowed list).
+
+**RED evidence (against pre-fix release-check.sh, harness assertions)**
+- wrong/missing go/gofmt/govulncheck versions did NOT fail fast: full gate ran to PASS (rc 0) with
+  go1.28.0/go1.27.2/go1.25.8/garbage go and govulncheck v1.6.0/v1.7.1/no-token; fake logs show
+  `go mod verify … go build …` reached; fixture `dist/` was created before the (old) govulncheck check;
+  missing go/gofmt died late at rc 127, missing govulncheck at rc 2 but only after dist creation.
+- cross-umask archives diverged: amd64+arm64 sha256 `2dbbda62…` (0002) vs `087b0aa1…` (0022); member
+  modes 0002: selftui `-rwxrw-r--`(0764) + LICENSE/README `-rw-rw-r--`(0664); 0022: `-rwxr--r--`(0744) +
+  `-rw-r--r--`(0644) — neither 0755/0644.
+- SHA256SUMS held `dist/selftui-…` prefixed entries → in-dist and flat-download `sha256sum -c` failed.
+
+**GREEN evidence**
+- Harness: `bash scripts/release-check-test.sh` → `release-check-test: 52 checks, 0 failures — PASS`,
+  exit 0. Cross-umask sha256 identical for both archives: `8a1820b3…` (amd64 and arm64 under 0002 and
+  0022 — content identical, arch name is the only differing input) and identical SHA256SUMS files; modes
+  `-rwxr-xr-x` / `-rw-r--r--` in both fixtures. Stubbed full gate PASSED inside the fixture; flat
+  manifest verified from inside `dist/` and from the flat download dir.
+
+**Commands + exit codes**
+- Session guard: `git status --short` → empty · branch `fix/v0.1.1-audit-remediation` · HEAD `0aec581`.
+- RED: `bash scripts/release-check-test.sh` → exit 1 (41 failures / 11 ok) — captured above.
+- GREEN: `bash -n scripts/release-check.sh scripts/release-check-test.sh` → 0 · `bash
+  scripts/release-check-test.sh` → exit 0 (52/52) · `make check` → 0 (build + full suite + vet + gofmt) ·
+  `git diff --check` → clean · `gofmt` not needed (no Go files changed).
+- Toolchain probe (evidence for the gofmt decision): `gofmt -version` → usage error (no flag); `go
+  version $(command -v gofmt)` → `/usr/lib/go-1.22/bin/gofmt: go1.22.2`; module toolchain gofmt → go1.27.1;
+  `cp`/umask staging probe → 0764/0664 (0002) vs 0744/0644 (0022) member modes with identical sources.
+- Commit: `git add scripts/release-check.sh scripts/release-check-test.sh README.md CONTRIBUTING.md
+  LEDGER.md` → `git commit -m "fix(release): enforce reproducible portable artifacts"` → 0; post-commit
+  `git status --short` → clean.
+- `make smoke`/`make smoke-model` NOT run (owner-run). Full `VERSION=… make release-check` NOT run (Task
+  22 + clean worktree, per the runbook).
+
+**Decisions / lines to respect**
+- Pins are exact: go `go1.27.1` and govulncheck `v1.7.0` — patch drift (go1.27.2, v1.7.1) is rejected
+  too, because the documented/CI pin is exact and reproducibility is the point.
+- gofmt is pinned by **identity** with the pinned distribution (`readlink -f` both sides) because gofmt
+  ships no version flag; the error prints the exact PATH fix. A same-version gofmt symlinked from another
+  dir still passes (realpath equality) — that is intended.
+- The toolchain pin runs **before** `rm -rf dist`: a precondition failure never destroys existing dist
+  artifacts and never reaches a slow gate (proven by the empty FAKE_LOG + absent-dist assertions).
+- Staging uses `install -m 0755/0644` (fixed modes) instead of `cp` (umask-sensitive). SHA256SUMS is
+  generated from inside dist with flat names so downloaded assets verify directly; production names stay
+  driven by the VERSION variable validated at the top (fixture proves v0.1.1 names).
+- Harness fixtures fake the toolchain (env-driven scripts) and run the gate inside a temp repo; the
+  destructive dist handling that runs there is confined to the temp fixture. The real tree's dist/ was
+  never touched.
+
+**Blockers / open decisions**
+- None for Task 17. Carried: govulncheck is NOT installed on this host — Task 22 (final gate) will need
+  `go install golang.org/x/vuln/cmd/govulncheck@v1.7.0` AND the pinned bin first on PATH, because the new
+  gofmt-identity check fails on the distro gofmt (`/usr/lib/go-1.22/bin/gofmt`): from the repo root,
+  `export PATH="$(go env GOROOT)/bin:$PATH"` then re-run. The runbook Task-17 checkbox remains unticked
+  (runbook not in this task's allowed files) — tick it in a task whose allowed list includes the runbook,
+  or at Task 22.
+- Full release gate stays gated behind Task 22 and a clean worktree (never run during a task).
+
+**Next action**
+- Fresh Pi session: runbook **Task 18 (M-11 — private unique smoke captures)**: confirm branch
+  `fix/v0.1.1-audit-remediation` + clean status, read the two Python smoke scripts/tests + M-11, then
+  follow the Task-18 block.
