@@ -2857,3 +2857,103 @@ in context budget`), docs commit follows this entry. Worktree clean, all gates e
 - Fresh Pi session: runbook **Task 10 (M-03 — reject stale model and host responses)** (needs runtime
   reproduction): confirm branch `fix/v0.1.1-audit-remediation` + clean status, then follow the Task-10 block.
   Do not run `make smoke` until the owner runs it on a disposable model/tag or an isolated Ollama store.
+### 2026-09-05 — Runbook Task 10: M-03 reject stale model/host responses (owner task)
+**Milestone:** `SelfTUI-Pi-Audit-Remediation-Runbook-2026-09-04.md` Task 10 (M-03 — reject stale model and
+host responses). No §10 row to tick (runbook-owned step). **Result:** done — red-green on branch
+`fix/v0.1.1-audit-remediation`; code commit follows this entry, docs commit after it. Worktree clean, all
+gates exit 0. `make smoke` NOT run (owner-run on a disposable model/tag or an isolated Ollama store —
+unchanged by this task).
+
+**Context (what M-03 actually was)**
+- `ModelsView.showCmd(name)` captured a name but the completion handlers (`modelsShowMsg`/
+  `modelsShowErrMsg`) applied results unconditionally, and the side-by-side auto-inspect branch suppressed a
+  new request while `loadingShow` was true (`models_view.go`). So rapid A→B navigation could show A's detail
+  under selected B and nothing ever fetched B. `ApplyClient` (host/token save) started a fresh load without
+  invalidating the old host's in-flight list/show results, so a slow old host could overwrite the newly
+  configured host's state. The Agent view's model-list reload had the same unversioned shape
+  (`agentModelsLoadedMsg` applied blindly after an `ApplyConfig(reload=true)` host swap).
+- Fix contracts: **client generation** (monotonic, bumped on client replacement — `ApplyClient` for Models,
+  `ApplyConfig(..., reload=true)` for Agent) stamps every async list/show result; a completion whose
+  generation differs from the view's current one is dropped (old-host results can never replace new-host
+  state). **Request ids** (`showReq`, monotonic per ModelsView) + a `showTarget` + a cancellable
+  `showCancel` give each detail fetch an identity: a selection change during a load replaces the in-flight
+  request (cancel + bump) instead of suppressing the fetch, and a superseded or wrong-model completion is
+  dropped. **All model mutation stays on the Bubble Tea update loop** — commands only read the view copy and
+  stamp ids; they never write state.
+
+**Reproduction (RED, current code — controlled completion order, no timing races)**
+- `TestModelsViewStaleShowCannotReplaceNewerSelection` (wide side-by-side): auto-inspect of qwen3:8b (A)
+  captured in flight, selection moved to gemma3:12b (B) during the load, B's result delivered, then A's late
+  result — pre-fix the stale A detail landed under selected B: `M-03: stale "qwen3:8b" detail replaced the
+  newer selection "gemma3:12b": detailName="qwen3:8b" index=1` (models_view_test.go:904).
+- `TestModelsViewApplyClientRejectsOldHostResults`: old-host list fetch completed before `ApplyClient`; new
+  host's list landed first; the old host's late result replaced it: `M-03: old-host list result replaced the
+  new host's list after ApplyClient: [old-host-model]` (models_view_test.go:970).
+- `TestModelsViewApplyClientRejectsOldHostShow`: a detail fetch started against the old host completed after
+  `ApplyClient` and populated the pane: `M-03: old-host show result populated the pane after ApplyClient:
+  detailName="qwen3:8b"` (models_view_test.go:1010).
+- `TestAgentViewReloadRejectsObsoleteModelList`: obsolete pre-swap agent model list replaced the new host's
+  after `ApplyConfig(reload=true)`: `M-03: obsolete agent model list replaced the new host's after
+  ApplyConfig: models=[old-agent-model]` (agent_view_test.go:802).
+
+**Green (minimum fix, `internal/ui/models_view.go` + `internal/ui/agent_view.go`)**
+- Messages stamp their origin: `modelsLoadedMsg`/`modelsLoadErrMsg`/`agentModelsLoadedMsg`/
+  `agentModelsErrMsg` carry `gen` (client generation at issue); `modelsShowMsg`/`modelsShowErrMsg` carry
+  `gen` + `req` (request id). Update handlers drop generation mismatches before any state change; the Agent
+  view drops stale `agentModelsLoadedMsg`/`ErrMsg` the same way (no obsolete reload can reset `v.model`).
+- `requestShow` replaces the old `showCmd`: it cancels any in-flight show context, bumps `showReq`, records
+  `showTarget`, stores the cancellable ctx in `showCancel`, and returns a command that stamps gen+req.
+  `ApplyClient` bumps `clientGen`, cancels the pending show (`releaseShow`), and drops all detail state
+  before reloading; `onDeleteDone` also releases a pending show for the deleted model.
+- Completion applicability is `acceptShow`: current generation AND (for real results) `req == showReq` AND
+  the result names the currently selected model — so a stale or superseded detail can never repaint the pane
+  under a newer selection. Hand-built results without an id (req 0 — legacy deliveries, routing/render test
+  injection) are accepted only when the list is empty (no selection to protect) or when they name the pending
+  target. A dropped completion that answered the *latest* request releases the in-flight state so the pane
+  never dangles on "inspecting…".
+- Selection changes on the side-by-side layout now always request the newly selected model during a load
+  (replacing the in-flight fetch) instead of being suppressed by `loadingShow`; already-shown models are not
+  refetched (`detailName == name && detail != nil && !loadingShow`).
+- `ApplyConfig(cfg, c, reload=true)` bumps the Agent `clientGen` before clearing + refetching. Gen counters
+  start at 0 and all existing tests construct keyed literals without gen, so every legacy delivery still
+  applies unchanged (routing/envelope/golden/sanitize suites pass untouched; zero golden bytes changed).
+
+**Commands + exit codes**
+- Session guard: `git status --short` → empty · branch `fix/v0.1.1-audit-remediation` · HEAD `6d57e0f`.
+- Red: `go test -count=1 ./internal/ui -run 'TestModelsViewStaleShowCannotReplaceNewerSelection|
+  TestModelsViewApplyClientRejectsOldHostResults|TestModelsViewApplyClientRejectsOldHostShow|
+  TestAgentViewReloadRejectsObsoleteModelList'` → FAIL (4/4: stale A detail under B; old-host list and
+  show after ApplyClient; obsolete agent list after ApplyConfig).
+- Green: same focused run → ok 4/4 · `go test -count=1 ./internal/ui -run 'Test.*(Stale|Generation|Selection|
+  ApplyClient)'` → ok · `go test -count=1 ./internal/agent ./internal/ui` → ok (ui 4.9s) ·
+  `make check` → 0 (build + full suite + vet + gofmt clean) · `make race` → 0 (full suite, ui 9.9s) ·
+  `git diff --check` → clean. `make smoke`/`make smoke-model` NOT run (H-04 preflight unchanged). `git status
+  --short` after commits → empty.
+
+**Decisions / lines to respect**
+- Correctness layer = generation + request id on the message; cancellation of the obsolete HTTP context is
+  the optimization ("when practical"), layered on the same `showCancel` the loop owns. `loadCmd` keeps its
+  bounded 60s timeout (gen guard drops its late results); only show fetches are actively canceled on
+  replacement, because they are the frequent user-visible path.
+- Real completions (req ≠ 0) are applied only when they answer the latest request AND name the current
+  selection; req-0 (hand-built) results keep the legacy envelope/routing semantics the existing suite
+  depends on. A client replacement never mutates detail state from a stale completion — `ApplyClient` reset
+  the pane and only the new generation's own load/show results may repaint it.
+- Public message structs gained fields only (keyed literals compile unchanged); no signature change to
+  `loadCmd`/`Init`/`ApplyClient`/`ApplyConfig`; no render or golden text changed (byte-identical goldens).
+- Runbook item "a selection changed during loading eventually requests the latest model" is satisfied by
+  issuing the replacement at selection-change time (strictly stronger than waiting for the stale completion);
+  "after an inspection finishes, request the current selection if it differs from the completed name" is
+  covered by the same rule plus the drop-with-release backstop for completions whose model is no longer
+  selected.
+
+**Blockers / open decisions**
+- None for Task 10. Carried env note from Task 02/04: `make vuln` needs `$(go env GOPATH)/bin` on PATH.
+  Task 11 (M-04) moves transcript persistence off the update loop and will read the M-02/M-03 message-routing
+  vocabulary (`modelsEventMsg`/`agentEventMsg` envelopes, off-loop writers) when adding its recorder actor.
+
+**Next action**
+- Fresh Pi session: runbook **Task 11 (M-04 — move transcript persistence off the update loop)** (needs
+  latency reproduction): confirm branch `fix/v0.1.1-audit-remediation` + clean status, then follow the
+  Task-11 block. Do not run `make smoke` until the owner runs it on a disposable model/tag or an isolated
+  Ollama store.
