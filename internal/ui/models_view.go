@@ -164,7 +164,9 @@ func modelSummary(m ollama.Model) string {
 	if m.Quantization != "" {
 		parts = append(parts, m.Quantization)
 	}
-	return strings.Join(parts, " · ")
+	// List secondary rows and the picker summary render these remote values;
+	// sanitize the joined display string (H-05).
+	return sanitizeTerminalText(strings.Join(parts, " · "))
 }
 
 // --- messages -------------------------------------------------------------
@@ -323,20 +325,21 @@ func (v ModelsView) Update(msg tea.Msg) (ModelsView, tea.Cmd) {
 
 	case modelsLoadErrMsg:
 		v.loading = false
-		v.listErr = msg.err
+		v.listErr = sanitizeTerminalText(msg.err)
 		v.notice = ""
 		return v, nil
 
 	case modelsShowMsg:
-		v.detail = &msg.details
-		v.detailName = msg.name
+		d := sanitizeDetails(msg.details) // H-05: remote /api/show payload
+		v.detail = &d
+		v.detailName = sanitizeTerminalText(msg.name)
 		v.detailErr = ""
 		v.loadingShow = false
 		v.scroll = 0
 		return v, nil
 
 	case modelsShowErrMsg:
-		v.detailErr = msg.err
+		v.detailErr = sanitizeTerminalText(msg.err)
 		v.loadingShow = false
 		return v, nil
 
@@ -374,6 +377,7 @@ func (v ModelsView) Update(msg tea.Msg) (ModelsView, tea.Cmd) {
 // onLoaded replaces the model list. On wide/medium-split layouts the inspect
 // pane is always visible, so the first model is inspected immediately.
 func (v ModelsView) onLoaded(models []ollama.Model) (ModelsView, tea.Cmd) {
+	models = sanitizeModelNames(models) // H-05: /api/tags names are remote
 	v.models = models
 	v.loading = false
 	v.listErr = ""
@@ -401,7 +405,7 @@ func (v ModelsView) onDeleteDone(m modelsDeleteDoneMsg) (ModelsView, tea.Cmd) {
 	v.deleting = false
 	if m.err != "" {
 		v.confirmDelete = true
-		v.deleteErr = m.err
+		v.deleteErr = sanitizeTerminalText(m.err) // remote DELETE error body
 		return v, nil
 	}
 	v.confirmDelete = false
@@ -418,7 +422,7 @@ func (v ModelsView) onDeleteDone(m modelsDeleteDoneMsg) (ModelsView, tea.Cmd) {
 // activity command. A new layer digest resets the progress numbers.
 func (v ModelsView) onPullProgress(m modelsPullMsg) (ModelsView, tea.Cmd) {
 	p := m.progress
-	v.pullStatus = p.Status
+	v.pullStatus = sanitizeTerminalText(p.Status) // remote pull status text
 	if p.Digest != "" {
 		if p.Digest != v.pullDigest {
 			v.pullDigest = p.Digest
@@ -436,7 +440,7 @@ func (v ModelsView) onPullDone(m modelsPullDoneMsg) (ModelsView, tea.Cmd) {
 	v.pullCh = nil
 	v.pullCancel = nil
 	if m.err != "" {
-		v.pullErr = m.err
+		v.pullErr = sanitizeTerminalText(m.err) // remote pull error body
 		return v, nil
 	}
 	v.notice = "pulled " + m.name

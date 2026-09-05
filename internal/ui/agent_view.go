@@ -324,7 +324,7 @@ func (v AgentView) Update(msg tea.Msg) (AgentView, tea.Cmd) {
 
 	case agentModelsErrMsg:
 		v.loading = false
-		v.modelsErr = msg.err
+		v.modelsErr = sanitizeTerminalText(msg.err)
 		return v, nil
 
 	case agentTokenMsg: // retained for focused M2/UI tests
@@ -343,7 +343,9 @@ func (v AgentView) Update(msg tea.Msg) (AgentView, tea.Cmd) {
 
 	case agent.ToolStartMsg:
 		if v.streaming {
-			v.toolStatus = "⚙ " + msg.Name + " " + msg.Input
+			// The tool name and its argument JSON come from the remote model's
+			// tool call; sanitize before the statusline shows them (H-05).
+			v.toolStatus = sanitizeTerminalText("⚙ " + msg.Name + " " + msg.Input)
 		}
 		return v, v.waitChatCmd()
 
@@ -353,16 +355,22 @@ func (v AgentView) Update(msg tea.Msg) (AgentView, tea.Cmd) {
 			if !msg.OK {
 				prefix = "⚠ "
 			}
-			v.toolStatus = prefix + msg.Name + ": " + firstLine(msg.Summary)
+			// Summary can carry bytes read from the workspace at a hostile
+			// model's request; sanitize the composed status row as one value.
+			v.toolStatus = sanitizeTerminalText(prefix + msg.Name + ": " + firstLine(msg.Summary))
 		}
 		return v, v.waitChatCmd()
 
 	case agent.ToolConfirmMsg:
+		// The confirmation overlay echoes the remote tool name and input;
+		// sanitize this display copy (the runner keeps its own raw copy).
+		msg.Name = sanitizeTerminalText(msg.Name)
+		msg.Input = sanitizeTerminalText(msg.Input)
 		v.confirmation = &msg
 		return v, v.waitChatCmd()
 
 	case agent.FallbackMsg:
-		v.notice = msg.Reason
+		v.notice = sanitizeTerminalText(msg.Reason)
 		return v, v.waitChatCmd()
 
 	case agentDoneMsg:
@@ -385,6 +393,10 @@ func (v AgentView) Update(msg tea.Msg) (AgentView, tea.Cmd) {
 // installed, otherwise the first entry (PLAN §5: "first /api/tags entry at
 // runtime when empty"). An existing selection survives a refresh.
 func (v AgentView) onModelsLoaded(models []ollama.Model) (AgentView, tea.Cmd) {
+	// Model names come from the remote /api/tags host; sanitize them as they
+	// are stored so headers, the picker, notices, and the chat request all
+	// carry one clean representation (H-05).
+	models = sanitizeModelNames(models)
 	v.models = models
 	v.loading = false
 	v.modelsErr = ""
@@ -435,7 +447,9 @@ func (v AgentView) onChatDone(m agentDoneMsg) (AgentView, tea.Cmd) {
 	v.confirmation = nil
 
 	if v.streamText != "" {
-		meta := turnFooter(v.turnStart, m.reason, v.stopRequest)
+		// The Ollama done_reason on the done event is remote text rendered on
+		// the assistant header; sanitize it before it becomes turn meta.
+		meta := turnFooter(v.turnStart, sanitizeTerminalText(m.reason), v.stopRequest)
 		v.history = append(v.history, ollama.ChatMessage{Role: ollama.RoleAssistant, Content: v.streamText})
 		v.turnModel = append(v.turnModel, v.model)
 		v.turnMeta = append(v.turnMeta, meta)
@@ -448,7 +462,9 @@ func (v AgentView) onChatDone(m agentDoneMsg) (AgentView, tea.Cmd) {
 	case v.stopRequest:
 		v.notice = "stopped" // esc asked to stop, even if the stream just finished
 	case m.err != "":
-		v.chatErr = m.err
+		// The error body can come from the remote host; sanitize before the
+		// statusline renders it (H-05).
+		v.chatErr = sanitizeTerminalText(m.err)
 	default:
 		v.notice = ""
 	}
@@ -714,7 +730,10 @@ func (v AgentView) appendSessionTurn(role, model, content, meta string, at time.
 		}
 		v.session = sess
 	}
-	if err := v.session.Append(role, model, content, meta, at); err != nil {
+	// The transcript mirrors what the terminal shows, so committed content
+	// is sanitized the same way (the file can otherwise be re-opened in a
+	// terminal-paging editor where control bytes would execute).
+	if err := v.session.Append(role, model, sanitizeTerminalText(content), meta, at); err != nil {
 		v.session.Close()
 		v.session = nil
 		v.sessionErr = true
@@ -1162,6 +1181,13 @@ func (v AgentView) renderBlock(header, md string) string {
 		}
 		return header
 	}
+	// H-05 boundary: chat content (streamed tokens and committed turns, from
+	// either role) is the audit-cited leak site — glamour passes ESC payload
+	// bytes through its styled output, and the raw-markdown fallback below
+	// returns md verbatim. Sanitize before both so neither branch can carry
+	// a hostile sequence into the terminal; user text is local but harmless
+	// to strip here (display-only, idempotent).
+	md = sanitizeTerminalText(md)
 	v.ensureRenderer(maxInt(v.w-2, 1))
 	if v.tr != nil {
 		if out, err := v.tr.RenderBytes([]byte(md)); err == nil {
@@ -1188,6 +1214,12 @@ func (v AgentView) chatLines() []string {
 		block := v.history[i].Content
 		if i < len(v.render) && v.render[i] != "" {
 			block = v.render[i]
+		} else {
+			// H-05: never let raw (unsanitized) history reach the transcript.
+			// Production keeps the render cache in parallel with history, so
+			// this branch is a belt-and-suspenders guard for a cache gap; the
+			// cached branch was already sanitized by renderBlock.
+			block = sanitizeTerminalText(block)
 		}
 		if block == "" {
 			continue
