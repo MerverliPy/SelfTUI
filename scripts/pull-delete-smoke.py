@@ -17,6 +17,10 @@ Exit 0 only when, in order: the target was absent at start, the pull name
 input opens, the pull dialog renders (spinner/status/progress), the UI leaves
 the dialog with the model landed in /api/tags, delete confirm renders naming
 the model, and the model leaves /api/tags after `y`.
+
+Capture: the full TUI capture is written to a fresh private unique 0700 temp
+dir as one exclusive 0600 file. It is retained on failure (its exact path is
+printed) and removed after a successful run unless SMOKE_KEEP_CAPTURE=1.
 """
 import fcntl
 import json
@@ -27,17 +31,28 @@ import select
 import struct
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.request
 
-# Import-safe defaults: argv and SMOKE_* are read inside main() only, never
-# at import time, so scripts/pull_delete_smoke_test.py can exec_module() and
-# drive every function through unittest.mock fakes.
+# Import-safe defaults: argv, SMOKE_*, and the capture location are read or
+# created inside main() only — never at import time — so
+# scripts/pull_delete_smoke_test.py can exec_module() and drive every
+# function through unittest.mock fakes.
 MODEL = "qwen3:0.6b"
-LOG = "/tmp/selftui-smoke.log"
 
 out = bytearray()
 seen = ""
+
+# M-11: private unique capture. The run's TUI capture lives in a fresh
+# unique 0700 temp dir as one exclusive 0600 file, created only when a
+# capture is retained (failure) or explicitly kept — never at a fixed /tmp
+# path, so a symlink pre-placed at the old /tmp/selftui-smoke.log can never
+# be followed or overwritten. SMOKE_KEEP_CAPTURE=1 retains the capture
+# after a successful run.
+CAPTURE_PREFIX = "selftui-pull-delete-smoke-"
+capture_dir = None
+capture_path = None
 
 
 def api_delete(name):
@@ -110,10 +125,55 @@ def wait_for(fd, pattern, timeout, step=0.25):
     return False
 
 
+def keep_capture():
+    """True when SMOKE_KEEP_CAPTURE=1 — retain the capture after a pass."""
+    return os.environ.get("SMOKE_KEEP_CAPTURE") == "1"
+
+
+def open_capture():
+    """Create (once) the run's private unique capture location.
+
+    Returns the capture path: a fresh 0700 temp dir (mkdtemp) holding one
+    freshly created exclusive 0600 file (mkstemp opens with O_CREAT|O_EXCL
+    and pins 0600). The path is never derived from a fixed caller-visible
+    path, so nothing pre-placed at an old /tmp capture path can be opened.
+    """
+    global capture_dir, capture_path
+    if capture_path is None:
+        capture_dir = tempfile.mkdtemp(prefix=CAPTURE_PREFIX)
+        fd, capture_path = tempfile.mkstemp(prefix="capture-", dir=capture_dir)
+        os.close(fd)
+    return capture_path
+
+
+def write_capture(text):
+    """Persist `text` into the run's capture file; returns its path."""
+    path = open_capture()
+    with open(path, "w") as f:
+        f.write(text)
+    return path
+
+
+def discard_capture():
+    """Remove the run's capture file and its private dir (best effort)."""
+    global capture_dir, capture_path
+    if capture_path is not None:
+        try:
+            os.unlink(capture_path)
+        except OSError:
+            pass
+        capture_path = None
+    if capture_dir is not None:
+        try:
+            os.rmdir(capture_dir)
+        except OSError:
+            pass
+        capture_dir = None
+
+
 def fail(msg):
-    with open(LOG, "w") as f:
-        f.write(seen)
-    print(f"SMOKE FAIL: {msg} (capture: {LOG})")
+    path = write_capture(seen)
+    print(f"SMOKE FAIL: {msg} (capture: {path})")
     sys.exit(1)
 
 
@@ -233,10 +293,14 @@ def main(argv=None):
             proc.kill()
             fail("app did not exit on ctrl+c")
 
-        with open(LOG, "w") as f:
-            f.write(seen)
+        kept = None
+        if keep_capture():
+            kept = write_capture(seen)
+        else:
+            discard_capture()
+        cap = f"; capture: {kept})" if kept else ")"
         print(f"SMOKE PASS in {time.time()-started:.0f}s (progress bar evidence: {progress_seen}, "
-              f"deleted-notice seen: {deleted_seen}; capture: {LOG})")
+              f"deleted-notice seen: {deleted_seen}{cap}")
     finally:
         if proc is not None and proc.poll() is None:
             proc.kill()

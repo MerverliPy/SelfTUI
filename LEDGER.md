@@ -3793,3 +3793,114 @@ harness RED 41 fails/11 ok against the pre-fix script, GREEN 52/52 after the fix
 - Fresh Pi session: runbook **Task 18 (M-11 — private unique smoke captures)**: confirm branch
   `fix/v0.1.1-audit-remediation` + clean status, read the two Python smoke scripts/tests + M-11, then
   follow the Task-18 block.
+
+### 2026-09-05 — Runbook Task 18: M-11 private unique smoke captures (owner task)
+**Milestone:** `SelfTUI-Pi-Audit-Remediation-Runbook-2026-09-04.md` Task 18 (M-11). No §10 row to tick
+(runbook-owned step; the runbook file is not in this task's allowed-files list — the runbook Task-18
+checkbox stays unticked, per the Task-17 precedent, until a task allowed to touch it or Task 22).
+**Result:** done — red-green on branch `fix/v0.1.1-audit-remediation`; new tests RED 5 failures + 4
+errors against the fixed-path code, GREEN 13/13 after the refactor; commit `fix(smoke): store captures
+in private temp paths` (see below). Worktree clean after commit.
+
+**Context (what M-11 actually was)**
+- Audit evidence: `scripts/pull-delete-smoke.py` wrote the full TUI capture to `/tmp/selftui-smoke.log`
+  with `open(..., "w")` on failure and on success; `scripts/reconnect-smoke.py` did the same at
+  `/tmp/selftui-reconnect.log`. A same-user process can pre-place a symlink at those fixed paths, so an
+  ordinary `open(w)` truncates/overwrites the symlink's target; normal umasks expose prompts/output.
+  (Host proof: under this host's umask 0002 a legacy `open(w)` capture is 0664 — group-readable.)
+- Suggested fix (audit §M-11 + runbook Task 18): unique 0700 temp dir + exclusive 0600 capture file;
+  never follow a caller-controlled fixed symlink; retain on failure (print the exact path); remove on
+  success by default unless an explicit keep-capture env var is set.
+
+**Work done (red-green, per the Task-18 contract)**
+1. **`scripts/pull_delete_smoke_test.py` updated + `scripts/reconnect_smoke_test.py` created** (13 tests
+   total: the 4 H-04 safety tests preserved unchanged in meaning, plus 9 new M-11 tests — both test
+   files drive `main()` through `unittest.mock` fakes, never touching a live host or a pty). New tests
+   are observable-behavior based: (a) pre-place a symlink at the old fixed `/tmp` capture path pointing
+   at a canary file and prove the run never opens/modifies it and never replaces the symlink; (b) a
+   retained capture is an exclusive 0600 file inside a fresh 0700 temp dir, never the old fixed path,
+   and two consecutive runs get distinct dirs; (c) failure retains the capture and prints its exact
+   path; (d) success removes it by default and prints no capture path; (e) `SMOKE_KEEP_CAPTURE=1`
+   retains it on success and the printed path exists. Reconnect tests additionally drive main() end to
+   end with scripted FakeApp sessions (drop rc -1 / quit rc per case, deterministic FakeClock, fake
+   /api/tags + short_generation) and assert scratch config/state cleanup semantics.
+2. **`scripts/pull-delete-smoke.py`** — removed the fixed `LOG`; added module-level capture state plus
+   `keep_capture()`/`open_capture()`/`write_capture()`/`discard_capture()`; `fail()` writes the run
+   capture and prints its exact path; the success path writes+keeps only when `SMOKE_KEEP_CAPTURE=1`,
+   otherwise discards. The capture dir/file are created lazily at first retained write
+   (`tempfile.mkdtemp` = fresh unique 0700 dir; `tempfile.mkstemp(dir=...)` = O_CREAT|O_EXCL exclusive
+   0600 file, both umask-proof). Nothing derives from a fixed path, so a pre-placed symlink at the old
+   path can never be opened. Still fully import-safe (no argv/env/fs work at import).
+3. **`scripts/reconnect-smoke.py`** — same M-11 model applied to the whole run: `main()` now creates one
+   fresh 0700 scratch dir (lazily, at run start — **no more mkdtemp at import time**) holding the scratch
+   `config.toml`, the hermetic XDG `state/` dir, and one exclusive 0600 `capture-*` file
+   (`open_scratch()`/`write_capture()`/`discard_scratch()`). `fail()` always retains the capture and
+   prints its exact path (an empty capture when no text was passed, instead of omitting the path);
+   success removes the whole private scratch by default, or keeps scratch + capture and prints the
+   paths when `SMOKE_KEEP_CAPTURE=1`. App's `XDG_STATE_HOME` now reads the module `state_dir` set by
+   `main()`; `open(logfile)` became a context-managed read (removes a pre-existing unclosed-file
+   ResourceWarning the new tests would otherwise surface under `-W error::ResourceWarning`).
+
+**RED evidence (new tests against the pre-fix fixed-path code)**
+- pull-delete: symlink test FAILED — `b'' != b'canary-payload'` (the script followed
+  `/tmp/selftui-smoke.log` → truncated the canary); capture path still equaled `/tmp/selftui-smoke.log`
+  (not 0600/not unique/not 0700-dir) across consecutive runs; success runs still advertised
+  `capture: /tmp/selftui-smoke.log` (never removed; 0664 under umask 0002).
+- reconnect: all four new tests ERRORed on `module has no attribute 'state_dir'`/capture plumbing —
+  the pre-fix module created its scratch at import and had no run capture state; the symlink canary
+  truncation path was exercised by the fixed-path `open(w)` in `fail()`/success.
+- 4/4 H-04 safety tests stayed green pre-fix (behavior preserved).
+
+**GREEN evidence**
+- `python3 -W error::ResourceWarning -m unittest -v scripts/pull_delete_smoke_test.py
+  scripts/reconnect_smoke_test.py` → `OK (13 tests)`, exit 0 — symlink canary untouched (both scripts),
+  distinct 0700 dirs + 0600 exclusive files, retention/print on failure, removal by default on success,
+  keep via `SMOKE_KEEP_CAPTURE=1`, reconnect scratch cleaned predictably.
+- `python3 -m py_compile scripts/pull-delete-smoke.py scripts/reconnect-smoke.py
+  scripts/pull_delete_smoke_test.py scripts/reconnect_smoke_test.py` → 0.
+- `make check` → 0 (build + full Go suite + vet + gofmt). No Go files changed.
+- `git diff --check` → clean. `/tmp` had no `selftui-*` leftovers after the suite.
+
+**Commands + exit codes**
+- Session guard: `git status --short` → empty · branch `fix/v0.1.1-audit-remediation` · HEAD `58687f9`
+  (Task 17 commit). Host facts: `umask` → 0002; `tempfile.mkdtemp` mode 0700 / `mkstemp` mode 0600 /
+  legacy `open(w)` mode 0664 (probe script, all verified).
+- RED: `python3 -m unittest scripts/pull_delete_smoke_test.py scripts/reconnect_smoke_test.py` → exit 1
+  (failures=5, errors=4; 13 run) — full per-test list recorded above.
+- GREEN: the `-W error::ResourceWarning` unittest command → 0 (13/13) · `py_compile` → 0 · `make check`
+  → 0 · `git diff --check` → clean.
+- Commit: `git add scripts/pull-delete-smoke.py scripts/pull_delete_smoke_test.py scripts/reconnect-smoke.py
+  scripts/reconnect_smoke_test.py README.md LEDGER.md` → `git commit -m "fix(smoke): store captures in
+  private temp paths"` → 0; post-commit `git status --short` → clean.
+- `make smoke`/`make smoke-model`/`make smoke-reconnect` NOT run (owner-run live smokes); full
+  `VERSION=… make release-check` NOT run (Task 22 + clean worktree, per the runbook).
+
+**Decisions / lines to respect**
+- Both smoke scripts stay standalone (stdlib only) — no shared helper module (not in the allowed-file
+  list); the capture helpers are duplicated per script with one consistent contract.
+- Capture contract: fresh unique 0700 dir per run (`mkdtemp`) + one exclusive 0600 file (`mkstemp`
+  opens O_CREAT|O_EXCL and pins 0600); the path is never derived from a fixed caller-visible path.
+  pull-delete creates it lazily on the first retained write; reconnect reserves it at run start inside
+  the scratch dir it already needs for config/state (no extra dir per run).
+- Retention: failure always retains the capture (and, for reconnect, the whole scratch evidence dir)
+  and prints the exact capture path; success removes by default and prints no path; `SMOKE_KEEP_CAPTURE=1`
+  retains + prints on success too. Reconnect's `fail(msg)` without session text now retains an empty
+  capture at a printed path (uniform with pull-delete) instead of printing no path.
+- Reconnect scratch moved from import-time to `main()` start → `exec_module()`-based unit tests create
+  nothing at import; scratch cleanup is predictable: removed after a pass (default), retained on failure.
+- H-04 semantics untouched: the existing four safety tests pass unchanged (state-capture-first, abort on
+  pre-existing target, cleanup only of a provably created model).
+- README documents the new capture behavior (allowed: "if capture behavior is documented"): smoke
+  evidence lives in a private unique 0700/0600 temp location, retained on failure / removed on success
+  unless `SMOKE_KEEP_CAPTURE=1`.
+
+**Blockers / open decisions**
+- None for Task 18. Carried from Task 17: govulncheck is NOT installed — Task 22 (final gate) needs
+  `go install golang.org/x/vuln/cmd/govulncheck@v1.7.0` AND the pinned bin first on PATH
+  (`export PATH="$(go env GOROOT)/bin:$PATH"`). Runbook Task-18 checkbox stays unticked (runbook not in
+  this task's allowed list) — tick it at Task 22 or in a task whose allowed files include the runbook.
+
+**Next action**
+- Fresh Pi session: runbook **Task 19 (M-12 — SECURITY/README/CHANGELOG/PLAN alignment)**. Confirm
+  branch `fix/v0.1.1-audit-remediation` + clean status, then follow the Task-19 block. Do not run
+  `make smoke` (owner-run) or the full release-check (Task 22).

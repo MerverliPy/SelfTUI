@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Unit tests for scripts/pull-delete-smoke.py (H-04 non-destructive smoke).
+"""Unit tests for scripts/pull-delete-smoke.py (H-04 non-destructive smoke,
+M-11 private unique captures).
 
 Fake-host tests drive the script with the Ollama HTTP surface (/api/tags and
 /api/delete) and the pty/TUI machinery replaced by fakes, so no live host and
@@ -11,6 +12,15 @@ no pty are ever touched. They pin the H-04 contract:
   * cleanup deletes a model only after this run provably created it —
     including failure cleanup — and never a pre-existing one.
 
+and the M-11 capture contract:
+
+  * the run's capture lives in a fresh unique private temp directory (0700)
+    as one exclusive 0600 file — never the old fixed /tmp/selftui-smoke.log,
+    so a pre-placed symlink at that path is never followed;
+  * a failed run retains the capture and prints its exact path;
+  * a successful run removes the capture by default, or retains it (path
+    printed) when SMOKE_KEEP_CAPTURE=1.
+
 Only the Python standard library is used. Run from the repository root:
 
     python3 -m unittest -v scripts/pull_delete_smoke_test.py
@@ -19,6 +29,7 @@ import contextlib
 import importlib.util
 import io
 import os
+import re
 import sys
 import tempfile
 import unittest
@@ -27,6 +38,10 @@ from unittest import mock
 HERE = os.path.dirname(os.path.abspath(__file__))
 SMOKE_PATH = os.path.join(HERE, "pull-delete-smoke.py")
 TEST_MODEL = "h04:fake-target"
+# The old fixed capture path (M-11 finding): scripts used to write the full
+# TUI capture here with an ordinary open(..., "w").
+OLD_LOG = "/tmp/selftui-smoke.log"
+CAPTURE_RE = re.compile(r"capture: ([^)\s]+)\)")
 
 
 def load_smoke():
@@ -96,30 +111,60 @@ class FakeClock:
         self.now += 0.25
 
 
+@contextlib.contextmanager
+def keep_capture_env(keep):
+    """Set (or clear) SMOKE_KEEP_CAPTURE for the duration of the run and
+    restore the caller's environment afterwards."""
+    previous = os.environ.get("SMOKE_KEEP_CAPTURE")
+    try:
+        if keep:
+            os.environ["SMOKE_KEEP_CAPTURE"] = "1"
+        else:
+            os.environ.pop("SMOKE_KEEP_CAPTURE", None)
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop("SMOKE_KEEP_CAPTURE", None)
+        else:
+            os.environ["SMOKE_KEEP_CAPTURE"] = previous
+
+
+def cleanup_module_capture(module):
+    """Remove the capture dir/file a failed (or kept) run retained, so unit
+    runs leave no /tmp litter. A no-op for modules without capture state
+    (e.g. the pre-fix fixed-path code)."""
+    path = getattr(module, "capture_path", None)
+    directory = getattr(module, "capture_dir", None)
+    if path:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+    if directory:
+        try:
+            os.rmdir(directory)
+        except OSError:
+            pass
+
+
 class SmokeSafetyTest(unittest.TestCase):
-    def setUp(self):
-        self.smoke = load_smoke()
-        self.stdout = io.StringIO()
-        fd, self.log_path = tempfile.mkstemp(prefix="pull-delete-smoke-test-")
-        os.close(fd)
+    def run_main(self, host, wait_for_value=True, refuse_pty=False,
+                 keep_capture=False):
+        """Load a fresh module and run smoke.main() with every host + pty
+        surface faked and SMOKE_KEEP_CAPTURE under test control.
 
-    def tearDown(self):
-        if os.path.exists(self.log_path):
-            os.unlink(self.log_path)
-
-    def run_main(self, host, wait_for_value=True, refuse_pty=False):
-        """Run smoke.main() with every host + pty surface faked.
-
-        Returns (exit_code_or_None, host, printed_text). A SystemExit is
-        caught and its code returned; a normal return yields None.
+        Returns (module, exit_code_or_None, host, printed_text). A SystemExit
+        is caught and its code returned; a normal return yields None. Any
+        capture the run retained is removed after the test.
         """
+        smoke = load_smoke()
+        stdout = io.StringIO()
         patchers = [
-            mock.patch.object(self.smoke, "tags", host.tags),
-            mock.patch.object(self.smoke, "api_delete", host.delete),
-            mock.patch.object(self.smoke, "MODEL", TEST_MODEL),
-            mock.patch.object(self.smoke, "LOG", self.log_path),
-            mock.patch.object(self.smoke, "wait_for", return_value=wait_for_value),
-            mock.patch.object(self.smoke, "pump"),
+            mock.patch.object(smoke, "tags", host.tags),
+            mock.patch.object(smoke, "api_delete", host.delete),
+            mock.patch.object(smoke, "MODEL", TEST_MODEL),
+            mock.patch.object(smoke, "wait_for", return_value=wait_for_value),
+            mock.patch.object(smoke, "pump"),
         ]
         if refuse_pty:
             def never(*_a, **_k):
@@ -127,33 +172,52 @@ class SmokeSafetyTest(unittest.TestCase):
                     "pty/TUI machinery reached though the run must abort before "
                     "any pull or TUI action")
             patchers += [
-                mock.patch.object(self.smoke.pty, "openpty", side_effect=never),
-                mock.patch.object(self.smoke.subprocess, "Popen", side_effect=never),
+                mock.patch.object(smoke.pty, "openpty", side_effect=never),
+                mock.patch.object(smoke.subprocess, "Popen", side_effect=never),
             ]
         else:
             clock = FakeClock()
             proc = FakeProc()
-            self.proc = proc
             patchers += [
-                mock.patch.object(self.smoke.pty, "openpty", return_value=(1234, 1235)),
-                mock.patch.object(self.smoke.fcntl, "ioctl"),
-                mock.patch.object(self.smoke.os, "write"),
-                mock.patch.object(self.smoke.os, "read", return_value=b""),
-                mock.patch.object(self.smoke.os, "close"),
-                mock.patch.object(self.smoke.subprocess, "Popen", return_value=proc),
-                mock.patch.object(self.smoke.time, "time", clock.time),
-                mock.patch.object(self.smoke.time, "sleep", clock.sleep),
+                mock.patch.object(smoke.pty, "openpty", return_value=(1234, 1235)),
+                mock.patch.object(smoke.fcntl, "ioctl"),
+                mock.patch.object(smoke.os, "write"),
+                mock.patch.object(smoke.os, "read", return_value=b""),
+                mock.patch.object(smoke.os, "close"),
+                mock.patch.object(smoke.subprocess, "Popen", return_value=proc),
+                mock.patch.object(smoke.time, "time", clock.time),
+                mock.patch.object(smoke.time, "sleep", clock.sleep),
             ]
         with contextlib.ExitStack() as stack:
             for patcher in patchers:
                 stack.enter_context(patcher)
-            with mock.patch.object(sys, "stdout", self.stdout):
-                try:
-                    self.smoke.main()
-                    code = None
-                except SystemExit as exc:  # fail() exits 1
-                    code = exc.code
-        return code, host, self.stdout.getvalue()
+            with keep_capture_env(keep_capture):
+                with mock.patch.object(sys, "stdout", stdout):
+                    try:
+                        smoke.main()
+                        code = None
+                    except SystemExit as exc:  # fail() exits 1
+                        code = exc.code
+        self.addCleanup(cleanup_module_capture, smoke)
+        return smoke, code, host, stdout.getvalue()
+
+    def capture_path(self, printed):
+        """The exact capture path the run printed (None when it printed none)."""
+        match = CAPTURE_RE.search(printed)
+        return match.group(1) if match else None
+
+    def assert_private_capture(self, path):
+        """A retained capture must be an exclusive 0600 file inside a 0700
+        temp dir that is not the old fixed /tmp path."""
+        self.assertIsNotNone(path, "run must print its exact capture path")
+        self.assertNotEqual(path, OLD_LOG,
+                            "capture must not live at the old fixed /tmp path")
+        self.assertTrue(os.path.isfile(path), f"capture missing: {path}")
+        self.assertEqual(os.stat(path).st_mode & 0o777, 0o600,
+                         "capture file must be 0600")
+        parent = os.path.dirname(path)
+        self.assertEqual(os.stat(parent).st_mode & 0o777, 0o700,
+                         "capture dir must be 0700")
 
     # --- H-04: never mutate a pre-existing model --------------------------
 
@@ -161,7 +225,7 @@ class SmokeSafetyTest(unittest.TestCase):
         # The fake host already has the target installed on every /api/tags
         # call. Any api_delete, pty open, or Popen is an H-04 violation.
         host = FakeHost(lambda _call: [TEST_MODEL])
-        code, host, printed = self.run_main(host, refuse_pty=True)
+        _smoke, code, host, printed = self.run_main(host, refuse_pty=True)
 
         self.assertEqual(code, 1, "pre-existing target must exit nonzero")
         self.assertIn("already installed", printed)
@@ -177,7 +241,7 @@ class SmokeSafetyTest(unittest.TestCase):
         # Target never appears (the app fails to boot before the pull). The
         # run created nothing, so cleanup must delete nothing.
         host = FakeHost(lambda _call: [])
-        code, host, printed = self.run_main(host, wait_for_value=False)
+        _smoke, code, host, printed = self.run_main(host, wait_for_value=False)
 
         self.assertEqual(code, 1)
         self.assertIn("did not boot", printed)
@@ -194,7 +258,7 @@ class SmokeSafetyTest(unittest.TestCase):
             return [TEST_MODEL] if call >= 1 else []
 
         host = FakeHost(installed_after_first)
-        code, host, printed = self.run_main(host)
+        _smoke, code, host, printed = self.run_main(host)
 
         self.assertEqual(code, 1)
         self.assertEqual(host.deletes, [TEST_MODEL],
@@ -217,7 +281,7 @@ class SmokeSafetyTest(unittest.TestCase):
             return []
 
         host = FakeHost(lifecycle)
-        code, host, printed = self.run_main(host)
+        _smoke, code, host, printed = self.run_main(host)
 
         self.assertIsNone(code, "full run must exit 0 without SystemExit")
         self.assertIn("SMOKE PASS", printed)
@@ -227,6 +291,102 @@ class SmokeSafetyTest(unittest.TestCase):
         self.assertGreater(
             host.log.index(("delete", TEST_MODEL)), present_seen,
             "cleanup delete must follow creation observation")
+
+    # --- M-11: private unique 0600 captures, never the fixed /tmp path -----
+
+    def test_old_fixed_log_path_symlink_is_never_followed(self):
+        # A hostile/previous process pre-places a symlink at the old fixed
+        # capture path pointing at a canary file. The smoke must never open
+        # or modify it (an ordinary open(..., "w") through the symlink would
+        # truncate the canary).
+        fd, canary = tempfile.mkstemp(prefix="pull-delete-canary-")
+        os.write(fd, b"canary-payload")
+        os.close(fd)
+        try:
+            if os.path.lexists(OLD_LOG):  # leftover from an earlier run
+                os.unlink(OLD_LOG)
+            os.symlink(canary, OLD_LOG)
+            host = FakeHost(lambda _call: [])
+            _smoke, code, _host, printed = self.run_main(
+                host, wait_for_value=False)  # boot failure writes a capture
+            self.assertEqual(code, 1)
+            with open(canary, "rb") as f:
+                self.assertEqual(
+                    f.read(), b"canary-payload",
+                    "the smoke followed the old fixed capture symlink and "
+                    "modified its target")
+            self.assertTrue(os.path.islink(OLD_LOG),
+                            "the old fixed capture path was replaced")
+        finally:
+            if os.path.islink(OLD_LOG):
+                os.unlink(OLD_LOG)
+            if os.path.exists(canary):
+                os.unlink(canary)
+
+    def test_failure_retains_private_capture_and_prints_exact_path(self):
+        host = FakeHost(lambda _call: [])
+        smoke, code, host, printed = self.run_main(host, wait_for_value=False)
+
+        self.assertEqual(code, 1)
+        self.assertIn("SMOKE FAIL", printed)
+        self.assert_private_capture(self.capture_path(printed))
+        # The retained capture is discoverable at the printed path.
+        self.assertTrue(os.path.exists(self.capture_path(printed)))
+
+    def test_consecutive_runs_get_distinct_capture_dirs(self):
+        # Every run must capture into its own private unique temp dir; two
+        # runs may never collide on one shared path.
+        paths = []
+        for _ in range(2):
+            host = FakeHost(lambda _call: [])
+            smoke, code, _host, printed = self.run_main(
+                host, wait_for_value=False)
+            self.assertEqual(code, 1)
+            path = self.capture_path(printed)
+            self.assert_private_capture(path)
+            paths.append(path)
+        self.assertNotEqual(paths[0], paths[1],
+                            "consecutive runs must use distinct capture dirs")
+
+    def test_success_removes_capture_by_default(self):
+        # Absent at start -> present after pull -> removed through the TUI.
+        def lifecycle(call):
+            if call == 0:
+                return []
+            if call == 1:
+                return [TEST_MODEL]
+            return []
+
+        host = FakeHost(lifecycle)
+        smoke, code, host, printed = self.run_main(host)
+
+        self.assertIsNone(code, "full run must exit 0 without SystemExit")
+        self.assertIn("SMOKE PASS", printed)
+        self.assertNotIn("capture:", printed,
+                         "a successful run must not advertise a removed "
+                         "capture path")
+        # Nothing may persist from the run.
+        self.assertIsNone(smoke.capture_path,
+                          "capture must be removed after a successful run")
+        self.assertIsNone(smoke.capture_dir)
+
+    def test_success_keeps_capture_when_env_set(self):
+        # Absent at start -> present after pull -> removed through the TUI.
+        def lifecycle(call):
+            if call == 0:
+                return []
+            if call == 1:
+                return [TEST_MODEL]
+            return []
+
+        host = FakeHost(lifecycle)
+        smoke, code, host, printed = self.run_main(host, keep_capture=True)
+
+        self.assertIsNone(code, "full run must exit 0 without SystemExit")
+        self.assertIn("SMOKE PASS", printed)
+        self.assert_private_capture(self.capture_path(printed))
+        # Retained capture actually exists at the printed path.
+        self.assertTrue(os.path.exists(smoke.capture_path))
 
 
 if __name__ == "__main__":

@@ -286,6 +286,11 @@ installed** (it never deletes a model the run did not create). Use a
 disposable model/tag — `make smoke-model MODEL=<name>` to override — or run
 against an isolated Ollama store.
 
+Smoke evidence never lands at a fixed public path: each run writes its TUI
+capture into a private unique temp dir (`0700` dir, exclusive `0600` file),
+retaining it on failure (its exact path is printed) and removing it after a
+successful run unless `SMOKE_KEEP_CAPTURE=1` keeps it.
+
 The layout reference geometry was measured on the real client (Moshi on an
 iPhone 16 Pro, portrait, default font): **72 columns × 30 rows** — see
 `docs/m0a-gate-evidence.md`. Golden render tests enforce this exact frame.
@@ -364,7 +369,9 @@ not resumable). What survives a phone-side drop depends on the transport
   file from the dead process is still on disk.
 
 `make smoke-reconnect` exercises the plain-SSH path locally (SIGHUP on a
-mid-generation drop, host recovery, clean fresh reconnect).
+mid-generation drop, host recovery, clean fresh reconnect); its scratch
+config/state and capture live in the same kind of private unique temp dir
+and are removed after a pass unless `SMOKE_KEEP_CAPTURE=1`.
 
 ## Project docs
 

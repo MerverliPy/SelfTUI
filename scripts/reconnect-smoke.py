@@ -19,7 +19,10 @@ session + relaunch. Checks, in order:
      persistence across the reconnect;
   6. ctrl+c exits 0.
 
-Exit 0 only if every step passes. Capture: /tmp/selftui-reconnect.log
+Exit 0 only if every step passes. Each run keeps its scratch config/state and
+capture in a fresh private unique 0700 temp dir with one exclusive 0600
+capture file: the scratch is retained on failure (the exact capture path is
+printed) and removed after a successful run unless SMOKE_KEEP_CAPTURE=1.
 Usage: scripts/reconnect-smoke.py [model]  (default: smallest chat model).
 """
 import fcntl
@@ -28,6 +31,7 @@ import os
 import pty
 import re
 import select
+import shutil
 import signal
 import struct
 import subprocess
@@ -38,11 +42,18 @@ import time
 import urllib.request
 
 SIZE = (int(os.environ.get("SMOKE_COLS", "72")), int(os.environ.get("SMOKE_ROWS", "30")))
-LOG = "/tmp/selftui-reconnect.log"
-SCRATCH = tempfile.mkdtemp(prefix="selftui-reconnect-")
-CFG = os.path.join(SCRATCH, "config.toml")
-# Hermetic app log + probe evidence under the scratch dir.
-STATE = os.path.join(SCRATCH, "state")
+
+# M-11: the whole run is private and unique, and nothing is created at
+# import time. main() makes one fresh 0700 scratch temp dir holding the
+# scratch config, the hermetic XDG state dir, and one exclusive 0600 capture
+# file — never a fixed /tmp path, so a symlink pre-placed at the old
+# /tmp/selftui-reconnect.log is never followed or overwritten. The scratch
+# is removed after a successful run unless SMOKE_KEEP_CAPTURE=1; a failed
+# run retains it and prints the exact capture path.
+CAPTURE_PREFIX = "selftui-reconnect-"
+scratch_dir = None
+state_dir = None
+capture_path = None
 
 
 def tags():
@@ -103,7 +114,7 @@ class App:
             fcntl.ioctl(0, termios.TIOCSCTTY, 0)
 
         env = dict(os.environ)
-        env["XDG_STATE_HOME"] = STATE
+        env["XDG_STATE_HOME"] = state_dir
         self.proc = subprocess.Popen(
             args, stdin=slave, stdout=slave, stderr=slave,
             close_fds=True, preexec_fn=session_leader, env=env)
@@ -160,25 +171,65 @@ class App:
             return self.proc.wait()
 
 
+def keep_capture():
+    """True when SMOKE_KEEP_CAPTURE=1 — retain scratch + capture after a pass."""
+    return os.environ.get("SMOKE_KEEP_CAPTURE") == "1"
+
+
+def open_scratch():
+    """Create (once) the run's private scratch + exclusive capture file.
+
+    Returns the scratch dir: a fresh 0700 temp dir (mkdtemp) holding the
+    XDG state dir and one freshly created exclusive 0600 capture file
+    (mkstemp opens with O_CREAT|O_EXCL and pins 0600). Nothing derives from
+    a fixed caller-visible path, so a symlink pre-placed at the old /tmp
+    capture path is never opened.
+    """
+    global scratch_dir, state_dir, capture_path
+    if scratch_dir is None:
+        scratch_dir = tempfile.mkdtemp(prefix=CAPTURE_PREFIX)
+        state_dir = os.path.join(scratch_dir, "state")
+        fd, capture_path = tempfile.mkstemp(prefix="capture-", dir=scratch_dir)
+        os.close(fd)
+    return scratch_dir
+
+
+def write_capture(text):
+    """Persist `text` into the run's capture file; returns its path."""
+    with open(capture_path, "w") as f:
+        f.write(text)
+    return capture_path
+
+
+def discard_scratch():
+    """Remove the run's scratch — config, state, capture (success default)."""
+    global scratch_dir, state_dir, capture_path
+    if scratch_dir is not None:
+        shutil.rmtree(scratch_dir, ignore_errors=True)
+        scratch_dir = None
+    state_dir = None
+    capture_path = None
+
+
 def fail(msg, capture=None):
-    if capture:
-        with open(LOG, "w") as f:
-            f.write(capture)
-    print(f"SMOKE FAIL: {msg}" + (f" (capture: {LOG})" if capture else ""))
+    path = write_capture(capture if capture is not None else "")
+    print(f"SMOKE FAIL: {msg} (capture: {path})")
     sys.exit(1)
 
 
 def main():
-    with open(CFG, "w") as f:
+    scratch = open_scratch()
+    cfg = os.path.join(scratch, "config.toml")
+    with open(cfg, "w") as f:
         f.write('theme = "light"\n')  # reconnect must re-apply the file config
 
     requested = sys.argv[1] if len(sys.argv) > 1 else ""
     model, err = pick_model(requested)
     if err:
         fail(err)
-    print(f"model: {model}  geometry: {SIZE[0]}x{SIZE[1]}  state dir: {STATE}")
+    print(f"model: {model}  geometry: {SIZE[0]}x{SIZE[1]}  state dir: {state_dir}")
 
-    args = ["./bin/selftui", "-config", CFG, "-default-model", model]
+    args = ["./bin/selftui", "-config", cfg, "-default-model", model]
 
     # --- 1. first session boots at 72x30, Models + geometry ---
     app = App(args)
@@ -258,9 +309,10 @@ def main():
 
     # config persistence evidence: the app log must carry both sessions with
     # the light theme applied from the scratch config file.
-    logfile = os.path.join(STATE, "selftui", "log.txt")
+    logfile = os.path.join(state_dir, "selftui", "log.txt")
     try:
-        lines = open(logfile).read().splitlines()
+        with open(logfile) as f:
+            lines = f.read().splitlines()
     except OSError as e:
         fail(f"app log not found ({e})")
     starts = [l for l in lines if "starting" in l]
@@ -268,10 +320,16 @@ def main():
         fail(f"expected >=2 app sessions in the log, found {len(starts)}")
     if not all("theme=light" in l for l in starts[-2:]):
         fail("reconnected session did not re-apply the light theme from the config file")
-    with open(LOG, "w") as f:
-        f.write(app.seen + "\n\n--- second session ---\n" + app2.seen)
-    print(f"SMOKE PASS in {time.time()-started:.0f}s "
-          f"(streamed-before-drop: {stream_started}; app log: {logfile}; capture: {LOG})")
+    combined = app.seen + "\n\n--- second session ---\n" + app2.seen
+    if keep_capture():
+        cap = write_capture(combined)
+        print(f"SMOKE PASS in {time.time()-started:.0f}s "
+              f"(streamed-before-drop: {stream_started}; app log: {logfile}; "
+              f"capture: {cap})")
+    else:
+        discard_scratch()
+        print(f"SMOKE PASS in {time.time()-started:.0f}s "
+              f"(streamed-before-drop: {stream_started})")
 
 
 if __name__ == "__main__":
