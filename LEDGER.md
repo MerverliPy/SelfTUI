@@ -2776,3 +2776,84 @@ disposable model/tag or an isolated Ollama store — unchanged by this task).
 - Fresh Pi session: runbook **Task 09 (M-02 — preserve atomic tool exchanges during context trimming)**:
   confirm branch `fix/v0.1.1-audit-remediation` + clean status, then follow the Task-09 block. Do not run
   `make smoke` until the owner runs it on a disposable model/tag or an isolated Ollama store.
+### 2026-09-05 — Runbook Task 09: M-02 protocol-safe atomic context budgeting (owner task)
+**Milestone:** `SelfTUI-Pi-Audit-Remediation-Runbook-2026-09-04.md` Task 09 (M-02 — preserve atomic tool
+exchanges during context trimming). No §10 row to tick (runbook-owned step). **Result:** done — red-green on
+branch `fix/v0.1.1-audit-remediation`; code commit `07952c5` (`fix(agent): preserve tool exchanges
+in context budget`), docs commit follows this entry. Worktree clean, all gates exit 0. `make smoke` NOT run
+(owner-run on a disposable model/tag or an isolated Ollama store — unchanged by this task).
+
+**Context (what M-02 actually was)**
+- `BudgetMessages` (`context.go`) evicted **one message at a time** and truncated only the last message's
+  `Content`. A tool turn lives in the history as an assistant `tool_calls` message plus all of its correlated
+  `role:"tool"` results (`runner.go:218-243`), so one-message eviction could stop **between** a call and its
+  results — leaving retained history to begin with an orphan `role:"tool"` message, or retaining a call without
+  all its results. `truncateLatest` cannot shrink oversized `ToolCalls` (no content) or an oversized retained
+  system prompt, so both could be **sent raw past the three-quarter budget** (silent exceed; some Ollama/model
+  combinations reject or mishandle the invalid sequence).
+- Fix contracts: eviction is **atomic per user-led exchange** (an exchange = everything after a user message up
+  to the next user: assistant text, assistant tool calls, and all correlated results — never split); retained
+  history never begins with `role:"tool"`; the **newest complete user-led exchange is always retained**;
+  exactly one `TruncationNotice` marker when any conversation is omitted (dedupe on re-budget); and
+  `ApproxTokens(out) <= 3/4·num_ctx` whenever a bounded representation is possible. Unshrinkable oversized
+  shapes get a **deterministic bounded representation** — a retained tool call's arguments become the
+  valid-JSON placeholder `{}` (names kept, so results stay positionally correlated) and an oversized pinned
+  system prompt's content is shortened with the existing `"[truncated] "` convention **as the last resort**
+  (marker never shortened, system order preserved).
+
+**Reproduction (RED, current code)**
+- `TestBudgetM02ProtocolSafe` (8 table sub-cases: assistant call + one result; parallel calls + all results;
+  two older exchanges; latest oversized tool call; oversized system prompt; two tiny-num_ctx; oversized newest
+  result keeps its call). Pre-fix **6/8 FAIL**: each tool-exchange case returned e.g.
+  `[system, marker, tool "r…"]` — an orphan `role:"tool"` head where the old code stopped after dropping the
+  user and the assistant call (`role=tool message at index 2 lacks an immediately preceding assistant tool
+  call`); "latest oversized tool call" dropped every message down to the lone result; "oversized system prompt"
+  returned `approximateTokens = 5003, limit = 48` (the silent exceed). Tiny-num_ctx cases already passed
+  (single-turn truncation) and stay as guards.
+
+**Green (minimum fix, `internal/agent/context.go` only — no runner change needed)**
+- `BudgetMessages`: pin the leading system run in order; split the conversation into atomic exchanges at each
+  user message; drop whole oldest exchanges until the newest suffix fits (marker inserted exactly once, not
+  duplicated on re-budget); then `boundToLimit` on the retained newest exchange if it alone still overflows.
+- `boundToLimit` deterministic order: (probe) if compacting tool-call arguments alone fits, do only that —
+  user turn and every tool RESULT stay intact; then (1) shorten newest shrinkable conversational Content
+  (`[truncated] ` tail convention, strict token decrease); (2) compact the newest oversized assistant
+  tool-call message's arguments to `{}`; (3) last resort, shorten the pinned system content (order kept,
+  marker exempt). Every action strictly decreases `approximateTokens`, so the loop terminates; a genuinely
+  unboundedable floor (pathological num_ctx) returns the minimal deterministic list. `ApproxTokens` math and
+  the exported estimator are byte-identical to before (UI meter M7-C unchanged); `TruncationNotice` text and
+  `"system/3-quarters"` semantics unchanged. Existing M6 budget tests all still pass unmodified
+  (`TestBudgetMarkerOncePerCall`, single-huge-turn, tool-args-count, marker-dedupe).
+
+**Commands + exit codes**
+- Session guard: `git status --short` → empty · branch `fix/v0.1.1-audit-remediation` · HEAD `16bfb26`.
+- Red: `go test -count=1 ./internal/agent -run TestBudgetM02ProtocolSafe` → FAIL (6/8 sub-cases: orphan
+  `role:"tool"` heads; oversized latest call trimmed to a lone orphan result; oversized system prompt at
+  5003/48 tokens).
+- Green: `go test -count=1 ./internal/agent -run 'TestBudget|Test.*Context'` → ok (0.003s, 7 tests incl.
+  8 M-02 sub-cases) · `go test -count=1 ./internal/agent` → ok (0.113s) · `go test -race -count=1
+  ./internal/agent` → ok (1.277s) · `make check` → 0 (build + full test suite + vet + gofmt clean) ·
+  `git diff --check` → clean. `make smoke`/`make smoke-model` NOT run (H-04 preflight unchanged). `git status
+  --short` after commits → empty.
+
+**Decisions / lines to respect**
+- Eviction unit = a **user-led exchange** (user message through the next user), which by construction cannot
+  split an assistant tool call from its results and never leaves a `role:"tool"` head. Marker is inserted only
+  when an exchange was actually dropped and is deduped when a previous pass already inserted it (the runner
+  re-budgets the same history every iteration).
+- Unshrinkable oversized retained tool call ⇒ deterministic `arguments: {}` placeholder (valid JSON, names
+  kept) rather than raw overflow; oversized system prompt ⇒ deterministic `[truncated] ` tail shortening only
+  after conversational content and arguments are exhausted; the marker is never shortened.
+- No runner.go/UI change was required: the fix is purely in the pure budgeting function; the error-free public
+  surface (`BudgetMessages([]ollama.ChatMessage, int) []ollama.ChatMessage`, `ApproxTokens`,
+  `TruncationNotice`) is preserved.
+
+**Blockers / open decisions**
+- None for Task 09. Carried env note from Task 02/04: `make vuln` needs `$(go env GOPATH)/bin` on PATH.
+  Task 13 (M-06) is the next agent-context task and will read this entry's eviction-unit vocabulary when it
+  adds cancellation/backpressure propagation.
+
+**Next action**
+- Fresh Pi session: runbook **Task 10 (M-03 — reject stale model and host responses)** (needs runtime
+  reproduction): confirm branch `fix/v0.1.1-audit-remediation` + clean status, then follow the Task-10 block.
+  Do not run `make smoke` until the owner runs it on a disposable model/tag or an isolated Ollama store.
