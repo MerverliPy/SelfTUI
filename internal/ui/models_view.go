@@ -46,6 +46,26 @@ type ModelsView struct {
 	showPane    bool // stacked layout: detail pane toggled open
 	scroll      int  // detail pane scroll offset (lines)
 
+	// clientGen counts client replacements (ApplyClient). Every async
+	// list/show result stamps the generation it was issued under; a
+	// completion whose generation differs from the current one belongs to an
+	// obsolete host and is dropped (M-03).
+	clientGen uint64
+
+	// showReq/showTarget track the latest issued detail (show) request.
+	// showTarget is the model that request asked for; showReq is its
+	// monotonically increasing id. A completion is applied only when it
+	// answers the latest request (its id matches) and comes from the current
+	// client generation — a superseded or obsolete /api/show can never
+	// repaint the pane under a newer selection or host (M-03).
+	showReq    uint64
+	showTarget string
+
+	// showCancel cancels the in-flight /api/show request so an obsolete
+	// detail fetch stops as soon as the selection changes or the client is
+	// replaced (M-03). The tea loop owns it: commands only read it.
+	showCancel context.CancelFunc
+
 	// Transient feedback ("deleted qwen3:8b"…), cleared on the next reload.
 	notice string
 
@@ -171,13 +191,23 @@ func modelSummary(m ollama.Model) string {
 
 // --- messages -------------------------------------------------------------
 
-type modelsLoadedMsg struct{ list []ollama.Model }
-type modelsLoadErrMsg struct{ err string }
+type modelsLoadedMsg struct {
+	gen  uint64 // client generation at issue; mismatched completions are dropped
+	list []ollama.Model
+}
+type modelsLoadErrMsg struct {
+	gen uint64
+	err string
+}
 type modelsShowMsg struct {
+	gen     uint64 // client generation at issue
+	req     uint64 // request id (0 = hand-built/legacy result)
 	name    string
 	details ollama.Details
 }
 type modelsShowErrMsg struct {
+	gen  uint64
+	req  uint64
 	name string
 	err  string
 }
@@ -212,27 +242,84 @@ func (v ModelsView) Init() tea.Cmd {
 }
 
 func (v ModelsView) loadCmd() tea.Cmd {
+	gen := v.clientGen
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(v.ctx, 60*time.Second)
 		defer cancel()
 		models, err := v.client.List(ctx)
 		if err != nil {
-			return modelsEventMsg{msg: modelsLoadErrMsg{err: err.Error()}}
+			return modelsEventMsg{msg: modelsLoadErrMsg{gen: gen, err: err.Error()}}
 		}
-		return modelsEventMsg{msg: modelsLoadedMsg{list: models}}
+		return modelsEventMsg{msg: modelsLoadedMsg{gen: gen, list: models}}
 	}
 }
 
-func (v ModelsView) showCmd(name string) tea.Cmd {
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(v.ctx, 60*time.Second)
+// requestShow starts a /api/show fetch for name, replacing any in-flight
+// detail request (whose context is canceled and whose late completion is
+// dropped by request id). The returned command stamps the request id and the
+// client generation, so a completion can never repaint the pane after the
+// selection moved or the host changed (M-03). All state mutation happens on
+// the tea update loop; the command only reads and reports.
+func (v ModelsView) requestShow(name string) (ModelsView, tea.Cmd) {
+	if v.showCancel != nil {
+		v.showCancel()
+	}
+	ctx, cancel := context.WithTimeout(v.ctx, 60*time.Second)
+	v.showReq++
+	req, gen := v.showReq, v.clientGen
+	v.showTarget = name
+	v.showCancel = cancel
+	v.loadingShow = true
+	v.detailErr = ""
+	return v, func() tea.Msg {
 		defer cancel()
 		details, err := v.client.Show(ctx, name)
 		if err != nil {
-			return modelsEventMsg{msg: modelsShowErrMsg{name: name, err: err.Error()}}
+			return modelsEventMsg{msg: modelsShowErrMsg{gen: gen, req: req, name: name, err: err.Error()}}
 		}
-		return modelsEventMsg{msg: modelsShowMsg{name: name, details: details}}
+		return modelsEventMsg{msg: modelsShowMsg{gen: gen, req: req, name: name, details: details}}
 	}
+}
+
+// releaseShow clears the in-flight show state: nothing is pending, so the
+// pane can no longer sit on a dangling "inspecting…" state after the latest
+// request's result was dropped or superseded.
+func (v ModelsView) releaseShow() ModelsView {
+	v.loadingShow = false
+	v.showTarget = ""
+	if v.showCancel != nil {
+		v.showCancel()
+	}
+	v.showCancel = nil
+	return v
+}
+
+// acceptShow reports whether a delivered /api/show result may repaint the
+// detail pane. It must (1) come from the current client generation, (2) not
+// belong to a superseded request, and (3) not name a model the user no
+// longer has selected (M-03). Real completions carry the request id they
+// answer and must match both the latest id and the current selection. A
+// hand-built result without an id (req 0 — legacy deliveries, routing/
+// render tests) applies only when there is no selection to protect (empty
+// list) or when it names the model of the pending request, so a stale
+// hand-built result cannot race a real one.
+func (v ModelsView) acceptShow(gen, req uint64, name string) bool {
+	if gen != v.clientGen {
+		return false
+	}
+	if req == 0 {
+		if len(v.models) == 0 {
+			return true
+		}
+		if name != v.modelName(v.list.Index()) {
+			return false
+		}
+		return v.showTarget == "" || v.showTarget == name
+	}
+	if len(v.models) == 0 {
+		return false
+	}
+	return req == v.showReq && name == v.modelName(v.list.Index())
 }
 
 func (v ModelsView) deleteCmd(name string) tea.Cmd {
@@ -320,27 +407,64 @@ func (v ModelsView) Update(msg tea.Msg) (ModelsView, tea.Cmd) {
 		return v, nil
 
 	case modelsLoadedMsg:
+		// A list from an obsolete client generation must not replace the
+		// current host's state (M-03).
+		if msg.gen != v.clientGen {
+			return v, nil
+		}
 		v, cmd = v.onLoaded(msg.list)
 		cmds = append(cmds, cmd)
 
 	case modelsLoadErrMsg:
+		if msg.gen != v.clientGen {
+			return v, nil
+		}
 		v.loading = false
 		v.listErr = sanitizeTerminalText(msg.err)
 		v.notice = ""
 		return v, nil
 
 	case modelsShowMsg:
+		// A stale detail result — from an obsolete host, a superseded
+		// request, or for a model the user no longer has selected — must
+		// never repaint the pane (M-03).
+		if msg.gen != v.clientGen {
+			return v, nil
+		}
+		if !v.acceptShow(msg.gen, msg.req, msg.name) {
+			// The result answered the latest request but for a model that is
+			// no longer selected (the selection or host moved on without a
+			// replacement request): drop the payload and release the pending
+			// show state so the pane never dangles on "inspecting…".
+			if msg.req != 0 && msg.req == v.showReq {
+				v = v.releaseShow()
+			}
+			return v, nil
+		}
 		d := sanitizeDetails(msg.details) // H-05: remote /api/show payload
 		v.detail = &d
 		v.detailName = sanitizeTerminalText(msg.name)
 		v.detailErr = ""
 		v.loadingShow = false
+		v.showTarget = ""
+		v.showCancel = nil
 		v.scroll = 0
 		return v, nil
 
 	case modelsShowErrMsg:
+		if msg.gen != v.clientGen {
+			return v, nil
+		}
+		if !v.acceptShow(msg.gen, msg.req, msg.name) {
+			if msg.req != 0 && msg.req == v.showReq {
+				v = v.releaseShow()
+			}
+			return v, nil
+		}
 		v.detailErr = sanitizeTerminalText(msg.err)
 		v.loadingShow = false
+		v.showTarget = ""
+		v.showCancel = nil
 		return v, nil
 
 	case spinner.TickMsg:
@@ -392,8 +516,12 @@ func (v ModelsView) onLoaded(models []ollama.Model) (ModelsView, tea.Cmd) {
 	cmds := []tea.Cmd{v.list.SetItems(items)}
 
 	if ForModels(v.w).SideBySide && len(models) > 0 {
-		v.loadingShow = true
-		cmds = append(cmds, v.showCmd(models[0].Name))
+		// Wide/medium-split layout: the inspect pane is always visible, so
+		// the first model is inspected immediately. requestShow replaces any
+		// in-flight detail fetch for the pre-reload list.
+		var sc tea.Cmd
+		v, sc = v.requestShow(models[0].Name)
+		cmds = append(cmds, sc)
 	}
 	return v, tea.Batch(cmds...)
 }
@@ -411,9 +539,14 @@ func (v ModelsView) onDeleteDone(m modelsDeleteDoneMsg) (ModelsView, tea.Cmd) {
 	v.confirmDelete = false
 	v.deleteTarget = ""
 	v.notice = "deleted " + m.name
-	if v.detailName == m.name {
+	if v.detailName == m.name || v.showTarget == m.name {
 		v.detail = nil
 		v.detailName = ""
+		if v.showTarget == m.name {
+			// A pending show for the deleted model is pointless; release it
+			// so its late completion cannot resurrect the detail.
+			v = v.releaseShow()
+		}
 	}
 	return v, v.loadCmd()
 }
@@ -510,12 +643,20 @@ func (v ModelsView) handleKey(msg tea.KeyMsg) (ModelsView, tea.Cmd) {
 	v.list = updated
 
 	// Auto-inspect on selection change when the pane is always visible.
+	// M-03: a show that is still in flight for the previously selected model
+	// must not suppress the fetch for the new selection — requestShow
+	// replaces it (cancel + id guard), so the user always ends up looking at
+	// the model they actually selected.
 	if ForModels(v.w).SideBySide && len(v.models) > 0 {
 		cur := v.list.Index()
 		if cur != v.selIdx {
 			v.selIdx = cur
-			if !v.loadingShow && v.detailName != v.modelName(cur) {
-				return v, tea.Batch(cmd, v.showCmd(v.modelName(cur)))
+			name := v.modelName(cur)
+			alreadyShown := v.detailName == name && v.detail != nil && !v.loadingShow
+			if !alreadyShown && name != v.showTarget {
+				var sc tea.Cmd
+				v, sc = v.requestShow(name)
+				return v, tea.Batch(cmd, sc)
 			}
 		}
 	}
@@ -824,9 +965,7 @@ func (v ModelsView) inspectSelected() (ModelsView, tea.Cmd) {
 	if v.detailName == name && v.detail != nil && !v.loadingShow {
 		return v, nil // already inspecting this model
 	}
-	v.loadingShow = true
-	v.detailErr = ""
-	return v, v.showCmd(name)
+	return v.requestShow(name)
 }
 
 func (v ModelsView) paneVisible() bool {
@@ -1040,9 +1179,15 @@ func (v ModelsView) applyTheme(dark bool, styles Styles) ModelsView {
 // from the new host via the returned non-blocking load cmd.
 func (v ModelsView) ApplyClient(c *ollama.Client) (ModelsView, tea.Cmd) {
 	v.client = c
-	v.models = nil
+	// A client replacement invalidates every in-flight result of the old
+	// host: bump the generation and cancel the pending show so a stale
+	// list/show completion is dropped on arrival (M-03).
+	v.clientGen++
+	v = v.releaseShow()
 	v.detail = nil
 	v.detailName = ""
+	v.detailErr = ""
+	v.models = nil
 	v.listErr = ""
 	v.notice = ""
 	v.loading = true

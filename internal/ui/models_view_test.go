@@ -758,3 +758,263 @@ func TestModelsViewModalBlocksTabKeys(t *testing.T) {
 		t.Errorf("input value = %q, want qwen3:0.6b3", v.input.Value())
 	}
 }
+
+// --- M-03: stale async model/host responses -------------------------------
+
+// showStaleAFixture is the /api/show body the fake host returns for the model
+// under A (qwen3:8b). The "MODEL-A-MARKER" license distinguishes an A detail
+// from the list rows and from B's detail in the stale-response tests.
+const showStaleAFixture = `{
+  "license": "MODEL-A-MARKER qwen3-license",
+  "modelfile": "FROM qwen3:8b\n# stale A",
+  "parameters": "temperature 0.7",
+  "template": "{{ .Prompt }}",
+  "details": {
+    "parent_model": "",
+    "format": "gguf",
+    "family": "qwen3",
+    "families": ["qwen3"],
+    "parameter_size": "8.2B",
+    "quantization_level": "Q4_K_M"
+  },
+  "model_info": {"general.architecture": "qwen3"},
+  "projector_info": {},
+  "capabilities": ["completion", "tools"]
+}`
+
+// showBFixture is the /api/show body for gemma3:12b; its MODEL-B-MARKER
+// license must never be replaced by a stale MODEL-A-MARKER detail.
+const showBFixture = `{
+  "license": "MODEL-B-MARKER gemma3-license",
+  "modelfile": "FROM gemma3:12b\n# fresh B",
+  "parameters": "temperature 0.2",
+  "template": "{{ .Prompt }}",
+  "details": {
+    "parent_model": "",
+    "format": "gguf",
+    "family": "gemma3",
+    "families": ["gemma3"],
+    "parameter_size": "12B",
+    "quantization_level": "Q4_K_M"
+  },
+  "model_info": {"general.architecture": "gemma3"},
+  "projector_info": {},
+  "capabilities": ["completion"]
+}`
+
+// tagsServer serves GET /api/tags listing exactly the named models, so a
+// caller can distinguish which host a real list result came from.
+func tagsServer(t *testing.T, names ...string) (*ollama.Client, *httptest.Server) {
+	t.Helper()
+	var b strings.Builder
+	b.WriteString(`{"models":[`)
+	for i, n := range names {
+		if i > 0 {
+			b.WriteString(",")
+		}
+		fmt.Fprintf(&b, `{"name":%q,"modified_at":"2026-09-03T08:00:00Z","size":1,"details":{}}`, n)
+	}
+	b.WriteString(`]}`)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/tags" {
+			w.WriteHeader(404)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, b.String())
+	}))
+	t.Cleanup(srv.Close)
+	return ollama.New(srv.URL, ""), srv
+}
+
+// runBatchToShow executes a tea command (and any batch of sub-commands) and
+// returns the first modelsShowMsg it produced. This is how a test captures a
+// /api/show result in a controlled order without racing the real HTTP
+// goroutines the tea runtime would start.
+func runBatchToShow(t *testing.T, cmd tea.Cmd) *modelsShowMsg {
+	t.Helper()
+	var found *modelsShowMsg
+	var walk func(c tea.Cmd)
+	walk = func(c tea.Cmd) {
+		if c == nil {
+			return
+		}
+		msg := c()
+		switch m := msg.(type) {
+		case tea.BatchMsg:
+			for _, sub := range m {
+				walk(sub)
+			}
+		case modelsEventMsg:
+			switch p := m.msg.(type) {
+			case modelsShowMsg:
+				pp := p
+				found = &pp
+			}
+		case modelsShowMsg:
+			pp := m
+			found = &pp
+		}
+	}
+	walk(cmd)
+	return found
+}
+
+// TestModelsViewStaleShowCannotReplaceNewerSelection reproduces M-03 on the
+// side-by-side auto-inspect path with a controlled completion order: model
+// A's /api/show is still in flight when the user moves the selection to B.
+// B's result completes first, then A's arrives late — the stale A detail must
+// never repaint the pane under B, and moving to B during the load must have
+// requested B's detail in the first place.
+func TestModelsViewStaleShowCannotReplaceNewerSelection(t *testing.T) {
+	client, _ := fakeShowServer(t, func(w http.ResponseWriter, name string) {
+		switch name {
+		case "qwen3:8b":
+			w.Write([]byte(showStaleAFixture)) // A
+		case "gemma3:12b":
+			w.Write([]byte(showBFixture)) // B
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	})
+	v := NewModelsView(client, NewStyles("dark"), "dark")
+	v, _ = v.Update(tea.WindowSizeMsg{Width: 120, Height: 40}) // side-by-side auto-inspect
+
+	// The list lands and the auto-inspection of qwen3:8b (A) starts; its
+	// result is captured but not delivered yet — A is still "in flight".
+	v, cmd := v.Update(modelsLoadedMsg{list: sampleModels()})
+	if !v.loadingShow {
+		t.Fatal("auto-inspect of the first model did not start")
+	}
+	msgA := runBatchToShow(t, cmd)
+	if msgA == nil || msgA.name != "qwen3:8b" {
+		t.Fatalf("expected an in-flight show for qwen3:8b, got %+v", msgA)
+	}
+
+	// The user selects gemma3:12b (B) while A's show is still loading.
+	v, nav := v.Update(tea.KeyPressMsg{Text: "j"})
+	if v.list.Index() != 1 || v.selIdx != 1 {
+		t.Fatalf("selection after j = %d/%d, want 1/1", v.list.Index(), v.selIdx)
+	}
+
+	// A's late result arrives while B is selected: it must be dropped, never
+	// shown under B (current code accepts it — M-03).
+	v, _ = v.Update(*msgA)
+	if v.detailName == "qwen3:8b" {
+		t.Fatalf("M-03: stale %q detail replaced the newer selection %q: detailName=%q index=%d",
+			msgA.name, v.modelName(v.list.Index()), v.detailName, v.list.Index())
+	}
+
+	// The selection change during the load must have requested B's detail.
+	if nav == nil {
+		t.Error("M-03: selection change during a show must request the newly selected model")
+		return
+	}
+	msgB := runBatchToShow(t, nav)
+	if msgB == nil || msgB.name != "gemma3:12b" {
+		t.Fatalf("expected a show for gemma3:12b after the selection change, got %+v", msgB)
+	}
+	v, _ = v.Update(*msgB)
+
+	// B's detail is displayed; re-delivering the stale A result after B's
+	// completion must still not overwrite it.
+	v, _ = v.Update(*msgA)
+	if v.detailName != "gemma3:12b" {
+		t.Errorf("detailName = %q, want gemma3:12b", v.detailName)
+	}
+	out := stripANSI(v.View())
+	if !strings.Contains(out, "MODEL-B-MARKER") {
+		t.Errorf("expected B's detail under the B selection:\n%s", out)
+	}
+	if strings.Contains(out, "MODEL-A-MARKER") {
+		t.Errorf("stale A detail leaked under the B selection:\n%s", out)
+	}
+}
+
+// TestModelsViewApplyClientRejectsOldHostResults reproduces M-03's host-swap
+// shape: an old host's list request is in flight when the user saves a new
+// host in Settings (ApplyClient). The new host's list lands first; the old
+// host's late result must not replace it.
+func TestModelsViewApplyClientRejectsOldHostResults(t *testing.T) {
+	oldClient, _ := tagsServer(t, "old-host-model")
+	newClient, _ := tagsServer(t, "new-host-model")
+
+	v := testModels(t, oldClient)
+
+	// An old-host list fetch completes in the background before ApplyClient
+	// is called; its result is captured (it was "in flight" across the swap).
+	staleEv := v.loadCmd()()
+	staleList, ok := staleEv.(modelsEventMsg).msg.(modelsLoadedMsg)
+	if !ok || len(staleList.list) != 1 || staleList.list[0].Name != "old-host-model" {
+		t.Fatalf("captured stale load = %#v", staleList)
+	}
+
+	// The user saves a new host: ApplyClient reloads from the new client.
+	v, cmd := v.ApplyClient(newClient)
+	if cmd == nil {
+		t.Fatal("ApplyClient: expected a reload command")
+	}
+	freshEv := cmd()
+	freshList, ok := freshEv.(modelsEventMsg).msg.(modelsLoadedMsg)
+	if !ok {
+		t.Fatalf("ApplyClient reload produced %T, want modelsLoadedMsg", freshEv)
+	}
+	v, _ = v.Update(freshList)
+	if len(v.models) != 1 || v.models[0].Name != "new-host-model" {
+		t.Fatalf("new-host list not applied: %v", modelNames(v.models))
+	}
+
+	// The old host's result arrives late: it must be ignored.
+	v, _ = v.Update(staleList)
+	if len(v.models) != 1 || v.models[0].Name != "new-host-model" {
+		t.Errorf("M-03: old-host list result replaced the new host's list after ApplyClient: %v", modelNames(v.models))
+	}
+}
+
+// TestModelsViewApplyClientRejectsOldHostShow is the /api/show half of the
+// host swap: a detail fetch started against the old host completes after
+// ApplyClient and must not populate the pane for the new host's state.
+func TestModelsViewApplyClientRejectsOldHostShow(t *testing.T) {
+	oldClient, _ := fakeShowServer(t, func(w http.ResponseWriter, name string) {
+		w.Write([]byte(showStaleAFixture))
+	})
+	newClient, _ := tagsServer(t, "new-host-model")
+
+	v := testModels(t, oldClient)
+	v, _ = v.Update(modelsLoadedMsg{list: sampleModels()})
+
+	// Inspect the selected model; the show is in flight when the host swaps.
+	v, cmd := v.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	staleShow := runBatchToShow(t, cmd)
+	if staleShow == nil || staleShow.name != "qwen3:8b" {
+		t.Fatalf("expected an in-flight show for qwen3:8b, got %+v", staleShow)
+	}
+
+	v, cmd = v.ApplyClient(newClient)
+	if cmd == nil {
+		t.Fatal("ApplyClient: expected a reload command")
+	}
+	freshEv := cmd()
+	freshList, ok := freshEv.(modelsEventMsg).msg.(modelsLoadedMsg)
+	if !ok {
+		t.Fatalf("ApplyClient reload produced %T, want modelsLoadedMsg", freshEv)
+	}
+	v, _ = v.Update(freshList)
+	if len(v.models) != 1 || v.models[0].Name != "new-host-model" {
+		t.Fatalf("new-host list not applied: %v", modelNames(v.models))
+	}
+
+	// The old host's detail arrives late: it must not populate the pane.
+	v, _ = v.Update(*staleShow)
+	if v.detail != nil || v.detailName != "" {
+		t.Errorf("M-03: old-host show result populated the pane after ApplyClient: detailName=%q", v.detailName)
+	}
+}
+
+func modelNames(models []ollama.Model) []string {
+	names := make([]string, len(models))
+	for i, m := range models {
+		names[i] = m.Name
+	}
+	return names
+}

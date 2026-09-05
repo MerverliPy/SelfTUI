@@ -42,6 +42,12 @@ type AgentView struct {
 	defaultModel string // from config; used when no selection exists yet
 	model        string // selected model for the next send
 
+	// clientGen counts client replacements (ApplyConfig reload after a
+	// host/token change). Model-list results stamp the generation they were
+	// issued under; a completion whose generation differs from the current
+	// one belongs to an obsolete host and is dropped (M-03).
+	clientGen uint64
+
 	// Conversation state. history holds committed user/assistant messages;
 	// turnModel records the model each committed message belongs to (the
 	// assistant header shows it); render is the glamour-rendered block
@@ -199,8 +205,14 @@ func runnerFor(client *ollama.Client, root, systemPrompt string, maxIterations i
 
 // --- messages -------------------------------------------------------------
 
-type agentModelsLoadedMsg struct{ models []ollama.Model }
-type agentModelsErrMsg struct{ err string }
+type agentModelsLoadedMsg struct {
+	gen    uint64 // client generation at issue; mismatched completions are dropped
+	models []ollama.Model
+}
+type agentModelsErrMsg struct {
+	gen uint64
+	err string
+}
 type agentTokenMsg struct{ text string }
 
 type agentDoneMsg struct {
@@ -230,14 +242,15 @@ func (v AgentView) Init() tea.Cmd {
 }
 
 func (v AgentView) loadModelsCmd() tea.Cmd {
+	gen := v.clientGen
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(v.ctx, 60*time.Second)
 		defer cancel()
 		models, err := v.client.List(ctx)
 		if err != nil {
-			return agentEventMsg{msg: agentModelsErrMsg{err: err.Error()}}
+			return agentEventMsg{msg: agentModelsErrMsg{gen: gen, err: err.Error()}}
 		}
-		return agentEventMsg{msg: agentModelsLoadedMsg{models: models}}
+		return agentEventMsg{msg: agentModelsLoadedMsg{gen: gen, models: models}}
 	}
 }
 
@@ -319,10 +332,19 @@ func (v AgentView) Update(msg tea.Msg) (AgentView, tea.Cmd) {
 		return v, nil
 
 	case agentModelsLoadedMsg:
+		// A model list from an obsolete client generation (the host/token
+		// changed while the fetch was in flight) must not replace the current
+		// host's models or the chat model chosen from them (M-03).
+		if msg.gen != v.clientGen {
+			return v, nil
+		}
 		v, cmd = v.onModelsLoaded(msg.models)
 		cmds = append(cmds, cmd)
 
 	case agentModelsErrMsg:
+		if msg.gen != v.clientGen {
+			return v, nil
+		}
 		v.loading = false
 		v.modelsErr = sanitizeTerminalText(msg.err)
 		return v, nil
@@ -1799,6 +1821,10 @@ func (v AgentView) ApplyConfig(cfg config.Config, c *ollama.Client, reload bool)
 	if !reload {
 		return v, nil
 	}
+	// A host/token change invalidates every in-flight model-list result of
+	// the old client: bump the generation so an obsolete completion is
+	// dropped on arrival (M-03), then refetch from the new host.
+	v.clientGen++
 	v.loading = true
 	v.modelsErr = ""
 	v.models = nil
