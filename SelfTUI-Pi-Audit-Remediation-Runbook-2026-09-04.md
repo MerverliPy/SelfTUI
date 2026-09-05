@@ -57,7 +57,7 @@
 - [x] Task 01 — H-01 default configuration
 - [x] Task 02 — C-01 recursive grep policy
 - [x] Task 03 — H-02 workspace canonicalization
-- [ ] Task 04 — H-03 tool byte/call budgets
+- [x] Task 04 — H-03 tool byte/call budgets
 - [ ] Task 05 — H-04 smoke model safety
 - [ ] Task 06 — H-05 terminal sanitization
 - [ ] Task 07 — H-06 audit-package completeness

@@ -2338,3 +2338,108 @@ root validation). No §10 row to tick (runbook-owned step). **Result:** done —
 - Fresh Pi session: runbook **Task 04 (H-03 — bound native tool streams and total executions)**: confirm
   branch `fix/v0.1.1-audit-remediation` + clean status, red-green TDD on `internal/ollama/chat.go` +
   `internal/agent/runner.go` + tests, then record in LEDGER and tick the checklist.
+
+### 2026-09-04 — Runbook Task 04: H-03 native tool byte/call budgets — raw cumulative stream ceiling, 1 MiB per-call arguments, 64 calls per run
+**Milestone:** `SelfTUI-Pi-Audit-Remediation-Runbook-2026-09-04.md` Task 04 (H-03 — bound native tool
+streams and total executions). No §10 row to tick (runbook-owned step). **Result:** done — red-green
+TDD on branch `fix/v0.1.1-audit-remediation` @ `7bba656`, worktree clean, all gates exit 0. Code
+commit: `fix(agent): bound native tool streams and executions` (5 files, +393/−43).
+
+**Work done**
+- **Session-start reads:** AGENTS.md, PLAN.md §§10–12, LEDGER tail (Task-03 handoff), runbook Task-04
+  block + audit finding H-03, `internal/ollama/{chat,stream,types}.go` + `stream_test.go` +
+  `chat_test.go`, `internal/agent/runner.go` + `runner_test.go` + `context.go`, `internal/ollama/client.go`.
+- **Root cause confirmed (code + live red evidence):**
+  1. `chat.go` accumulated only decoded `content`+`thinking` bytes toward the 16 MiB cumulative
+     ceiling — `ToolCalls` (which can carry megabytes of raw JSON per event under the 4 MiB per-event
+     cap) were never counted, so a hostile endpoint could stream arbitrarily many sub-4 MiB
+     tool-argument events and never trip the documented cap.
+  2. `runner.go` executed *every* call in each returned batch with no run-wide count: a batch of N
+     parallel `read_file`/`list_dir` calls ran unconditionally every iteration, so `max_tool_iterations`
+     (12) did not constrain actual tool executions ("thousands of parallel reads in one iteration").
+  3. `mergeToolCalls`/`mergeArguments` concatenated any complete-call-with-fragment mixture at the
+     same slot into garbage JSON, and fragment accumulation was uncapped (audit: quadratic merging,
+     unbounded memory).
+- **Red (TDD), all against the untouched production code:**
+  - `internal/ollama/stream_test.go` `TestChatCumulativeToolBytesOverflowRejected`: 7 NDJSON events,
+    each one native tool call with ~2.6 MiB of argument text (under the 4 MiB per-event wire cap);
+    cumulative raw bytes cross 16 MiB on event 7. Pre-fix: **7 events delivered**, error was
+    "stream ended without done" — never the cumulative cap message (tool bytes escaped the ceiling).
+  - `internal/agent/runner_test.go` `TestRunnerRejectsOversizedNativeToolArgument`: one native
+    `read_file` call with ~1 MiB+ arguments in a single event. Pre-fix: Run returned **nil** (the call
+    executed and failed deep in the filesystem layer, then the loop continued) — no per-call bound.
+  - `TestRunnerRejectsBatchOverCallLimit`: one batch of 70 `list_dir` calls. Pre-fix: **210 executions**
+    across 3 iterations, "maximum tool iterations (3)" — no call limit.
+  - `TestRunnerBoundsToolCallsPerRun`: batches of 40+40 across iterations. Pre-fix: **200 executions**
+    over 5 requests — no run-wide count; crossing batch fully executed.
+- **Green (minimum fix):**
+  - `internal/ollama/chat.go` now counts `len(raw)` per complete decoded NDJSON event toward the
+    retained 16 MiB ceiling (`maxChatStreamBytes` unchanged; JSON framing, content, thinking, and
+    tool calls all count) and rejects the crossing event before callback delivery, returning the
+    pre-existing stable `errChatStreamTooLarge` text ("chat stream exceeds 16777216 bytes").
+    `stream.go` comments updated; per-event 4 MiB wire cap and idle watchdog untouched.
+  - `internal/agent/runner.go` adds `maxToolArgBytes = 1 MiB` (decoded per-call argument ceiling) and
+    `maxToolCallsPerRun = 64` with three stable errors:
+    `tool call argument exceeds 1048576 bytes`, `tool call limit (64) exceeded for this run`,
+    `ambiguous tool call fragments: no stable call id or index`. `mergeToolCalls` now returns
+    `([]ollama.ToolCall, error)` and concatenates fragments only while both sides are incomplete JSON
+    (bounded at 1 MiB); a complete+fragment mixture at one slot is refused as ambiguous rather than
+    concatenated by guesswork (the wire type's optional `id` is not populated by Ollama, and there is
+    no `index`, so positional+validity is all there is). Repeated complete calls still dedupe;
+    distinct complete calls at one slot (parallel calls) both survive; `mergeArguments` was folded
+    into the merger and deleted. The runner's per-iteration callback stops accumulating after a merge
+    error; the merge error is returned (wrapped `agent: %w`). A **batch gate** runs before the
+    assistant tool-call turn is appended and before any execution: per-call argument-size validation
+    (also covers the content-embedded JSON path, which never passes through the merger) and a
+    run-wide `executedCalls + len(batch) > 64` check that rejects the whole crossing batch with zero
+    calls executed. Normal single/parallel calls under the limits are unchanged (existing green tests
+    untouched apart from the merge signature call-site update).
+  - Added direct boundary tests in `runner_test.go` after the signature change made them compilable
+    (Task-02 precedent): `TestMergeToolCallsAdversarial` subtests — two simultaneous calls survive,
+    repeated complete call deduplicates, same-name complete calls both survive, fragmented arguments
+    concatenate, ambiguous fragment-then-complete refused, complete-then-fragment refused, null
+    arguments carry no fragment, fragment accumulation capped at 1 MiB, single oversized complete call
+    refused. `TestMergeToolCallsAssemblesStreamedArguments` updated to the two-value signature.
+
+**Commands + exit codes**
+- `git status --short` → empty · `git branch --show-current` → `fix/v0.1.1-audit-remediation` ·
+  `git rev-parse --short HEAD` → `7bba656` (all 0).
+- RED: `go test -count=1 ./internal/ollama -run TestChatCumulativeToolBytesOverflowRejected -v` → **1**
+  (7 delivered, wrong error); `go test -count=1 ./internal/agent -run 'TestRunnerRejectsOversizedNativeToolArgument|TestRunnerRejectsBatchOverCallLimit|TestRunnerBoundsToolCallsPerRun'` → **1**
+  (nil error / 210 / 200 executions). Green after fix: same three commands → 0.
+- Focused per runbook step 7: `go test -count=1 ./internal/ollama -run 'TestChat.*(Cumulative|Tool|Oversized)'` → 0;
+  `go test -count=1 ./internal/agent -run 'Test.*(Tool|Call|Bound|Merge)'` → 0 (11 top-level tests);
+  `go test -count=1 ./internal/ollama ./internal/agent` → 0. `make check` → 0. `make race` → 0.
+  `gofmt -l internal/agent internal/ollama` empty. `git diff --check` → 0 (clean).
+
+**Decisions / lines to respect**
+- The 16 MiB chat ceiling now counts **complete raw NDJSON event bytes** (framing + tool calls
+  included); the byte value, the error text, the 4 MiB per-event wire cap, and the idle watchdog are
+  unchanged. The check fires before the crossing event is delivered (same ordering the old
+  content+thinking check used) and before unmarshal — resource bound first, decode/secondary checks
+  after.
+- The 1 MiB per-call argument ceiling and the 64-call per-run ceiling are **agent-side** (runner);
+  the ollama package does not know about call semantics. The merger caps every append and every
+  fragment concatenation so accumulation is bounded mid-iteration; the batch gate re-validates every
+  call (including content-embedded JSON calls that bypass the merger) before any execution.
+- Batch rejections are all-or-nothing: a batch that would push the run past 64 executes **zero**
+  calls from that batch and aborts the run with the stable limit error — partial execution of a
+  crossing batch is impossible.
+- Merge refuses (stable `ambiguous tool call fragments` error) whenever one side of a same-name
+  same-slot pair is complete JSON and the other is a fragment; the wire provides no stable per-call
+  id/index (Ollama's optional `id` is unpopulated), so rejecting beats guessing. Known-good shapes
+  are test-pinned: single-complete-call events, pure fragment streams, same-event multi-call batches,
+  and exact repeats all keep their pre-H-03 behavior.
+- Error texts are the new stable strings above; tests match on the quoted substrings. No public
+  signature changed: `mergeToolCalls` is unexported. Residual (accepted, bounded): assembling one
+  1 MiB call from ~30-byte wire fragments can still copy O(K·cap) bytes over the stream lifetime,
+  but live memory stays ≤ 1 MiB per call and ≤ 16 MiB per stream, and execution stays ≤ 64 per run.
+
+**Blockers / open decisions**
+- None for Task 04. Env note carried from Task 02: `make vuln` needs `$(go env GOPATH)/bin` on PATH.
+
+**Next action**
+- Fresh Pi session: runbook **Task 05 (H-04 — make the live pull/delete smoke test non-destructive)**: confirm
+  branch `fix/v0.1.1-audit-remediation` + clean status, red-green TDD on `scripts/pull-delete-smoke.py` +
+  a new `scripts/pull_delete_smoke_test.py`, then record in LEDGER and tick the checklist. Do not run
+  `make smoke` until Task 05 lands.
