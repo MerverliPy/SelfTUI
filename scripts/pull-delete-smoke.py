@@ -3,15 +3,20 @@
 delete-with-confirm and streamed pull against a real Ollama host.
 
 Usage: scripts/pull-delete-smoke.py [model]
-Defaults to qwen3:0.6b — a real registry model. The smoke deletes it via the
-API first so tag presence is unambiguous, pulls it through the TUI (waiting
-on the UI's own completion signals), then deletes it through the TUI and
-verifies it left /api/tags. The host is left exactly as found.
+Defaults to qwen3:0.6b — a real registry model. NON-DESTRUCTIVE: the script
+captures the host's initial state before any mutation and refuses to run when
+the target model is already installed — it never deletes (or re-pulls to
+"restore") a model this run did not create, because a tag can move and the
+original digest is not recorded. Point make smoke at a disposable model/tag
+or run it against an isolated Ollama store. When the target is absent the run
+pulls it through the TUI (waiting on the UI's own completion signals), deletes
+it through the TUI, verifies it left /api/tags, and cleans up (including on
+failure) only a model this run provably created.
 
-Exit 0 only when, in order: the pull name input opens, the pull dialog
-renders (spinner/status/progress), the UI leaves the dialog with the model
-landed in /api/tags, delete confirm renders naming the model, and the model
-leaves /api/tags after `y`.
+Exit 0 only when, in order: the target was absent at start, the pull name
+input opens, the pull dialog renders (spinner/status/progress), the UI leaves
+the dialog with the model landed in /api/tags, delete confirm renders naming
+the model, and the model leaves /api/tags after `y`.
 """
 import fcntl
 import json
@@ -25,10 +30,11 @@ import sys
 import time
 import urllib.request
 
-MODEL = sys.argv[1] if len(sys.argv) > 1 else "qwen3:0.6b"
-WATCH = float(os.environ.get("SMOKE_WATCH", "300"))  # max wait for the pull
+# Import-safe defaults: argv and SMOKE_* are read inside main() only, never
+# at import time, so scripts/pull_delete_smoke_test.py can exec_module() and
+# drive every function through unittest.mock fakes.
+MODEL = "qwen3:0.6b"
 LOG = "/tmp/selftui-smoke.log"
-SIZE = (int(os.environ.get("SMOKE_COLS", "110")), int(os.environ.get("SMOKE_ROWS", "36")))
 
 out = bytearray()
 seen = ""
@@ -54,6 +60,27 @@ def tags():
         return [m["name"] for m in d["models"]]
     except Exception as e:  # noqa: BLE001
         return f"tags error: {e}"
+
+
+def preflight(model):
+    """Capture initial host state before any mutation; refuse a live target.
+
+    Runs before any DELETE, pull, or TUI action. Aborts (exit 1) when the
+    target is already installed: deleting it would destroy something this run
+    did not create, and re-pulling the tag is not a safe restore because a tag
+    can move and the original digest is not recorded.
+    """
+    initial = tags()
+    if not isinstance(initial, list):
+        fail(f"ollama not reachable: {initial}")
+    if model in initial:
+        fail(
+            f"{model} is already installed; refusing to run — pull-delete-smoke "
+            "never deletes a pre-existing model (it would remove something this "
+            "run did not create). Use a disposable model/tag or an isolated "
+            "Ollama store."
+        )
+    return initial
 
 
 def pump(fd, deadline):
@@ -90,18 +117,20 @@ def fail(msg):
     sys.exit(1)
 
 
-def main():
-    # Leave no trace: ensure the target model is absent before we start.
-    api_delete(MODEL)
-    before = tags()
-    if not isinstance(before, list):
-        fail(f"ollama not reachable: {before}")
-    if MODEL in before:
-        fail(f"{MODEL} still present after pre-run cleanup")
+def main(argv=None):
+    model = argv[0] if argv else MODEL
+    watch = float(os.environ.get("SMOKE_WATCH", "300"))  # max wait for the pull
+    size = (int(os.environ.get("SMOKE_COLS", "110")), int(os.environ.get("SMOKE_ROWS", "36")))
+
+    # H-04: capture initial state and refuse an already-installed target
+    # BEFORE any mutation. A pre-existing model is never deleted and never
+    # "restored" by re-pulling its tag — the whole run aborts instead.
+    preflight(model)
+    created = False  # becomes True only after this run's pull installed it
 
     master, slave = pty.openpty()
     # target geometry: wide (110x36)
-    fcntl.ioctl(slave, 0x5414, struct.pack("HHHH", SIZE[1], SIZE[0], 0, 0))
+    fcntl.ioctl(slave, 0x5414, struct.pack("HHHH", size[1], size[0], 0, 0))
     proc = subprocess.Popen(
         ["./bin/selftui"],
         stdin=slave, stdout=slave, stderr=slave, close_fds=True,
@@ -142,7 +171,7 @@ def main():
         #    silent for a sustained beat the dialog is gone. A surfaced
         #    "⚠ <error>" aborts first.
         in_dialog = re.compile(r"Pulling %s|esc cancel|pulling [0-9a-f]{6,}|verifying sha256|writing manifest|success|B / |%%" % re.escape(MODEL))
-        end = time.time() + WATCH
+        end = time.time() + watch
         quiet_since = None
         while time.time() < end:
             pump(master, time.time() + 0.5)
@@ -161,7 +190,7 @@ def main():
             time.sleep(0.2)
         else:
             states = sorted(set(re.findall(r"pulling [^\r\n]*|\d+(\.\d+)? ?[KMG]?B / \d+(\.\d+)? ?[KMG]?B|\d+%%", seen)))
-            fail("pull dialog never exited within %ds (UI last showed: %s)" % (WATCH, " | ".join(states)))
+            fail("pull dialog never exited within %ds (UI last showed: %s)" % (watch, " | ".join(states)))
         pump(master, time.time() + 0.6)
 
         # 4. Server truth: the model is installed.
@@ -170,6 +199,7 @@ def main():
             fail(f"tags query after pull failed: {after}")
         if MODEL not in after:
             fail(f"{MODEL} missing from /api/tags after the UI reported done")
+        created = True  # this run's pull provably installed the model
         try:
             jump = after.index(MODEL)
         except ValueError:
@@ -208,10 +238,15 @@ def main():
         print(f"SMOKE PASS in {time.time()-started:.0f}s (progress bar evidence: {progress_seen}, "
               f"deleted-notice seen: {deleted_seen}; capture: {LOG})")
     finally:
-        if proc.poll() is None:
+        if proc is not None and proc.poll() is None:
             proc.kill()
-        api_delete(MODEL)  # leave the host clean even on failure
+        # H-04: clean up only a model this run provably created (its own
+        # pull), never a pre-existing one. On the success path the model was
+        # already deleted through the TUI, so this is a harmless no-op safety
+        # net; on failure it removes only this run's leftover model.
+        if created:
+            api_delete(model)
 
 
 if __name__ == "__main__":
-    main()
+    main(sys.argv[1:] if len(sys.argv) > 1 else None)

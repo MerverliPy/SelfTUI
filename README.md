@@ -229,7 +229,11 @@ form is open it owns the keyboard — tab/1/2/3 return once it is saved or
 discarded; `ctrl+c` still quits.
 
 Live behavior check: `make smoke` drives a real pull + delete against your
-local Ollama host over a pty (leaves the host exactly as it was).
+local Ollama host over a pty. It is **non-destructive**: the script captures
+the host's state first and **refuses to run when the target model is already
+installed** (it never deletes a model the run did not create). Use a
+disposable model/tag — `make smoke-model MODEL=<name>` to override — or run
+against an isolated Ollama store.
 
 The layout reference geometry was measured on the real client (Moshi on an
 iPhone 16 Pro, portrait, default font): **72 columns × 30 rows** — see
