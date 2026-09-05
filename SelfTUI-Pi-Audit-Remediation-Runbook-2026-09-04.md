@@ -60,7 +60,7 @@
 - [x] Task 04 — H-03 tool byte/call budgets
 - [x] Task 05 — H-04 smoke model safety
 - [x] Task 06 — H-05 terminal sanitization
-- [ ] Task 07 — H-06 audit-package completeness
+- [x] Task 07 — H-06 audit-package completeness
 - [ ] Task 08 — M-01 approval/modal behavior
 - [ ] Task 09 — M-02 context grouping
 - [ ] Task 10 — M-03 async request generations

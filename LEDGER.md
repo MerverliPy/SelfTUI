@@ -2616,3 +2616,82 @@ docs commit follows this entry.
 - Fresh Pi session: runbook **Task 07 (H-06 — make audit-pack creation manifest-complete)**:
   confirm branch `fix/v0.1.1-audit-remediation` + clean status, then follow the Task-07 block. Do not
   run `make smoke` until the owner runs it on a disposable model/tag or an isolated Ollama store.
+### 2026-09-05 — Runbook Task 07: H-06 manifest-complete audit packaging — create + verify (owner task)
+**Milestone:** `SelfTUI-Pi-Audit-Remediation-Runbook-2026-09-04.md` Task 07 (H-06 — make audit-pack creation
+manifest-complete). No §10 row to tick (runbook-owned step). **Result:** done — red-green on branch
+`fix/v0.1.1-audit-remediation`; new `scripts/create-audit-pack.sh` (create + verify subcommands) and
+`scripts/create-audit-pack-test.sh` (42 checks), `audit-pack` Makefile target, README usage note; worktree
+clean, all gates exit 0. Code commit `a9e9e60` (`build(audit): verify complete tracked-file packages`), docs
+commit follows this entry. The shipped verifier **reproduces the exact H-06 finding** against the real
+historical audit ZIP (see evidence below). Generated disposable pack (not committed): `dist/selftui-audit-pack-a9e9e60.zip`.
+
+**Context (what H-06 actually was)**
+- The external-audit package (`~/selftui-audit-pack/selftui-audit-pack.zip`, snapshot of `e6ef11b`) claimed 97
+  tracked files in `FILE-INVENTORY.md` but its archive held only 95 file entries (93 tracked + PROMPT.md +
+  FILE-INVENTORY.md): `.github/workflows/ci.yml`, `.github/workflows/release.yml`, `.gitignore`, and
+  `.gitattributes` were silently absent — a naive non-hidden copy dropped every dotfile/dotdir.
+- The new tool's contract: `git ls-files` is the authoritative tracked set and the archived content comes
+  from the same committed tree at HEAD (git archive tar, then one deterministic python zip pass); extras are
+  explicit-only (`--extra TARGET=PATH`); verification compares tracked-vs-archived **in both directions**
+  (nothing missing, nothing unexpected) and rejects any unsafe member path; output is byte-deterministic per
+  commit (fixed order, commit-time stamps); an existing archive is never overwritten silently (`--force`).
+  Workspace precondition: clean worktree, so `ls-files` == HEAD tree (same rule as release-check).
+
+**Reproduction (runtime-verified, not static)**
+- **Red:** the regression suite was written first — headline case rebuilds the historical failure shape (a
+  naive 3-file pack from a 7-file fixture missing exactly the four hidden paths) and requires the verifier
+  to fail naming all four. Pre-implementation run failed at every case (`create-audit-pack.sh` absent).
+- **Historical-artifact proof (strong):** in a throwaway `git worktree` at `e6ef11b` (97 tracked), the shipped
+  verifier run over the REAL `~/selftui-audit-pack/selftui-audit-pack.zip` (extras declared) prints
+  `missing tracked:` for `.gitattributes`, `.github/workflows/ci.yml`, `.github/workflows/release.yml`,
+  `.gitignore`, `manifest: 97 tracked, 95 members, 2 extras - missing 4, unexpected 0`, `MANIFEST_MATCH=FAIL`,
+  exit 1 — the tool independently reproduces the audited defect; the same zip with no extra declared also
+  reports PROMPT.md/FILE-INVENTORY.md as unexpected (extras are never silently assumed).
+
+**Green (42/42 checks in `scripts/create-audit-pack-test.sh`)**
+- Fixture repo (7 tracked: README.md, src/main.c, deep/nested.txt, + the four hidden paths) drives every case:
+  naive-pack rejection naming all four; create exits 0 with `tracked:  7 files`, archive path, sha256, and
+  `MANIFEST_MATCH=PASS`; pack members == tracked exactly; all four formerly-omitted paths present in the zip;
+  deterministic output (two creates on the same commit → identical sha256); overwrite refusal + `--force`;
+  explicit `--extra FILE-INVENTORY.md=<file>` present in pack, verify PASS when declared and FAIL reporting
+  `unexpected member: FILE-INVENTORY.md` when undeclared; shadow guard (extra target = tracked README.md →
+  refused, no archive left behind); traversal/absolute extra targets refused; verify rejects `../escape.txt`
+  and `/abs.txt` members (`unsafe archive path:`); two-direction drift (commit adds newfile.txt, deletes
+  src/main.c → stale pack fails with `missing tracked: newfile.txt` **and** `unexpected member: src/main.c`).
+
+**Disposable pack from the current repo (not committed; dist/ is gitignored)**
+- `make audit-pack` → `dist/selftui-audit-pack-a9e9e60.zip`: 104 tracked files, sha256
+  `da4de136289fe6aa54f8743d6ce3a1de47a2c116852730d7bb88e08d46701d82`, `MANIFEST_MATCH=PASS`.
+- Independent proof (python, not the script's self-report): member count 104; `.github/workflows/ci.yml`,
+  `.github/workflows/release.yml`, `.gitignore`, `.gitattributes` all PRESENT; tracked−zip = [] and
+  zip−tracked = []; `internal/agent/runner.go` bytes identical to the worktree copy.
+
+**Commands + exit codes**
+- Session guard at start: `git status --short` → empty · branch `fix/v0.1.1-audit-remediation` · HEAD
+  `dc4668c`. `bash -n scripts/create-audit-pack.sh scripts/create-audit-pack-test.sh` → 0 ·
+  `bash scripts/create-audit-pack-test.sh` → 0 (42 checks, 0 failures) · `make check` → 0 · `make audit-pack`
+  → 0 (pack created, MANIFEST_MATCH=PASS) · historical-zip verify → exit 1 (expected FAIL, four missing) ·
+  `git diff --check` → clean. Code commit `a9e9e60` (+2 files, ~470 lines script+test, Makefile +13, README +21).
+
+**Decisions / lines to respect**
+- `git ls-files` (clean worktree) is the manifest; content comes from HEAD via git archive, so packed bytes
+  are exactly committed bytes and reproducible (task 22 will re-run the same script on the v0.1.1 tip).
+- One canonical comparator (python `verify`) is shared by the `verify` subcommand and create's post-build
+  self-check — no drift between "produce" and "prove".
+- Extras are explicit-only and can never shadow a tracked path (target ∈ tracked → abort before writing);
+  duplicates, unsafe targets (absolute / `..` / empty / backslash / colon components) and unsafe archive
+  members all fail loudly. Tracked symlinks are refused (no content to archive; repo has none).
+- Determinism is per-commit: fixed member order + entry timestamps at the commit time. Output default
+  `dist/selftui-audit-pack-<HEAD>.zip`; overwrite requires `--force` (never silent). `make audit-pack` passes
+  `AUDIT_PACK_OUT` / `AUDIT_PACK_EXTRAS` through to the script.
+- This task fixes packaging evidence only — no `.github/workflows/*` content was modified.
+
+**Blockers / open decisions**
+- None for Task 07. Carried env note from Task 02/04: `make vuln` needs `$(go env GOPATH)/bin` on PATH.
+  (Recorded in this task's evidence; the disposable pack and the `/tmp/audit-hist-*` worktree were cleaned
+  up; only the gitignored `dist/selftui-audit-pack-a9e9e60.zip` remains as the evidence artifact.)
+
+**Next action**
+- Fresh Pi session: runbook **Task 08 (M-01 — enforce approval expiry and modal key ownership)**:
+  confirm branch `fix/v0.1.1-audit-remediation` + clean status, then follow the Task-08 block. Do not run
+  `make smoke` until the owner runs it on a disposable model/tag or an isolated Ollama store.
