@@ -68,7 +68,7 @@
 - [x] Task 12 — M-05 terminal wrapping
 - [x] Task 13 — M-06 cancellation/backpressure
 - [x] Task 14 — M-07 delete overlay
-- [ ] Task 15 — M-08 redirect policy
+- [x] Task 15 — M-08 redirect policy
 - [ ] Task 16 — M-09 spinner lifecycle
 - [ ] Task 17 — M-10 release reproducibility
 - [ ] Task 18 — M-11 private smoke captures

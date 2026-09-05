@@ -3360,3 +3360,78 @@ disposable model/tag — unchanged by this task).
 - Fresh Pi session: runbook **Task 15 (M-08 — enforce a redirect-safe bearer-token policy)**. Confirm
   branch `fix/v0.1.1-audit-remediation` + clean status, then follow the Task-15 block. Do not run
   `make smoke` until the owner runs it on a disposable model/tag or an isolated Ollama store.
+
+### 2026-09-06 — Runbook Task 15: M-08 redirect-safe bearer-token policy (owner task)
+**Milestone:** `SelfTUI-Pi-Audit-Remediation-Runbook-2026-09-04.md` Task 15 (M-08). No §10 row to tick
+(runbook-owned step). **Result:** done — REPRODUCED + red-green on branch `fix/v0.1.1-audit-remediation`;
+code commit `307d4f6` (`fix(ollama): refuse API redirects carrying credentials`), docs commit follows
+this entry. Worktree clean; focused + full `./internal/ollama`/`./internal/config`, `make check`, and
+`make race` all exit 0. `make smoke` NOT run (owner-run — unchanged by this task).
+
+**Context (what M-08 actually was)**
+- Audit evidence `client.go:41-47,65-76` + `stream.go:48-64`: config validates only the *initial* URL
+  (non-loopback bearer token requires https), but both `http.Client`s were built with no `CheckRedirect`,
+  so a permitted HTTPS endpoint could redirect the already-authenticated request. `[needs runtime
+  verification]` — now runtime-verified on go1.27.1.
+
+**Reproduction (RED, decisive — M-08 REPRODUCED)**
+- New tests appended to `ollama_test.go` (7): same-origin redirect, cross-origin (same hostname,
+  different port), https→http downgrade, hostname alias 127.0.0.1→localhost, no-token redirect, and two
+  streaming (Pull/stream-client) variants incl. streaming https→http downgrade. Each logs observed
+  pre-policy behavior: target hits + captured Authorization header.
+- RED at HEAD on go1.27.1: every redirect was followed. Pinned Go behavior (net/http client.go
+  `shouldCopyHeaderOnRedirect`/`isDomainOrSubdomain`): the Authorization header is forwarded whenever
+  the redirect target's **hostname** equals the original hostname or is a subdomain of it — scheme and
+  port are ignored. Evidence captures: same-origin target hit with `auth="Bearer sekrit"`; cross-origin
+  (different port) target hit with `auth="Bearer sekrit"`; **https→http downgrade: plain-http target
+  hit with `auth="Bearer tok-downgrade"`** (the token travelled in the clear — the audit's exact leak);
+  streaming downgrade: `auth="Bearer tok-stream-downgrade"` on the plain-http POST target; hostname
+  alias followed but token stripped (`auth=""`, Go treats a genuinely different hostname as foreign);
+  no-token case still followed until Go's 10-redirect cap.
+- No subdomain-*served* test was possible (httptest cannot serve DNS subdomains); the 127.0.0.1→
+  localhost alias case exercises the same hostname-equivalence seam Go applies to foo.com→sub.foo.com.
+
+**Fix (green)**
+- `client.go` `New()` now installs one shared `redirectPolicy` as `CheckRedirect` on **both** the finite
+  `http` client and the no-timeout `stream` client. `redirectPolicy` returns a stable error —
+  `refusing redirect to <target>: ollama API calls must not follow redirects` — which makes net/http
+  abort **before** the redirect request is sent (target never contacted, previous response body closed
+  by the client). The outer `do`/`postStream` wrappers already prefix every error with the original
+  operation (`ollama GET /api/tags:` / `ollama POST /api/pull:`), satisfying "error identifying the
+  original API operation and refusal". `stream.go` needed no change: it routes through `c.stream`,
+  which carries the same policy. No other file changed; config validation untouched (rule 5).
+
+**Tests (red-green)**
+- RED at HEAD: all 7 new `Test*Redirect*` tests failed as above (follow + token forwarded / no refusal).
+- GREEN: `go test -count=1 ./internal/ollama -run 'Test.*Redirect|TestHTTPS|Test.*Bearer'` → ok (7 new
+  + existing HTTPS/Bearer tests); `go test -count=1 ./internal/ollama ./internal/config` → ok (full);
+  `make check` → 0 (build + full suite + vet + gofmt); `make race` → 0 (full suite, race detector);
+  `git diff --check` → clean; `gofmt -l` → empty. GREEN logs show every redirect target now `hits=0
+  auth=""` with the stable refusal error. Non-redirect ordinary requests are re-proven by the full
+  unchanged suite (`TestHTTPSVerifiedAndBearerSent` etc.).
+
+**Commands + exit codes**
+- Session guard: `git status --short` → empty · branch `fix/v0.1.1-audit-remediation` · HEAD `2d1f098`.
+- RED run `go test -count=1 ./internal/ollama -run 'Test.*Redirect'` → FAIL (7 failing, evidence above).
+- GREEN runs listed above, all exit 0. Code commit `307d4f6`; `git status --short` after → only
+  LEDGER.md + runbook pending.
+- `make smoke`/`make smoke-model` NOT run — owner-run on a disposable model/tag. No release-check.
+
+**Decisions / lines to respect**
+- Refusal is **uniform** (every redirect refused, token or not): a redirecting endpoint is a
+  misconfigured API origin either way, and Go's own subdomain exception is exactly the leak surface
+  M-08 names. Uniformity also keeps one stable error text for both clients.
+- Stable refusal text `refusing redirect to <target>: ollama API calls must not follow redirects`;
+  tests match the substring `refusing redirect` plus the operation prefix already present.
+- Config's initial non-loopback https/token validation intentionally untouched; SECURITY.md needed no
+  edit (its "bearer token for a non-loopback host requires https://" claim stays true — redirect
+  refusal now enforces it past the first hop).
+
+**Blockers / open decisions**
+- None for Task 15. Carried env note from Task 02/04: `make vuln` needs `$(go env GOPATH)/bin` on PATH.
+- Task 16 (M-09) follows next: single spinner command chain in `models_view.go`, then M-10 etc.
+
+**Next action**
+- Fresh Pi session: runbook **Task 16 (M-09 — maintain exactly one spinner command chain)**. Confirm
+  branch `fix/v0.1.1-audit-remediation` + clean status, then follow the Task-16 block. Do not run
+  `make smoke` until the owner runs it on a disposable model/tag or an isolated Ollama store.
