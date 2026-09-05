@@ -100,12 +100,12 @@ type AgentView struct {
 	notice  string
 
 	// Chat-session persistence: when sessionDir is set, committed turns are
-	// appended to a per-process transcript file under it (session.Open).
-	// Errors disable the log once and surface one notice; chat never blocks
-	// on the disk.
+	// appended to a per-process transcript file under it by one ordered
+	// background recorder (M-04) — never on the update loop. Errors disable
+	// the log once and surface one notice; chat never blocks on the disk.
 	sessionDir  string
 	sessionHost string // recorded in the transcript header (best effort)
-	session     *session.Log
+	recorder    *session.Recorder
 	sessionErr  bool
 
 	// Composer (M7-A): slash-command drafting. The menu is derived from the
@@ -220,9 +220,23 @@ type agentDoneMsg struct {
 	reason string // terminal ollama done_reason of the final stream (stop/length)
 }
 
+// sessionAppendMsg reports one committed turn's recorder outcome. err is nil
+// on success (which never round-trips — the ack command returns nil instead);
+// the first non-nil error disables recording once (M-04).
+type sessionAppendMsg struct{ err error }
+
+// sessionExportMsg reports the /export flush outcome: the exact transcript
+// path once every earlier enqueued turn is durable, or the failure that
+// disabled recording.
+type sessionExportMsg struct {
+	path string
+	err  error
+}
+
 // agentEventMsg is the single envelope the root App accepts for every
 // asynchronous Agent command result: the model-list fetch results
-// (agentModelsLoadedMsg/agentModelsErrMsg) and every event the chat activity
+// (agentModelsLoadedMsg/agentModelsErrMsg), the recorder outcomes
+// (sessionAppendMsg/sessionExportMsg), and every event the chat activity
 // channel delivers (agent.TokenMsg, agent.ToolStartMsg, agent.ToolResultMsg,
 // agent.ToolConfirmMsg, agent.FallbackMsg, agent.AgentDoneMsg, plus the
 // legacy agentTokenMsg/agentDoneMsg). App.Update has exactly one routing case
@@ -320,6 +334,19 @@ func (v AgentView) Update(msg tea.Msg) (AgentView, tea.Cmd) {
 		// the wrapped result comes back as-is, so unwrap and re-dispatch to
 		// the same switch.
 		return v.Update(msg.msg)
+
+	case sessionAppendMsg:
+		// One recorder error disables the transcript once and surfaces one
+		// notice; later identical outcomes (jobs accepted before the view
+		// learned of the failure) are ignored (M-04).
+		if msg.err != nil && !v.sessionErr {
+			v.sessionErr = true
+			v.notice = "session log: " + msg.err.Error()
+		}
+		return v, nil
+
+	case sessionExportMsg:
+		return v.applySessionExport(msg), nil
 
 	case tea.WindowSizeMsg:
 		v.w, v.h = msg.Width, msg.Height
@@ -468,6 +495,8 @@ func (v AgentView) onChatDone(m agentDoneMsg) (AgentView, tea.Cmd) {
 	v.toolStatus = ""
 	v.confirmation = nil
 
+	var recCmd tea.Cmd // ack waiter for the committed assistant turn, if any
+
 	if v.streamText != "" {
 		// The Ollama done_reason on the done event is remote text rendered on
 		// the assistant header; sanitize it before it becomes turn meta.
@@ -476,7 +505,7 @@ func (v AgentView) onChatDone(m agentDoneMsg) (AgentView, tea.Cmd) {
 		v.turnModel = append(v.turnModel, v.model)
 		v.turnMeta = append(v.turnMeta, meta)
 		v.render = append(v.render, v.renderBlock(v.assistantHeaderRow(v.model, meta), v.streamText))
-		v = v.appendSessionTurn("assistant", v.model, v.streamText, meta, time.Now())
+		v, recCmd = v.enqueueSessionTurn("assistant", v.model, v.streamText, meta, time.Now())
 		v.streamText = ""
 	}
 
@@ -492,7 +521,7 @@ func (v AgentView) onChatDone(m agentDoneMsg) (AgentView, tea.Cmd) {
 	}
 	v.stopRequest = false
 	v.follow = true
-	return v, nil
+	return v, recCmd
 }
 
 // --- keys -----------------------------------------------------------------
@@ -731,67 +760,109 @@ func (v AgentView) sendInput() (AgentView, tea.Cmd) {
 	v.turnMeta = append(v.turnMeta, "") // placeholder keeps turnMeta aligned with history
 	v.render = append(v.render, v.renderBlock(v.userHeader(), text))
 	v.checkContextBudget()
-	v = v.appendSessionTurn("user", v.model, text, "", time.Now())
-	return v.startChat()
+	v, recCmd := v.enqueueSessionTurn("user", v.model, text, "", time.Now())
+	av, chatCmd := v.startChat()
+	return av, tea.Batch(recCmd, chatCmd)
 }
 
-// appendSessionTurn mirrors a committed message into the per-process session
-// transcript (lazily opened on the first message). I/O happens on the update
-// loop but is tiny; on any error the log is disabled and one notice tells the
-// user where it failed — a transcript is never worth breaking the chat for.
-func (v AgentView) appendSessionTurn(role, model, content, meta string, at time.Time) AgentView {
+// enqueueSessionTurn mirrors one committed turn onto the ordered background
+// recorder (started lazily on the first recorded message). The update loop
+// only enqueues immutable work and arms the ack command; Open/Append/Flush/
+// Close all happen on the recorder worker, so a slow or stalled transcript
+// directory can never block Update (M-04). On the first failure the ack
+// disables the log once and one notice tells the user where it failed — a
+// transcript is never worth breaking the chat for.
+func (v AgentView) enqueueSessionTurn(role, model, content, meta string, at time.Time) (AgentView, tea.Cmd) {
 	if v.sessionDir == "" || v.sessionErr {
-		return v
+		return v, nil
 	}
-	if v.session == nil {
-		sess, err := session.Open(v.sessionDir, v.sessionHost)
-		if err != nil {
-			v.sessionErr = true
-			v.notice = "session log: " + err.Error()
-			return v
-		}
-		v.session = sess
+	if v.recorder == nil {
+		v.recorder = session.NewRecorder(v.sessionDir, v.sessionHost)
 	}
 	// The transcript mirrors what the terminal shows, so committed content
 	// is sanitized the same way (the file can otherwise be re-opened in a
 	// terminal-paging editor where control bytes would execute).
-	if err := v.session.Append(role, model, sanitizeTerminalText(content), meta, at); err != nil {
-		v.session.Close()
-		v.session = nil
+	done, err := v.recorder.Append(role, model, sanitizeTerminalText(content), meta, at)
+	if err != nil {
+		// Backlog full: the sink is wedged; recording is over for this run.
 		v.sessionErr = true
 		v.notice = "session log: " + err.Error()
+		return v, nil
 	}
-	return v
+	return v, func() tea.Msg {
+		res := <-done
+		if res.Err == nil {
+			return nil // a successful append needs no UI round-trip
+		}
+		return agentEventMsg{msg: sessionAppendMsg{err: res.Err}}
+	}
 }
 
 // WithSessionDir enables transcript persistence under dir with host recorded
-// in the file header (called by the root App; empty dir disables).
+// in the file header (called by the root App; empty dir disables). The
+// recorder itself is created lazily on the first recorded turn (nothing runs
+// for a disabled or silent session).
 func (v AgentView) WithSessionDir(dir, host string) AgentView {
 	v.sessionDir = dir
 	v.sessionHost = host
-	v.session = nil
+	v.recorder = nil
 	v.sessionErr = false
 	return v
 }
 
+// CloseRecorder flushes every committed turn and stops the transcript
+// recorder's worker. It is the normal-shutdown lifecycle boundary (main calls
+// it after the tea program exits); a nil recorder (recording disabled or no
+// turn yet) is a no-op, and Close is idempotent.
+func (v AgentView) CloseRecorder() error {
+	if v.recorder == nil {
+		return nil
+	}
+	return v.recorder.Close()
+}
+
 // exportSession flushes the Markdown transcript and reports its path. The
-// export is append-only and cannot be resumed (chat stays in-memory), so the
-// notice reports the file and never claims the conversation can be reloaded.
+// flush runs on the recorder worker strictly after every earlier enqueued
+// turn (ordered jobs), so the reported path is exact and the export is
+// append-only and cannot be resumed (chat stays in-memory) — the notice
+// reports the file and never claims the conversation can be reloaded. Update
+// only enqueues and processes the completion message (M-04).
 func (v AgentView) exportSession() (AgentView, tea.Cmd) {
 	switch {
-	case v.session == nil && v.sessionDir == "":
+	case v.sessionDir == "":
 		v.notice = "session recording is off — no transcript is written"
-	case v.session == nil:
+		return v, nil
+	case v.sessionErr || v.recorder == nil:
 		v.notice = "nothing recorded yet — send a message first"
-	default:
-		if err := v.session.Flush(); err != nil {
-			v.sessionErr = true
-			v.notice = "session log: " + err.Error()
-		} else {
-			v.notice = "transcript: " + v.session.Path()
-		}
+		return v, nil
 	}
-	return v, nil
+	done, err := v.recorder.Flush()
+	if err != nil {
+		v.sessionErr = true
+		v.notice = "session log: " + err.Error()
+		return v, nil
+	}
+	return v, func() tea.Msg {
+		res := <-done
+		return agentEventMsg{msg: sessionExportMsg{path: res.Path, err: res.Err}}
+	}
+}
+
+// applySessionExport lands one /export completion on the view. A failure
+// disables recording once (same one-error surface as an append failure); an
+// empty path means nothing was ever recorded.
+func (v AgentView) applySessionExport(m sessionExportMsg) AgentView {
+	if m.err != nil {
+		v.sessionErr = true
+		v.notice = "session log: " + m.err.Error()
+		return v
+	}
+	if m.path == "" {
+		v.notice = "nothing recorded yet — send a message first"
+		return v
+	}
+	v.notice = "transcript: " + m.path
+	return v
 }
 
 // --- slash commands (M7-A) ------------------------------------------------

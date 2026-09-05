@@ -168,12 +168,32 @@ func run() error {
 	m = m.WithSessionDir(sessionDirForRun(), cfg.Host)
 	p := tea.NewProgram(m, tea.WithContext(ctx))
 	rootLog.Info("program running")
-	if _, err := p.Run(); err != nil {
+	final, err := p.Run()
+	// Normal-shutdown lifecycle: flush every committed turn to the transcript
+	// and stop the recorder worker before the process returns, so the last
+	// turns survive and no goroutine is stranded (M-04). Best-effort on the
+	// error paths too — a killed program still wants its transcript flushed.
+	if cerr := closeSessionRecorder(final); cerr != nil {
+		rootLog.Warn("session recorder close", "err", cerr)
+	}
+	if err != nil {
 		return fmt.Errorf("tui: %w", err)
 	}
 	cancel()
 	rootLog.Info("shutdown clean")
 	return nil
+}
+
+// closeSessionRecorder closes the chat-transcript recorder on the final tea
+// model when it exposes one (ui.App). Kept as a small interface-assertion so
+// the entrypoint stays decoupled from the concrete model and a nil or foreign
+// final model is a harmless no-op.
+func closeSessionRecorder(m any) error {
+	c, ok := m.(interface{ CloseSession() error })
+	if !ok {
+		return nil
+	}
+	return c.CloseSession()
 }
 
 // sessionDirForRun resolves the chat-transcript directory: SELFTUI_NO_SESSION=1

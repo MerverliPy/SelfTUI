@@ -299,6 +299,15 @@ func (a App) WithSessionDir(dir, host string) App {
 	return a
 }
 
+// CloseSession is the normal-shutdown lifecycle boundary for chat-transcript
+// persistence: it flushes every committed turn to the transcript and stops
+// the recorder worker so nothing is stranded when the process returns (main
+// calls it on the final model returned by Program.Run). A disabled or silent
+// session is a no-op; the underlying close is idempotent.
+func (a App) CloseSession() error {
+	return a.agent.CloseRecorder()
+}
+
 // applyTheme re-themes the whole shell (styles, tab chrome, and every child
 // view). Used for live Theme previews and after a saved theme change, plus
 // the session-only /theme toggles.

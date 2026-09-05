@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"flag"
 	"path/filepath"
 	"strings"
@@ -23,6 +24,41 @@ func TestVersionFlagOutputFormat(t *testing.T) {
 		if want := "selftui " + v + "\n"; out.String() != want {
 			t.Errorf("printVersion() with Version=%q = %q, want %q", v, out.String(), want)
 		}
+	}
+}
+
+// closeableModel is a minimal stand-in for ui.App: it exposes CloseSession
+// and records whether the shutdown boundary reached it.
+type closeableModel struct {
+	err error
+	got bool
+}
+
+func (c *closeableModel) CloseSession() error {
+	c.got = true
+	return c.err
+}
+
+// TestCloseSessionRecorder pins the M-04 shutdown boundary at the entrypoint:
+// the final tea model is asked to flush/close the chat-transcript recorder
+// exactly when it exposes CloseSession, and a nil or foreign final model is a
+// harmless no-op (recording may be disabled or the model may not own one).
+func TestCloseSessionRecorder(t *testing.T) {
+	wantErr := errors.New("flush failed")
+	m := &closeableModel{err: wantErr}
+	if err := closeSessionRecorder(m); !errors.Is(err, wantErr) {
+		t.Errorf("closeSessionRecorder(model with CloseSession) = %v, want %v", err, wantErr)
+	}
+	if !m.got {
+		t.Error("CloseSession was not called on the final model")
+	}
+
+	if err := closeSessionRecorder(nil); err != nil {
+		t.Errorf("closeSessionRecorder(nil) = %v, want nil", err)
+	}
+	type foreign struct{}
+	if err := closeSessionRecorder(foreign{}); err != nil {
+		t.Errorf("closeSessionRecorder(foreign model) = %v, want nil", err)
 	}
 }
 
