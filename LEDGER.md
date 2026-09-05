@@ -3516,3 +3516,74 @@ map recorded here. Branch `fix/v0.1.1-audit-remediation` @ `dc25c58`, tree clean
 - Same session (owner instruction): implement **P1 correctness cluster (#1–#7, #12, #13)** red-green
   on this branch, gate with `make check`/`make race`, commit per finding cluster. Then a fresh
   session resumes runbook **Task 16 (M-09)**.
+
+---
+
+### 2026-09-06 — P1 correctness cluster implemented (#1–#7, #12, #13), 9 commits (owner task)
+**Milestone:** P1 of the recorded optimization map · **Result:** done — all nine findings fixed
+red-green with regression tests; `make check` + `go test -race ./...` green. Branch
+`fix/v0.1.1-audit-remediation`, worktree clean after commit.
+
+**Work done** (each finding: RED test → fix → GREEN → own commit)
+- **#12 — env parse errors named nonexistent vars** (`c3ab159`): the four `SELFTUI_AGENT_*`
+  parse errors interpolated the bare prefix (`SELFTUI_TEMPERATURE`, …); error text now names the
+  variable actually read (`load.go:179-203`). New table test pins all four names.
+- **#13 — explicit missing `-config` hard-errors** (`472741c`): a typo'd explicit path silently
+  booted with defaults; only the auto-resolved default XDG file may be absent (H-01). Tests that
+  used a nonexistent explicit path as a "no file" base now write an empty real file (config +
+  ui + cmd fixtures touched); new tests pin explicit-vs-default. `run()` surfaces
+  `load config: config file not found at <path>`, exit 1.
+- **#2 — non-2xx stream error bodies idle-bounded** (`a01c3b7`): `chat.go:138`/`pull.go:53`
+  read the capped error body with no idle bound on the no-timeout stream client. New shared
+  `Client.readErrorBody` runs the read through the idle machinery: a silent 4xx/5xx body aborts
+  with the stable idle error at the window; complete bodies still surface via `apiError`. RED
+  tests stalled 3s at the caller deadline; now abort in ~60ms.
+- **#1 — recorder shutdown bounded** (`01d403b`): `run()` closed the recorder before
+  `cancel()`, and `Recorder.Close` blocks on a wedged sink — NotifyContext kept swallowing
+  Ctrl+C, so a stalled filesystem made the process unkillable. Now `cancel()` (stops signal
+  interception, releases producers) runs first and the close is time-bounded
+  (`closeSessionRecorderWithin`, 3s); wedged-model test returns the timeout error in-budget.
+- **#3 — stale model detail after reload** (`2b3bedc`): bubbles `SetItems` preserves (clamped)
+  the cursor while the pane header follows the cursor, so a reload that dropped/reordered the
+  inspected model painted the new selection's header over the old payload. `onLoaded` now
+  mirrors the cursor and reconciles the pane (drop + re-inspect when the visible pane no longer
+  matches; clear stale payload when the model vanished). Compact-refresh regression added.
+- **#4 — theme preview rolls back on save failure** (`9b2e263`): failed write left the shell on
+  the previewed theme. Submit now carries the edit-start theme when a preview diverged; App
+  re-applies it on save error (mirrors the discard rollback). RED: preview Light → forced
+  write failure → shell stayed light; now returns to committed Dark.
+- **#5 — `/export` echoes the real recorder failure** (`6583753`): once recording fails it is
+  off for the run, so "nothing recorded — send a message first" was dead-end advice. View
+  retains the one surfaced failure (`sessionErrMsg`) and `/export` splits off/never-started/
+  failed states. RED drove the failWriter and asserted the failure text, no send-message hint.
+- **#6 — client rebuilt only on host/token change** (`c8eeb76`): every settings save handed the
+  Agent a fresh `ollama.Client` while Models kept its own — the shared-client seam drifted. App
+  now owns the client; scalar/theme saves reuse it, host/token saves swap once for both tabs.
+  Genuine RED: pre-fix Agent held a rebuilt instance on a temperature-only save.
+- **#7 — content truncation stays on UTF-8 rune boundaries** (`d2f3acf`): `BudgetMessages`
+  byte-exact tail cuts could split multibyte runes and hand the model invalid UTF-8. New
+  `contentTailWithin` advances the cut to the next rune start (never exceeds the byte cap).
+  RED with a CJK fixture showed a split `\xbd\xa0` prefix; fixed path yields only valid UTF-8.
+
+**Commands + exit codes**
+- per-finding: `go test ./internal/<pkg> -run '<test>' -count=1` RED then GREEN `0`
+- `make check` `0` (build + full suite + vet + gofmt) · `go test -race ./... -count=1` `0` (all pkgs)
+- `gofmt -l .` empty · `git diff --check` clean (per commit)
+
+**Decisions / lines to respect**
+- P1-13 changed a documented edge: an explicit `-config` pointing at a missing file now errors
+  before the TUI starts (user-intent statement); first-boot default-XDG fallback is unchanged.
+- P1-1 keeps the recorder's durable-close contract; the bound lives at the entrypoint so the
+  normal flush still completes when the sink is healthy.
+- P1-6 added an App-owned `client` field; constructors/tests that build `App` without a real
+  client (settings flows) are unaffected because they never change host.
+
+**Blockers / open decisions (carry to next session)**
+- Unchanged owner queue: public visibility, gitleaks-in-CI, actionlint, Node-20 bumps, signed tag.
+- P1-tests (entrypoint/boot/hostile-shape/fault-injection) and P0 (release blockers) from the map
+  remain unexecuted; runbook tasks 16–22 also still queued.
+
+**Next action**
+- Fresh session: resume runbook **Task 16 (M-09 — single spinner chain)**, or the owner may pick
+  a P0/P1-test item from the recorded map instead. Commit history since `dc25c58` is the P1
+  cluster above (9 commits, clean).
