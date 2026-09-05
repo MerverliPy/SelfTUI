@@ -341,3 +341,97 @@ func TestPullEOFWithoutSuccessRejected(t *testing.T) {
 		t.Errorf("error = %v, want ended-without-success message", err)
 	}
 }
+
+// errorStallServer responds non-2xx (500), flushes the status, then holds the
+// error body open without writing a single body byte until the client
+// disconnects — the exact stalled-error-body shape P1-2 targets. The request
+// body is drained first so client-close detection arms (same discipline as
+// stallServer).
+func errorStallServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.Copy(io.Discard, r.Body)
+		w.WriteHeader(http.StatusInternalServerError)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		<-r.Context().Done()
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// TestChatStalledErrorBodyBoundedByIdle proves a non-2xx /api/chat response
+// whose error body delivers no bytes is aborted by the idle watchdog, not
+// pinned until the caller's deadline: the phase-5 "streams are bounded"
+// guarantee must cover the error branch too (P1-2). RED before the fix: the
+// error body was read with io.ReadAll and no idle bound on the no-timeout
+// stream client, so the producer hung until caller cancellation.
+func TestChatStalledErrorBodyBoundedByIdle(t *testing.T) {
+	srv := errorStallServer(t)
+	c := New(srv.URL, "")
+	c.streamIdle = 60 * time.Millisecond
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	start := time.Now()
+	err := c.ChatStream(ctx, chatReq(), nil)
+	if err == nil {
+		t.Fatal("want idle timeout error on a stalled error body, got nil")
+	}
+	if !strings.Contains(err.Error(), "stream idle") {
+		t.Errorf("error = %v, want idle-timeout message naming the abort", err)
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Errorf("stalled error body took %v to abort; want the ~60ms idle window", elapsed)
+	}
+}
+
+// TestPullStalledErrorBodyBoundedByIdle is the pull-side twin: a 500 response
+// to POST /api/pull with a silent error body must abort on the idle window.
+func TestPullStalledErrorBodyBoundedByIdle(t *testing.T) {
+	srv := errorStallServer(t)
+	c := New(srv.URL, "")
+	c.streamIdle = 60 * time.Millisecond
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	start := time.Now()
+	err := c.Pull(ctx, "big-model", nil)
+	if err == nil {
+		t.Fatal("want idle timeout error on a stalled error body, got nil")
+	}
+	if !strings.Contains(err.Error(), "stream idle") {
+		t.Errorf("error = %v, want idle-timeout message naming the abort", err)
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Errorf("stalled error body took %v to abort; want the ~60ms idle window", elapsed)
+	}
+}
+
+// TestNon2xxErrorBodyStillSurfaced ensures the error-body read still reports
+// a genuinely received error payload (fast path unchanged): a 500 with a
+// complete JSON error body must surface the API error, not the idle error.
+func TestNon2xxErrorBodyStillSurfaced(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.Copy(io.Discard, r.Body)
+		w.WriteHeader(http.StatusInternalServerError)
+		io.WriteString(w, `{"error":"boom from host"}`)
+	}))
+	t.Cleanup(srv.Close)
+	c := New(srv.URL, "")
+	c.streamIdle = 5 * time.Second // far away; the complete body must win
+
+	err := c.ChatStream(context.Background(), chatReq(), nil)
+	if err == nil {
+		t.Fatal("want API error, got nil")
+	}
+	if !strings.Contains(err.Error(), "boom from host") {
+		t.Errorf("error = %v, want the host's error payload surfaced", err)
+	}
+	if strings.Contains(err.Error(), "stream idle") {
+		t.Errorf("error = %v: a complete error body must not read as idle", err)
+	}
+}

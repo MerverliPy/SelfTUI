@@ -50,8 +50,7 @@ func (c *Client) Pull(ctx context.Context, name string, onProgress func(PullProg
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
-		return apiError(http.MethodPost, path, resp.StatusCode, raw)
+		return c.readErrorBody(http.MethodPost, path, resp, cancel)
 	}
 
 	// Decode through the shared NDJSON stream decoder: the per-event size cap

@@ -65,6 +65,21 @@ func (c *Client) postStream(ctx context.Context, path string, body []byte) (*htt
 	return resp, cancel, nil
 }
 
+// readErrorBody reads a non-2xx response body under the same idle watchdog as
+// the success stream (P1-2). A host that answers an error status but then
+// never delivers the error body must abort on the idle window — the no-timeout
+// stream client has no other bound — rather than pin the producer until the
+// caller's deadline. A complete (or partially delivered) body still surfaces
+// through apiError exactly as before; only a genuinely silent body becomes the
+// stable idle error.
+func (c *Client) readErrorBody(method, path string, resp *http.Response, cancel context.CancelFunc) error {
+	raw, rerr := io.ReadAll(io.LimitReader(newIdleReader(resp.Body, cancel, c.streamIdle), maxBodyBytes))
+	if rerr != nil && errors.Is(rerr, errIdleTimeout) {
+		return fmt.Errorf("ollama %s %s: %w", method, path, rerr)
+	}
+	return apiError(method, path, resp.StatusCode, raw)
+}
+
 // idleReader wraps a streaming response body so that a read delivering no
 // bytes for idle aborts the stream via the request context. Bytes arriving at
 // any cadence keep the stream alive — there is no total deadline. A blocked
