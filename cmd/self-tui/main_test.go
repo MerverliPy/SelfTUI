@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestVersionFlagOutputFormat pins the `selftui -version` formatting
@@ -107,5 +108,47 @@ func TestSessionDirForRun(t *testing.T) {
 	t.Setenv("SELFTUI_SESSION_DIR", "")
 	if got := sessionDirForRun(); !strings.HasSuffix(got, "selftui/sessions") {
 		t.Errorf("default: got %q, want …/selftui/sessions", got)
+	}
+}
+
+// blockingModel is a final tea model whose CloseSession never returns until
+// release is closed — the wedged-sink shape P1-1 targets: the recorder worker
+// is stuck on a stalled filesystem write, so the shutdown flush cannot
+// complete.
+type blockingModel struct {
+	release chan struct{}
+}
+
+func (b *blockingModel) CloseSession() error {
+	<-b.release
+	return nil
+}
+
+// TestCloseSessionRecorderBoundedOnWedgedSink proves the entrypoint never
+// hangs on a wedged transcript sink: the bounded close must return (with a
+// timeout error) shortly after its budget, instead of blocking run() forever.
+// RED before the fix: closeSessionRecorder called CloseSession synchronously,
+// so a stalled recorder made the process unkillable (NotifyContext still
+// intercepts Ctrl+C while main awaits the close).
+func TestCloseSessionRecorderBoundedOnWedgedSink(t *testing.T) {
+	m := &blockingModel{release: make(chan struct{})}
+	defer close(m.release) // unblock the worker goroutine when the test ends
+
+	type res struct{ err error }
+	done := make(chan res, 1)
+	// Exercise the injectable budget seam directly so the test is fast and
+	// deterministic; production run() uses sessionCloseTimeout.
+	go func() { done <- res{err: closeSessionRecorderWithin(m, 100*time.Millisecond)} }()
+
+	select {
+	case r := <-done:
+		if r.err == nil {
+			t.Fatal("bounded close on a wedged recorder: want a timeout error, got nil")
+		}
+		if !strings.Contains(r.err.Error(), "timed out") {
+			t.Errorf("error = %v, want the close-timeout message", r.err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("closeSessionRecorder blocked forever on a wedged recorder; want a bounded timeout")
 	}
 }

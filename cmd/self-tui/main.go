@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"syscall"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/adrg/xdg"
@@ -169,31 +170,60 @@ func run() error {
 	p := tea.NewProgram(m, tea.WithContext(ctx))
 	rootLog.Info("program running")
 	final, err := p.Run()
+	// Stop intercepting SIGINT/SIGTERM and cancel the root context BEFORE the
+	// recorder flush below: a recorder worker stuck on a wedged sink must not
+	// leave the process unable to die on a second Ctrl+C (NotifyContext would
+	// keep swallowing it). cancel() also releases in-flight chat/pull producers
+	// so the shutdown wait is not competing with live work (P1-1).
+	cancel()
 	// Normal-shutdown lifecycle: flush every committed turn to the transcript
 	// and stop the recorder worker before the process returns, so the last
 	// turns survive and no goroutine is stranded (M-04). Best-effort on the
 	// error paths too — a killed program still wants its transcript flushed.
+	// The close is time-bounded so a stalled filesystem cannot hang the
+	// process (P1-1).
 	if cerr := closeSessionRecorder(final); cerr != nil {
 		rootLog.Warn("session recorder close", "err", cerr)
 	}
 	if err != nil {
 		return fmt.Errorf("tui: %w", err)
 	}
-	cancel()
 	rootLog.Info("shutdown clean")
 	return nil
 }
 
+// sessionCloseTimeout bounds how long the entrypoint waits for the transcript
+// recorder to flush at shutdown (P1-1). A recorder worker stuck on a wedged
+// filesystem sink must not hang the process forever; once the budget is spent
+// the flush is abandoned (the file may be short its last turn) and the
+// process exits, which is the actual escape hatch.
+const sessionCloseTimeout = 3 * time.Second
+
 // closeSessionRecorder closes the chat-transcript recorder on the final tea
-// model when it exposes one (ui.App). Kept as a small interface-assertion so
-// the entrypoint stays decoupled from the concrete model and a nil or foreign
-// final model is a harmless no-op.
+// model when it exposes one (ui.App), within the shutdown budget. Kept as a
+// small interface-assertion so the entrypoint stays decoupled from the
+// concrete model and a nil or foreign final model is a harmless no-op.
 func closeSessionRecorder(m any) error {
+	return closeSessionRecorderWithin(m, sessionCloseTimeout)
+}
+
+// closeSessionRecorderWithin runs the recorder shutdown in a goroutine so a
+// wedged sink can never block the process past the budget. The goroutine is
+// abandoned on timeout — the process is exiting, so nothing is stranded that
+// matters, and the recorder's own failure discipline already surfaced.
+func closeSessionRecorderWithin(m any, budget time.Duration) error {
 	c, ok := m.(interface{ CloseSession() error })
 	if !ok {
 		return nil
 	}
-	return c.CloseSession()
+	done := make(chan error, 1)
+	go func() { done <- c.CloseSession() }()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(budget):
+		return fmt.Errorf("session recorder close timed out after %s", budget)
+	}
 }
 
 // sessionDirForRun resolves the chat-transcript directory: SELFTUI_NO_SESSION=1
