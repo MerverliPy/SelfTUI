@@ -75,7 +75,14 @@ func Load(ov Overrides) (Config, error) {
 			return cfg, fmt.Errorf("parse config %s: %w", *path, err)
 		}
 		applyFile(&cfg, file)
-	} else if !os.IsNotExist(err) {
+	} else if os.IsNotExist(err) {
+		// A missing *explicit* -config path is a user-intent statement (a typo'd
+		// path must not silently run with defaults); only the auto-resolved
+		// default XDG file may be absent on first boot (H-01).
+		if ov.ConfigPath != nil {
+			return cfg, fmt.Errorf("config file not found at %s", *path)
+		}
+	} else {
 		return cfg, fmt.Errorf("read config %s: %w", *path, err)
 	}
 

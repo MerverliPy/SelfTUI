@@ -86,12 +86,12 @@ func tomlSource(t *testing.T, c Config) string {
 }
 
 // overrideSource returns an Overrides carrying every field of c and a config
-// path that does not exist (so no real file participates).
+// path that points at an empty real file (so no config participates).
 func overrideSource(t *testing.T, c Config) Overrides {
 	t.Helper()
-	missing := filepath.Join(t.TempDir(), "absent.toml")
+	empty := writeFile(t, "")
 	return Overrides{
-		ConfigPath:        &missing,
+		ConfigPath:        &empty,
 		Host:              &c.Host,
 		AuthToken:         &c.AuthToken,
 		Theme:             &c.Theme,
@@ -116,8 +116,8 @@ func loadSource(t *testing.T, source string, c Config) error {
 		return err
 	case "env":
 		envFrom(t, c)
-		missing := filepath.Join(t.TempDir(), "absent.toml")
-		_, err := Load(Overrides{ConfigPath: &missing})
+		empty := writeFile(t, "")
+		_, err := Load(Overrides{ConfigPath: &empty})
 		return err
 	default: // overrides
 		_, err := Load(overrideSource(t, c))

@@ -283,8 +283,8 @@ func TestLoadToolsWorkspaceStoresCanonicalRoot(t *testing.T) {
 			c.ToolsEnabled = true
 			c.WorkspaceRoot = link
 			envFrom(t, c)
-			missing := filepath.Join(t.TempDir(), "absent.toml")
-			return Load(Overrides{ConfigPath: &missing})
+			empty := writeFile(t, "")
+			return Load(Overrides{ConfigPath: &empty})
 		},
 	}
 	for name, load := range sources {
@@ -325,7 +325,7 @@ func TestLoadToolsOffKeepsBroadWorkspaceSpelling(t *testing.T) {
 func TestSavePersistsToolsEnabled(t *testing.T) {
 	blankEnv(t)
 	ws := t.TempDir()
-	path := filepath.Join(t.TempDir(), "config.toml")
+	path := writeFile(t, "") // explicit path must exist to load (P1-13)
 	cfg, err := Load(Overrides{ConfigPath: &path, WorkspaceRoot: &ws})
 	if err != nil {
 		t.Fatal(err)

@@ -210,17 +210,37 @@ func TestOverridesWinEverything(t *testing.T) {
 	}
 }
 
-func TestMissingFileFallsBackToDefaults(t *testing.T) {
-	p := filepath.Join(t.TempDir(), "nope.toml")
-	c, err := Load(Overrides{ConfigPath: &p})
+// TestMissingDefaultXDGFileFallsBackToDefaults proves the H-01 behavior: when
+// -config is omitted (nil ConfigPath), a missing default XDG file must load
+// defaults silently — the file is optional on first boot.
+func TestMissingDefaultXDGFileFallsBackToDefaults(t *testing.T) {
+	dir := t.TempDir()
+	withXDGConfigHome(t, dir) // no selftui/config.toml exists under dir
+
+	c, err := Load(Overrides{})
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("Load(Overrides{}) with no default file: %v", err)
 	}
 	if c.Host != Default().Host || c.Theme != Default().Theme {
-		t.Errorf("expected defaults on missing file, got host=%q theme=%q", c.Host, c.Theme)
+		t.Errorf("expected defaults on missing default file, got host=%q theme=%q", c.Host, c.Theme)
 	}
-	if got := c.ConfigPath(); got != p {
-		t.Errorf("ConfigPath = %q, want %q", got, p)
+	want := filepath.Join(dir, "selftui", "config.toml")
+	if got := c.ConfigPath(); got != want {
+		t.Errorf("ConfigPath = %q, want resolved default %q", got, want)
+	}
+}
+
+// TestExplicitMissingConfigPathErrors proves an explicitly supplied -config
+// path (non-nil ConfigPath) that does not exist is a hard startup error: a
+// typo'd path is a user-intent statement, not a silent fall back to defaults.
+func TestExplicitMissingConfigPathErrors(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "nope.toml")
+	_, err := Load(Overrides{ConfigPath: &p})
+	if err == nil {
+		t.Fatal("Load with explicit missing path: want error, got nil")
+	}
+	if !strings.Contains(err.Error(), p) {
+		t.Errorf("Load error = %v, want it to name the missing path %q", err, p)
 	}
 }
 
