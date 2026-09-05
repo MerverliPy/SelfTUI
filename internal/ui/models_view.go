@@ -79,17 +79,18 @@ type ModelsView struct {
 	deleteErr     string
 
 	// Pull flow (p → name input → stream; esc cancels).
-	inputMode  bool
-	input      textinput.Model
-	pulling    bool
-	pullName   string
-	pullErr    string
-	pullStatus string
-	pullDigest string
-	pullTotal  int64
-	pullDone   int64
-	pullCh     chan tea.Msg // activity channel (PLAN §8), owned by one pull
-	pullCancel func()       // cancels the in-flight pull context
+	inputMode      bool
+	input          textinput.Model
+	pulling        bool
+	pullName       string
+	pullErr        string
+	pullStatus     string
+	pullDigest     string
+	pullTotal      int64
+	pullDone       int64
+	pullCh         chan tea.Msg  // activity channel (PLAN §8), owned by one pull
+	pullStreamDone chan struct{} // closed by the pull producer when its goroutine exits (M-06)
+	pullCancel     func()        // cancels the in-flight pull context
 
 	// Reusable dialog widgets.
 	spinner  spinner.Model
@@ -352,9 +353,11 @@ func (v ModelsView) waitPullCmd() tea.Cmd {
 // modelsPullMsg; the trailing result as one modelsPullDoneMsg.
 func (v ModelsView) startPull(name string) (ModelsView, tea.Cmd) {
 	ch := make(chan tea.Msg, 64)
+	done := make(chan struct{})
 	ctx, cancel := context.WithCancel(v.ctx)
 
 	v.pullCh = ch
+	v.pullStreamDone = done
 	v.pullCancel = cancel
 	v.pulling = true
 	v.pullName = name
@@ -364,16 +367,17 @@ func (v ModelsView) startPull(name string) (ModelsView, tea.Cmd) {
 	v.pullTotal, v.pullDone = 0, 0
 
 	go func() {
+		defer close(done)
 		defer close(ch)
 		defer cancel()
 		err := v.client.Pull(ctx, name, func(p ollama.PullProgress) {
-			ch <- modelsEventMsg{msg: modelsPullMsg{name: name, progress: p}}
+			emitEvent(ctx, ch, modelsEventMsg{msg: modelsPullMsg{name: name, progress: p}})
 		})
 		if err != nil {
-			ch <- modelsEventMsg{msg: modelsPullDoneMsg{name: name, err: err.Error()}}
+			emitEvent(ctx, ch, modelsEventMsg{msg: modelsPullDoneMsg{name: name, err: err.Error()}})
 			return
 		}
-		ch <- modelsEventMsg{msg: modelsPullDoneMsg{name: name}}
+		emitEvent(ctx, ch, modelsEventMsg{msg: modelsPullDoneMsg{name: name}})
 	}()
 
 	return v, v.waitPullCmd()
@@ -574,6 +578,7 @@ func (v ModelsView) onPullProgress(m modelsPullMsg) (ModelsView, tea.Cmd) {
 func (v ModelsView) onPullDone(m modelsPullDoneMsg) (ModelsView, tea.Cmd) {
 	v.pulling = false
 	v.pullCh = nil
+	v.pullStreamDone = nil
 	v.pullCancel = nil
 	if m.err != "" {
 		v.pullErr = sanitizeTerminalText(m.err) // remote pull error body

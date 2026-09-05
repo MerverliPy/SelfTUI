@@ -41,17 +41,17 @@ func TestReadOnlyToolsStayInsideWorkspace(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "hello.txt"), []byte("hello agent\nsecond line\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := ReadFile(root, "hello.txt"); err != nil || got != "hello agent\nsecond line\n" {
+	if got, err := ReadFile(context.Background(), root, "hello.txt"); err != nil || got != "hello agent\nsecond line\n" {
 		t.Errorf("ReadFile = %q, %v", got, err)
 	}
-	if got, err := ListDir(root, "."); err != nil || !strings.Contains(got, "hello.txt") {
+	if got, err := ListDir(context.Background(), root, "."); err != nil || !strings.Contains(got, "hello.txt") {
 		t.Errorf("ListDir = %q, %v", got, err)
 	}
 	if got, err := Grep(context.Background(), root, "agent", ".", func(string) error { return nil }); err != nil || !strings.Contains(got, "hello.txt:1:hello agent") {
 		t.Errorf("Grep = %q, %v", got, err)
 	}
 	for _, path := range []string{"../outside", filepath.Join(root, "..", "outside")} {
-		if _, err := ReadFile(root, path); err == nil {
+		if _, err := ReadFile(context.Background(), root, path); err == nil {
 			t.Errorf("ReadFile(%q) unexpectedly succeeded", path)
 		}
 	}
@@ -66,7 +66,7 @@ func TestReadOnlyToolsRejectSymlinkEscape(t *testing.T) {
 	if err := os.Symlink(filepath.Join(outside, "secret"), filepath.Join(root, "link")); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
-	if _, err := ReadFile(root, "link"); err == nil || !strings.Contains(err.Error(), "escapes workspace") {
+	if _, err := ReadFile(context.Background(), root, "link"); err == nil || !strings.Contains(err.Error(), "escapes workspace") {
 		t.Errorf("symlink read error = %v, want workspace escape", err)
 	}
 }
@@ -562,5 +562,51 @@ func TestRunnerCancellationReturnsPromptly(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("Run did not return after cancellation")
+	}
+}
+
+// TestRunnerCancelsToolExecutionOnCanceledContext pins the M-06 boundary at
+// the runner: executeTool receives the run context and every filesystem tool
+// must honor it. A cancellation that lands while a tool call is being
+// dispatched (observed at ToolStartMsg, before the executor runs) must reach
+// the tool — the file is never opened, no fabricated ToolResultMsg success
+// is emitted — and Run returns the context error promptly. Pre-fix,
+// read_file/list_dir were invoked without the context, so the tool executed
+// anyway and reported a successful read after the cancel.
+func TestRunnerCancelsToolExecutionOnCanceledContext(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "secret.txt"), []byte("must not be read\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		io.WriteString(w, toolEvent(nativeCall("read_file", `{"path":"secret.txt"}`)))
+	}))
+	t.Cleanup(srv.Close)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	r := NewRunnerWithPolicy(ollama.New(srv.URL, ""), root, "", 4, &ToolPolicy{})
+	var toolOK bool
+	var summary string
+	err := r.Run(ctx, Request{
+		Model: "qwen3:8b", Messages: []ollama.ChatMessage{{Role: ollama.RoleUser, Content: "read it"}},
+	}, func(msg Msg) {
+		switch m := msg.(type) {
+		case ToolStartMsg:
+			// Cancellation lands before the tool's executor starts: the tool
+			// boundary must refuse to run, never execute behind the cancel.
+			cancel()
+		case ToolResultMsg:
+			if m.Name == "read_file" {
+				toolOK = m.OK
+				summary = m.Summary
+			}
+		}
+	})
+	if err == nil || !strings.Contains(err.Error(), "context canceled") {
+		t.Fatalf("Run error = %v, want a context-canceled error", err)
+	}
+	if toolOK {
+		t.Fatalf("read_file reported OK after cancellation (summary %q): the tool executed despite a canceled context", summary)
 	}
 }

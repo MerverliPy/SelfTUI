@@ -72,9 +72,16 @@ func ReadOnlyTools() []ollama.ToolDefinition {
 	return AgentTools()[:3]
 }
 
-func ReadFile(root, path string) (string, error) {
+// ReadFile reads one workspace file, bounded to maxReadBytes. ctx is
+// checked before and after the operation (M-06): a canceled run neither
+// starts a doomed read nor reports a result that only finished after the
+// context died — cancellation wins and the caller stops promptly.
+func ReadFile(ctx context.Context, root, path string) (string, error) {
 	p, err := securePath(root, path)
 	if err != nil {
+		return "", err
+	}
+	if err := ctx.Err(); err != nil {
 		return "", err
 	}
 	info, err := os.Stat(p)
@@ -91,17 +98,26 @@ func ReadFile(root, path string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("read_file %q: %w", path, err)
 	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	return string(b), nil
 }
 
-func ListDir(root, path string) (string, error) {
+func ListDir(ctx context.Context, root, path string) (string, error) {
 	p, err := securePath(root, path)
 	if err != nil {
+		return "", err
+	}
+	if err := ctx.Err(); err != nil {
 		return "", err
 	}
 	entries, err := os.ReadDir(p)
 	if err != nil {
 		return "", fmt.Errorf("list_dir %q: %w", path, err)
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
 	}
 	lines := make([]string, 0, len(entries))
 	for _, entry := range entries {

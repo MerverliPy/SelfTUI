@@ -77,6 +77,7 @@ type AgentView struct {
 	stopArmed    bool                  // M7: first esc while running arms the interrupt (opencode-style)
 	stopCancel   func()                // cancels the in-flight chat context
 	chatCh       chan tea.Msg          // activity channel (PLAN §8), one stream owner
+	chatDone     chan struct{}         // closed by the producer when the turn's goroutine exits (M-06)
 	toolStatus   string                // latest agent-tool activity for the hint row
 	confirmation *agent.ToolConfirmMsg // pending mutation approval; blocks input/tab jumps
 
@@ -268,16 +269,53 @@ func (v AgentView) loadModelsCmd() tea.Cmd {
 	}
 }
 
+// emitEvent is the one context-aware producer delivery used by every
+// background stream producer (the chat and pull goroutines), replacing
+// unconditional channel sends (M-06). Contract:
+//
+//   - Delivery succeeds in order, or cancellation wins: while the run context
+//     is alive a blocked send (a full 64-slot activity channel nobody is
+//     draining) yields to cancellation instead of stranding the producer
+//     forever.
+//   - Once canceled, a send never blocks again: the event is delivered only
+//     when a consumer is draining at that instant, and dropped otherwise — so
+//     a producer whose consumer has gone away still terminates. The single
+//     terminal event (AgentDoneMsg / modelsPullDoneMsg) goes through the same
+//     path last, so exactly one terminal UI state is produced whenever
+//     delivery remains possible.
+//   - The channel is owned by the producing goroutine, which closes it only
+//     after its last send — nothing here can ever send on a closed channel.
+func emitEvent(ctx context.Context, ch chan tea.Msg, msg tea.Msg) {
+	select {
+	case ch <- msg:
+		return
+	case <-ctx.Done():
+	}
+	// Cancellation won a blocked send (the channel was full at that instant).
+	// The consumer may have drained concurrently — that is the one case where
+	// delivery is still possible — so give the event a single nonblocking
+	// chance; if nobody is draining, drop it and never block again.
+	select {
+	case ch <- msg:
+	default:
+	}
+}
+
 // startChat begins a streaming agent turn in a background goroutine. The
 // activity channel carries agentEventMsg-wrapped tool events, token deltas,
 // and one final agent.AgentDoneMsg (the shell unwraps before routing, so a
 // chat event can never be dropped at the App again). turnStart anchors the
-// per-turn elapsed footer (M7-B).
+// per-turn elapsed footer (M7-B). chatDone is closed when the producer
+// goroutine exits — the M-06 termination oracle for saturation tests (the
+// channel close is not enough: reading it would drain the backlog and
+// unblock a stuck producer).
 func (v AgentView) startChat() (AgentView, tea.Cmd) {
 	ch := make(chan tea.Msg, 64)
+	done := make(chan struct{})
 	ctx, cancel := context.WithCancel(v.ctx)
 
 	v.chatCh = ch
+	v.chatDone = done
 	v.stopCancel = cancel
 	v.streaming = true
 	v.streamText = ""
@@ -292,13 +330,14 @@ func (v AgentView) startChat() (AgentView, tea.Cmd) {
 	history := append([]ollama.ChatMessage(nil), v.history...)
 
 	go func() {
+		defer close(done)
 		defer close(ch)
 		defer cancel()
 		v.runner.Run(ctx, agent.Request{
 			Model: model, Messages: history,
 			Temperature: v.temperature, TopP: v.topP, NumCtx: v.numCtx,
 		}, func(msg agent.Msg) {
-			ch <- agentEventMsg{msg: msg}
+			emitEvent(ctx, ch, agentEventMsg{msg: msg})
 		})
 	}()
 
@@ -492,6 +531,7 @@ func (v AgentView) onChatDone(m agentDoneMsg) (AgentView, tea.Cmd) {
 	v.stopCancel = nil
 	v.stopArmed = false
 	v.chatCh = nil
+	v.chatDone = nil
 	v.toolStatus = ""
 	v.confirmation = nil
 

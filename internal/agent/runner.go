@@ -288,11 +288,16 @@ func (r *Runner) run(ctx context.Context, req Request, emit func(Msg), reasonOut
 			emit(ToolStartMsg{Name: name, Input: input})
 			result, toolErr := r.executeTool(ctx, call, emit)
 			if toolErr != nil {
-				// M-01: an approval that expired without an answer is not an
-				// ordinary declined call — the owner is not present to
-				// supervise the rest of the turn, so stop instead of letting
-				// the model keep requesting mutations. Run then emits exactly
-				// one AgentDoneMsg carrying the stable timeout error.
+				// M-06: a tool that reports the context is done (canceled or past
+				// its deadline) ends the turn right here — the run is aborting, so
+				// the failure must not round-trip to the model as an ordinary tool
+				// error that invites a retry. M-01 keeps its separate stop: an
+				// approval that expired without an answer also ends the whole turn
+				// with the stable timeout error (the owner is not present to
+				// supervise the rest).
+				if errors.Is(toolErr, context.Canceled) || errors.Is(toolErr, context.DeadlineExceeded) {
+					return toolErr
+				}
 				if errors.Is(toolErr, errApprovalTimedOut) {
 					return fmt.Errorf("agent: %w", toolErr)
 				}
@@ -368,7 +373,7 @@ func (r *Runner) executeTool(ctx context.Context, call ollama.ToolCall, emit fun
 		if err := r.authorizePath(args.Path); err != nil {
 			return "", err
 		}
-		return ReadFile(root, args.Path)
+		return ReadFile(ctx, root, args.Path)
 	case "list_dir":
 		var args struct {
 			Path string `json:"path"`
@@ -382,7 +387,7 @@ func (r *Runner) executeTool(ctx context.Context, call ollama.ToolCall, emit fun
 		if err := r.authorizePath(args.Path); err != nil {
 			return "", err
 		}
-		return ListDir(root, args.Path)
+		return ListDir(ctx, root, args.Path)
 	case "grep":
 		var args struct {
 			Pattern string `json:"pattern"`
@@ -419,6 +424,12 @@ func (r *Runner) executeTool(ctx context.Context, call ollama.ToolCall, emit fun
 		if err := r.confirm(ctx, call, 0, emit); err != nil {
 			return "", err
 		}
+		// M-06: a cancellation that lands after approval but before the write
+		// must not mutate the workspace — check the run context at the last
+		// gate (the write itself is atomic and never masked by a late cancel).
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
 		if err := WriteFile(root, args.Path, args.Content, args.Overwrite); err != nil {
 			return "", err
 		}
@@ -439,6 +450,10 @@ func (r *Runner) executeTool(ctx context.Context, call ollama.ToolCall, emit fun
 			return "", err
 		}
 		if err := r.confirm(ctx, call, 0, emit); err != nil {
+			return "", err
+		}
+		// M-06: same last gate as write_file — never edit after a cancel.
+		if err := ctx.Err(); err != nil {
 			return "", err
 		}
 		if err := EditFile(root, args.Path, args.Old, args.New); err != nil {
