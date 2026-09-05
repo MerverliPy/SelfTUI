@@ -116,6 +116,27 @@ Artifacts (all under the gitignored `dist/`):
 - `dist/SHA256SUMS` — sha256 over both archives; verify from the repo root
   with `sha256sum -c dist/SHA256SUMS`
 
+Audit packages (H-06):
+
+```sh
+make audit-pack                              # dist/selftui-audit-pack-<HEAD>.zip
+```
+
+`scripts/create-audit-pack.sh` produces a deterministic, **manifest-complete**
+ZIP snapshot of the tracked tree (`git ls-files` is authoritative) — dotfiles
+and `.github/workflows/*` included — so an external-audit package can never
+again omit files its inventory promises. It requires a clean worktree,
+snapshots the committed tree at `HEAD`, writes to the gitignored `dist/` by
+default, and **refuses to overwrite an existing archive** (pass `--out` for
+another path or `--force` to overwrite explicitly). Audit prompt/inventory
+files (e.g. `PROMPT.md`, `FILE-INVENTORY.md`) are added only through explicit
+`--extra TARGET=PATH` arguments (`AUDIT_PACK_EXTRAS="PROMPT.md=/path"` through
+make) — never by silently substituting them for tracked files — and every
+archived member is verified as a safe relative path. On success it prints the
+archive path, tracked-file count, SHA256, and `MANIFEST_MATCH=PASS`; the
+`verify` subcommand checks any ZIP against the tracked manifest in both
+directions. Regression suite: `bash scripts/create-audit-pack-test.sh`.
+
 CI and releases run on GitHub Actions (`.github/workflows/`): `ci.yml` runs
 the local gate's checks minus the release-only steps (per-binary
 version-stamp, archives, `SHA256SUMS`) on every pull request and push to

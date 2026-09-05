@@ -7,7 +7,7 @@ BIN     := bin/selftui
 VERSION ?= dev
 
 .PHONY: build test race vuln lint vet fmt run check clean probe probe-build probe-raw probe-local \
-	release-check build-linux-amd64 build-linux-arm64 smoke smoke-model smoke-reconnect
+	release-check build-linux-amd64 build-linux-arm64 smoke smoke-model smoke-reconnect audit-pack
 
 build: ## compile the self-tui binary
 	$(GO) build -o $(BIN) ./cmd/self-tui
@@ -70,6 +70,17 @@ build-linux-arm64: ## CGO-disabled static Linux/arm64 release binary (stamped wi
 
 release-check: ## full release gate; run as: VERSION=v0.1.0 make release-check
 	scripts/release-check.sh
+
+# --- audit packaging (H-06 remediation) -----------------------------------
+# scripts/create-audit-pack.sh snapshots the tracked tree (git ls-files,
+# dotfiles and .github/workflows included) into a deterministic, manifest-
+# complete ZIP for external audits; it refuses to overwrite an existing
+# archive and never runs on a dirty worktree. Default output is the
+# gitignored dist/selftui-audit-pack-<HEAD>.zip; override with AUDIT_PACK_OUT,
+# and add audit prompt/inventory files with AUDIT_PACK_EXTRAS="PROMPT.md=/path"
+# (space-separated TARGET=PATH) or by calling the script's --extra directly.
+audit-pack: ## manifest-complete deterministic source snapshot for external audits
+	scripts/create-audit-pack.sh
 
 clean:
 	rm -rf $(BIN)
