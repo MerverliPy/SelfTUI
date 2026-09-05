@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/list"
@@ -14,6 +16,7 @@ import (
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"selftui/internal/ollama"
 )
@@ -1095,31 +1098,105 @@ func modelInfoLines(info map[string]any) string {
 
 // wrapLines word-wraps every line to at most width cells, splitting at the
 // last whitespace and hard-breaking mid-word when a single word overflows.
-// wrapLines wraps each line to width columns. Rows that already fit (judged
-// by visible width, so styled rows with ANSI escapes are never re-split
-// mid-sequence) pass through untouched; only genuinely long lines are
-// wrapped at word boundaries.
+// Rows that already fit (judged by visible width, so styled rows with ANSI
+// escapes are never re-split mid-sequence) pass through untouched; only
+// genuinely long lines are wrapped.
+//
+// Wrapping is display-cell- and grapheme-aware (M-05): the overflow path
+// delegates to the pinned Charm wrap primitive (github.com/charmbracelet/x/ansi
+// — the same width model lipgloss.Width uses), which preserves ANSI sequences
+// whole and measures wide CJK/emoji at 2 cells and ZWJ clusters atomically,
+// then rejoinSplitMarks repairs the one cluster defect that primitive has
+// with zero-width combining marks. Never slice by len/byte offsets here:
+// bytes are not cells and a cut inside a rune or an escape sequence corrupts
+// the terminal output.
 func wrapLines(lines []string, width int) []string {
 	if width < 1 {
 		return lines
 	}
-	var out []string
+	out := make([]string, 0, len(lines))
 	for _, line := range lines {
 		if lipgloss.Width(line) <= width {
 			out = append(out, line)
 			continue
 		}
-		for len(line) > width {
-			cut := strings.LastIndex(line[:width+1], " ")
-			if cut <= 0 {
-				cut = width
-			}
-			out = append(out, line[:cut])
-			line = strings.TrimLeft(line[cut:], " ")
-		}
-		out = append(out, line)
+		wrapped := ansi.Wrap(line, width, "")
+		out = append(out, rejoinSplitMarks(strings.Split(wrapped, "\n"))...)
 	}
 	return out
+}
+
+// rejoinSplitMarks repairs the one cluster defect of the Charm wrap primitive:
+// ansi.Wrap measures combining marks and ZWJ as zero width, so when a word
+// fills its line exactly the row break can land right after the base rune,
+// stranding the mark at the head of the next row — visually detached from the
+// glyph it modifies. Moving a stranded mark to the end of the previous row
+// changes neither row's cell count (marks are zero-width) and never loses or
+// reorders visible text. Style sequences at the row head (SelfTUI's own SGR
+// opens; remote text is ANSI-sanitized before it reaches wrapLines) are
+// skipped so a styled run starting a row is not mistaken for a stranded mark.
+func rejoinSplitMarks(rows []string) []string {
+	for i := 1; i < len(rows); i++ {
+		for {
+			head := ansiHeadLen(rows[i])
+			if head >= len(rows[i]) {
+				break // style-only row
+			}
+			r, size := utf8.DecodeRuneInString(rows[i][head:])
+			if !isZeroWidthMark(r) {
+				break
+			}
+			rows[i-1] += rows[i][head : head+size]
+			rows[i] = rows[i][:head] + rows[i][head+size:]
+		}
+	}
+	return rows
+}
+
+// isZeroWidthMark reports whether r is a combining mark or a zero-width joiner
+// — zero-width runes that must stay glued to the rune they modify and must
+// never open a wrapped row.
+func isZeroWidthMark(r rune) bool {
+	return r == '\u200d' ||
+		unicode.Is(unicode.Mn, r) || unicode.Is(unicode.Mc, r) || unicode.Is(unicode.Me, r)
+}
+
+// ansiHeadLen returns the byte length of the leading ANSI escape sequences in
+// s (CSI through its final byte, OSC through BEL/ST, two-byte ESC pairs), so
+// callers can inspect the first visible rune of a styled row.
+func ansiHeadLen(s string) int {
+	i := 0
+	for i < len(s) && s[i] == '\x1b' {
+		if i+1 >= len(s) {
+			return len(s)
+		}
+		switch s[i+1] {
+		case '[': // CSI: through the final byte (0x40-0x7e).
+			j := i + 2
+			for j < len(s) && (s[j] < 0x40 || s[j] > 0x7e) {
+				j++
+			}
+			if j < len(s) {
+				j++
+			}
+			i = j
+		case ']': // OSC: through BEL or ST (ESC \).
+			j := i + 2
+			for j < len(s) && s[j] != '\a' && !(s[j] == '\x1b' && j+1 < len(s) && s[j+1] == '\\') {
+				j++
+			}
+			if j < len(s) {
+				j++ // consume BEL (or the ESC of an ST pair)
+				if j-1 < len(s) && s[j-1] == '\x1b' && j < len(s) {
+					j++ // consume the '\' of an ST pair
+				}
+			}
+			i = j
+		default: // Two-byte escape (ESC X).
+			i += 2
+		}
+	}
+	return i
 }
 
 func humanBytes(n int64) string {

@@ -9,8 +9,11 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"selftui/internal/ollama"
 )
@@ -328,23 +331,138 @@ func TestModelsViewNoFetchOnEmptyList(t *testing.T) {
 	}
 }
 
+// wrapEmoji samples used by the cell-safe wrap cases. ZWJ sequences are a
+// single grapheme cluster of 2 display cells (person + ZWJ + glyph).
+const (
+	familyEmoji = "\U0001F468\u200d\U0001F469\u200d\U0001F467\u200d\U0001F466" // 👨‍👩‍👧‍👦
+	techEmoji   = "\U0001F469\u200d\U0001F4BB"                                 // 👩‍💻
+)
+
 func TestWrapLines(t *testing.T) {
 	cases := []struct {
+		name  string
 		in    []string
 		width int
-		want  []string
+		// want nil means the case is invariant-checked only (valid UTF-8,
+		// every row ≤ width cells, no text loss/duplication, ANSI intact,
+		// combining/ZWJ marks never stranded at a row head).
+		want []string
 	}{
-		{[]string{"abcdef"}, 3, []string{"abc", "def"}},
-		{[]string{"a b c"}, 3, []string{"a b", "c"}}, // wrap at the trailing space
-		{[]string{"a b c"}, 4, []string{"a b", "c"}},
-		{[]string{"abc"}, 0, []string{"abc"}}, // degenerate width: passthrough
+		{"ascii-hard-split", []string{"abcdef"}, 3, []string{"abc", "def"}},
+		{"ascii-word-boundary", []string{"a b c"}, 3, []string{"a b", "c"}}, // wrap at the trailing space
+		{"ascii-word-boundary-room", []string{"a b c"}, 4, []string{"a b", "c"}},
+		{"ascii-overflow-word", []string{"abcdefghij"}, 3, []string{"abc", "def", "ghi", "j"}},
+		{"degenerate-zero-width", []string{"abc"}, 0, []string{"abc"}}, // degenerate width: passthrough
+
+		// M-05: cell-/ANSI-aware wrapping. Wide CJK, emoji and ZWJ clusters
+		// occupy 2 cells each; combining marks occupy 0 and must never be
+		// split from their base rune across a row break.
+		{"cjk-words", []string{"你好 世界 你好 世界 你好 世界"}, 5,
+			[]string{"你好", "世界", "你好", "世界", "你好", "世界"}},
+		{"cjk-no-space", []string{"你好你好你好你好你好你好"}, 5,
+			[]string{"你好", "你好", "你好", "你好", "你好", "你好"}},
+		{"cjk-word-wider-than-limit", []string{"字字字字字字字字"}, 3,
+			[]string{"字", "字", "字", "字", "字", "字", "字", "字"}},
+		{"emoji", []string{"🚀🚀🚀🚀🚀🚀"}, 5, []string{"🚀🚀", "🚀🚀", "🚀🚀"}},
+		{"zwj-family", []string{familyEmoji + familyEmoji + familyEmoji}, 4,
+			[]string{familyEmoji + familyEmoji, familyEmoji}},
+		{"zwj-technologist", []string{techEmoji + techEmoji + techEmoji + techEmoji}, 5,
+			[]string{techEmoji + techEmoji, techEmoji + techEmoji}},
+		{"combining-marks", []string{strings.Repeat("e\u0301", 10)}, 5,
+			[]string{strings.Repeat("e\u0301", 5), strings.Repeat("e\u0301", 5)}},
+		{"combining-marks-narrow", []string{strings.Repeat("e\u0301", 10)}, 3,
+			[]string{strings.Repeat("e\u0301", 3), strings.Repeat("e\u0301", 3), strings.Repeat("e\u0301", 3), "e\u0301"}},
+		{"double-combining-marks", []string{strings.Repeat("q\u0301\u0301", 9)}, 4, nil},
+		{"combining-cjk-mixed", []string{strings.Repeat("e\u0301", 4) + " 中文混合 text with 標點符號 and caf\u00e9"}, 8, nil},
+		{"styled-fits-passthrough", []string{"\x1b[1mhi there\x1b[0m"}, 80, []string{"\x1b[1mhi there\x1b[0m"}},
+		{"styled-ascii-overflow", []string{"\x1b[1mthe quick brown fox jumps over the lazy dog\x1b[0m"}, 12,
+			[]string{"\x1b[1mthe quick", "brown fox", "jumps over", "the lazy dog\x1b[0m"}},
+		{"styled-cjk-overflow", []string{"\x1b[31m样式 样式 样式 样式 样式\x1b[0m"}, 9,
+			[]string{"\x1b[31m样式 样式", "样式 样式", "样式\x1b[0m"}},
+		{"styled-long-payload", []string{"\x1b[32m" + strings.Repeat("payload data ", 30) + "\x1b[0m"}, 24, nil},
+		{"mixed-ascii-unicode-ansi", []string{"\x1b[33mwarning: 錯誤 狀態 code 0x1F680 你你你你 you are here\x1b[0m"}, 10, nil},
 	}
 	for _, c := range cases {
 		got := wrapLines(c.in, c.width)
-		if strings.Join(got, "|") != strings.Join(c.want, "|") {
-			t.Errorf("wrapLines(%v, %d) = %q (joined %q), want %q", c.in, c.width, got, strings.Join(got, "|"), c.want)
+		if c.want != nil {
+			if strings.Join(got, "|") != strings.Join(c.want, "|") {
+				t.Errorf("%s: wrapLines(%q, %d) = %q (joined %q), want %q",
+					c.name, strings.Join(c.in, "\n"), c.width, got, strings.Join(got, "|"), strings.Join(c.want, "|"))
+			}
+		}
+		checkWrapRowInvariants(t, c.name, c.width, got, strings.Join(c.in, "\n"))
+	}
+}
+
+// checkWrapRowInvariants asserts the M-05 contract on every wrapped row: valid
+// UTF-8, at most width display cells, no row stranded with a combining/ZWJ
+// mark at its head (which would visually detach the mark from its base), no
+// ANSI opener split from its parameters/reset, and visible text preserved.
+func checkWrapRowInvariants(t *testing.T, name string, width int, rows []string, in string) {
+	t.Helper()
+	for i, r := range rows {
+		if !utf8.ValidString(r) {
+			t.Errorf("%s: row %d is not valid UTF-8: %q", name, i, r)
+		}
+		if width > 0 && lipgloss.Width(r) > width {
+			t.Errorf("%s: row %d is %d cells wide (limit %d): %q", name, i, lipgloss.Width(r), width, r)
 		}
 	}
+	for i, r := range rows {
+		if i == 0 {
+			continue // the original text may itself begin with a mark
+		}
+		if rr, _ := utf8.DecodeRuneInString(rows[i][ansiHeadLen(rows[i]):]); rr == '\u200d' ||
+			unicode.Is(unicode.Mn, rr) || unicode.Is(unicode.Mc, rr) || unicode.Is(unicode.Me, rr) {
+			t.Errorf("%s: row %d begins with a detached mark %q (from %q): %q", name, i, string(rr), in, r)
+		}
+	}
+	// No ANSI sequence may be split across a row boundary: an ESC that opens
+	// on a row must reach its final byte on the same row, or the opener's
+	// parameters are lost and its final byte renders as stray text.
+	for i, r := range rows {
+		open := false
+		for _, c := range r {
+			if c == '\x1b' {
+				if open {
+					t.Errorf("%s: row %d contains a stray ESC mid-sequence: %q", name, i, r)
+				}
+				open = true
+				continue
+			}
+			if open && isAnsiFinal(c) {
+				open = false
+			}
+		}
+		if open {
+			t.Errorf("%s: row %d ends inside an ANSI sequence (opener split): %q", name, i, r)
+		}
+	}
+	if strings.TrimSpace(stripANSI(strings.Join(rows, "\n"))) == "" {
+		if len(rows) > 0 && rows[0] != "" {
+			t.Errorf("%s: wrap erased all visible content", name)
+		}
+	}
+	if got, want := canonicalVisible(strings.Join(rows, "\n")), canonicalVisible(in); got != want {
+		t.Errorf("%s: visible text changed across wrapping:\n got %q\nwant %q", name, got, want)
+	}
+}
+
+// canonicalVisible is the whitespace-insensitive visible form of s used to
+// prove wrapping neither loses nor duplicates text: ANSI is stripped and all
+// whitespace (including the row breaks wrapping may substitute for it) is
+// removed, so wide/combining/ZWJ content must survive in exact rune order.
+func canonicalVisible(s string) string {
+	s = stripANSI(s)
+	var b strings.Builder
+	for _, r := range s {
+		switch r {
+		case ' ', '\t', '\n', '\r':
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 func TestHumanBytes(t *testing.T) {
