@@ -22,6 +22,13 @@ type App struct {
 	w, h   int
 	models ModelsView
 	agent  AgentView
+
+	// client is the App-owned Ollama connection shared by the Models and
+	// Agent tabs. It is created once at construction and replaced only when a
+	// settings save changes host or token; scalar/theme-only saves reuse it,
+	// so the two tabs can never drift onto different client instances (P1-6).
+	client *ollama.Client
+
 	// settings is the Settings tab. While its form is being edited it is a
 	// modal: the shell's tab keys and 1/2/3 jumps yield to the form so typed
 	// characters reach the fields (see switchTab and the KeyMsg handling).
@@ -60,14 +67,16 @@ func New(cfg *config.Config, styles Styles, client *ollama.Client) App {
 // root (see normalizeCtx).
 func NewWithContext(ctx context.Context, cfg *config.Config, styles Styles, client *ollama.Client) App {
 	ctx = normalizeCtx(ctx)
-	return App{
+	a := App{
 		cfg:      cfg,
 		styles:   styles,
 		curTheme: cfg.Theme,
+		client:   client,
 		models:   newModelsView(ctx, client, styles, cfg.Theme),
 		agent:    newAgentView(ctx, client, styles, cfg.Theme, cfg.DefaultModel, cfg.WorkspaceRoot, cfg.Agent.SystemPrompt, cfg.Agent, cfg.ToolsEnabled, cfg.Host),
 		settings: NewSettingsView(cfg, styles),
 	}
+	return a
 }
 
 // normalizeCtx returns ctx, or a background root when ctx is nil, so a
@@ -344,16 +353,21 @@ func (a *App) applySaved(cfg config.Config) tea.Cmd {
 		a.settings = a.settings.applyTheme(cfg.Theme != "light", a.styles)
 	}
 
-	client := ollama.New(cfg.Host, cfg.AuthToken)
-
 	if clientChanged {
-		models, mCmd := a.models.ApplyClient(client)
-		agent, aCmd := a.agent.ApplyConfig(cfg, client, true)
+		// Host/token changed: swap the App-owned client once and point both
+		// tabs at that same new instance (P1-6).
+		a.client = ollama.New(cfg.Host, cfg.AuthToken)
+		models, mCmd := a.models.ApplyClient(a.client)
+		agent, aCmd := a.agent.ApplyConfig(cfg, a.client, true)
 		a.models, a.agent = models, agent
 		return tea.Batch(mCmd, aCmd)
 	}
 
-	agent, aCmd := a.agent.ApplyConfig(cfg, client, false)
+	// Scalar/theme-only save: keep the existing App-owned client (both tabs
+	// already hold it), re-point the Agent view's config at it, and rebuild
+	// the runner for the new agent settings. No new client instance is
+	// created, so the shared-client seam never drifts (P1-6).
+	agent, aCmd := a.agent.ApplyConfig(cfg, a.client, false)
 	a.agent = agent
 	if aCmd != nil {
 		return aCmd

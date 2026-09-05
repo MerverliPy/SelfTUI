@@ -11,6 +11,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"selftui/internal/config"
+	"selftui/internal/ollama"
 )
 
 // settingsApp builds an App whose session config lives at a temp file path so
@@ -369,5 +370,82 @@ func TestThemePreviewRollsBackOnSaveFailure(t *testing.T) {
 	got := view(t, app)
 	if !strings.Contains(got, "Could not save settings") {
 		t.Errorf("expected the save-error panel, got:\n%s", got)
+	}
+}
+
+// P1-6 regression: a settings save that only changes scalar/agent values must
+// reuse the App-owned Ollama client, not construct a fresh one — otherwise the
+// Agent tab silently holds a different client instance than the Models tab
+// after every non-host save (the shared-client seam drifts, and future
+// client-local state/policies diverge between tabs). The App is built the way
+// main does: one real client at construction.
+func applySavedApp(t *testing.T) (App, config.Config) {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(config.Overrides{ConfigPath: &path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := ollama.New(cfg.Host, cfg.AuthToken)
+	m := New(&cfg, NewStyles(cfg.Theme), client)
+	return m, cfg
+}
+
+func TestApplySavedReusesClientWhenHostTokenUnchanged(t *testing.T) {
+	m, _ := applySavedApp(t)
+
+	// Capture the client each tab holds before the save.
+	preAgentClient := m.agent.client
+	preModelsClient := m.models.client
+	if preAgentClient == nil || preModelsClient == nil {
+		t.Fatal("test fixture should hold a real client on both tabs")
+	}
+
+	// A scalar-only save (temperature changed, host/token identical).
+	next := *m.cfg
+	next.Agent.Temperature = 0.42
+	_ = m.applySaved(next)
+
+	if m.agent.client != preAgentClient {
+		t.Error("Agent client was rebuilt on a host/token-unchanged save; want the same instance reused")
+	}
+	if m.models.client != preModelsClient {
+		t.Error("Models client was rebuilt on a host/token-unchanged save; want the same instance reused")
+	}
+	// The scalar still applied.
+	if m.agent.temperature != 0.42 {
+		t.Errorf("agent temperature = %v after save, want 0.42", m.agent.temperature)
+	}
+	if m.cfg.Agent.Temperature != 0.42 {
+		t.Errorf("cfg temperature = %v after save, want 0.42", m.cfg.Agent.Temperature)
+	}
+}
+
+// TestApplySavedSwapsClientOnHostChange proves the rebuild still happens when
+// host actually changes (both tabs point at the same new instance, and it is
+// not the pre-save one).
+func TestApplySavedSwapsClientOnHostChange(t *testing.T) {
+	m, _ := applySavedApp(t)
+	old := m.agent.client
+	if old == nil {
+		t.Fatal("test fixture should hold a client")
+	}
+
+	next := *m.cfg
+	next.Host = "https://other.example:11434"
+	_ = m.applySaved(next)
+
+	if m.agent.client == nil || m.agent.client == old {
+		t.Error("Agent client was not rebuilt on a host change; want a fresh instance")
+	}
+	if m.models.client != m.agent.client {
+		t.Error("Models and Agent tabs must share one client after a host change")
+	}
+	if m.cfg.Host != "https://other.example:11434" {
+		t.Errorf("cfg.Host = %q after save, want the new host", m.cfg.Host)
 	}
 }
