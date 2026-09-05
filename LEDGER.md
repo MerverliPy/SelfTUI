@@ -3090,3 +3090,97 @@ unchanged by this task).
 - Fresh Pi session: runbook **Task 12 (M-05 — replace byte-based wrapping with cell-/ANSI-aware wrapping)**:
   confirm branch `fix/v0.1.1-audit-remediation` + clean status, then follow the Task-12 block. Do not run
   `make smoke` until the owner runs it on a disposable model/tag or an isolated Ollama store.
+
+### 2026-09-05 — Runbook Task 12: M-05 replace byte-based wrapping with cell-/ANSI-aware wrapping (owner task)
+**Milestone:** `SelfTUI-Pi-Audit-Remediation-Runbook-2026-09-04.md` Task 12 (M-05). No §10 row to tick
+(runbook-owned step). **Result:** done — red-green on branch `fix/v0.1.1-audit-remediation`; code commit
+follows this entry, docs commit after it. Worktree clean, gates exit 0. `make smoke` NOT run (owner-run
+on a disposable model/tag or an isolated Ollama store — unchanged by this task).
+
+**Context (what M-05 actually was)**
+- `wrapLines` (`internal/ui/models_view.go`) decided fit by `lipgloss.Width` (cells) but wrapped by byte
+  offsets: `for len(line) > width`, `strings.LastIndex(line[:width+1], " ")`, `line[:cut]`/`line[cut:]`.
+  Over-width CJK, emoji, ZWJ, combining-mark or ANSI-styled rows were cut inside a UTF-8 sequence or
+  control sequence → invalid text, style bleed, wrong row count, or frame overflow at 72×30. Audit
+  evidence cited `models_view.go:953-979`; tests were ASCII-only. Callers: models detail pane wrap +
+  `maxScroll` height math (`models_view.go`), `renderCenteredOverlay` body wrap shared with Agent modals
+  and the App palette (`components.go:65`). Fix contract: display-cell/grapheme-aware, ANSI-preserving
+  wrap reusing one pinned Charm width facility (no parallel width model); every row valid UTF-8 and
+  ≤ width cells; visible text neither lost nor duplicated; ASCII word-boundary behavior and deterministic
+  output preserved; golden fixtures unchanged unless a semantic diff is intentional.
+
+**Reproduction (RED, decisive)**
+- Extended `TestWrapLines` with over-width CJK/emoji/ZWJ/combining/word-wider-than-limit/styled content
+  plus a per-row invariant walker (valid UTF-8 · `lipgloss.Width(row) ≤ width` · no row head stranded
+  with a combining mark or ZWJ · no ANSI opener split across rows · canonical visible text preserved).
+- RED at HEAD: `go test -count=1 ./internal/ui -run 'TestWrapLines'` → FAIL. Byte slicing split
+  `你好…` into `"你\xe5\xa5"`, `"\xbd"`, `"世\xe7\x95"`, `"\x8c"`… (invalid UTF-8 on every CJK/emoji row)
+  and shredded a 25-byte ZWJ family emoji into ~20 garbage rows. Evidence captured above in this entry.
+
+**Fix (green)**
+- `wrapLines` overflow path now delegates to the pinned Charm wrap primitive
+  `ansi.Wrap` (`github.com/charmbracelet/x/ansi` v0.11.8 — already a **direct** dependency via the H-05
+  sanitizer; no go.mod/go.sum change). That is the same width model `lipgloss.Width` uses (`lipgloss/v2
+  Width` = `ansi.StringWidth`, grapheme clusters): one Charm width model, no parallel implementation.
+  Fit rows still pass through byte-untouched (existing styled/fit behavior preserved); only over-width
+  lines are wrapped. ASCII word-boundary outputs verified identical to the old algorithm on the pinned
+  cases (`abcdef`/3, `a b c`/3+4, hard-split overflow words).
+- Empirically found one cluster defect in `ansi.Wrap`: it measures combining marks and ZWJ as zero width
+  and can place the row break right after the base rune (e.g. `e` + U+0301 → row 1 `…e`, row 2 starts
+  with a bare U+0301 — the same mark-detachment class the audit names). Added `rejoinSplitMarks`: a
+  zero-width repair that moves stranded marks from a row head to the previous row's tail (cell widths
+  unchanged, byte order preserved, style-only/ANSI heads skipped via `ansiHeadLen`). ZWJ family
+  (`👨👩👧👦`) and woman-technologist (`👩💻`) clusters are merged correctly by the primitive and pass whole.
+- All 19 `TestWrapLines` cases + `TestWrapLinesCellSafe` invariants green.
+
+**Tests (red-green)**
+- RED (HEAD): the failure above (captured in this entry's reproduction block).
+- `internal/ui/models_view_test.go` (extended `TestWrapLines`, now 19 named cases): ASCII regressions
+  unchanged (hard split, word boundary, trailing-space wrap, degenerate width 0, plus a new ASCII
+  overflow word) and new M-05 cases: CJK words, CJK no-space, CJK word wider than the limit, 🚀 emoji,
+  ZWJ family ×3 @4, ZWJ technologist ×4 @5, combining `e\u0301`×10 @5 and @3, double-combining
+  `q\u0301\u0301`×9 (invariant-only), combining+CJK mixed (invariant-only), styled fits-passthrough
+  (byte-exact), styled ASCII overflow (@12 exact rows), styled CJK overflow (@9 exact rows), styled long
+  payload (invariant-only), mixed ASCII+CJK+ANSI (invariant-only). Every case runs the shared
+  `checkWrapRowInvariants` walker (valid UTF-8, row ≤ width cells, no detached mark at a row head after
+  `ansiHeadLen`, no ANSI opener split across rows via an `isAnsiFinal` scanner, canonical visible text
+  preserved whitespace-insensitively). Exact-row expectations are semantic (word/cluster boundaries, 2
+  cells for wide runes, 0-width marks glued) and were verified against the project's own
+  `lipgloss.Width` oracle.
+
+**Commands + exit codes**
+- Session guard at start: `git status --short` → empty · branch `fix/v0.1.1-audit-remediation` · HEAD `429dfc2`.
+- Red: `go test -count=1 ./internal/ui -run 'TestWrapLines'` → FAIL (invalid-UTF-8 rows; captured).
+- Green: focused `go test -count=1 ./internal/ui -run 'TestWrapLines|Test.*Unicode|TestTruncateToWidth'` → ok ·
+  `go test -count=1 ./internal/ui` → ok (5.1s, includes byte-exact golden fixtures — **no golden file
+  changed**: every golden body line fits its pane, so no fixture needed a semantic update) ·
+  `go vet ./internal/ui/` → 0 · `make check` → 0 (build + full suite + vet + gofmt clean) ·
+  `git diff --check` → clean. `go.mod`/`go.sum` untouched (x/ansi already direct).
+- `make smoke`/`make smoke-model` NOT run — owner-run on a disposable model/tag (H-04 preflight). No
+  release-check (Task 22). `git status --short` after commits → empty.
+
+**Decisions / lines to respect**
+- Width oracle is Charm's, end to end: `lipgloss.Width` decides "fits", and `ansi.Wrap` (grapheme method,
+  same clusters/widths `StringWidth` uses) does the wrapping — the task's "one Charm width/ANSI facility,
+  no parallel width model" is literal. The only hand-rolled logic is the zero-width mark repair, which
+  provably cannot change any row's cell count and preserves byte order.
+- ASCII semantics from the pre-fix tests are preserved exactly; `ansi.Wrap` also hard-breaks words longer
+  than the width (verified identical split points on the pinned ASCII fixtures and overflow words).
+- `rejoinSplitMarks` repairs only row heads at i≥1 (a row 0 leading mark is the input's own); ANSI heads
+  are skipped so a styled run opening a row is never misread as a stranded mark. Style-only rows are left
+  alone; a row left empty after a tail-mark move renders as a blank line (harmless, never a floating mark).
+- Single grapheme clusters wider than the requested width (possible only below 2 columns) are kept whole
+  by the primitive; no caller wraps below 16 columns (overlay `innerW = max(w-6,16)`, detail panes ≥ 38),
+  and the App's small-terminal gate (40×12) keeps ModelsView off sub-40 geometry entirely.
+- Scope kept to the M-05 finding: `truncateToWidth` (agent_view.go) was already rune/ANSI-safe and is out
+  of the allowed-file set; untouched.
+
+**Blockers / open decisions**
+- None for Task 12. Carried env note from Task 02/04: `make vuln` needs `$(go env GOPATH)/bin` on PATH.
+- Task 13 (M-06) follows next: cancellation/backpressure for tool work and producer sends (grep is
+  already context-aware from Task 02), then M-07 delete overlay etc.
+
+**Next action**
+- Fresh Pi session: runbook **Task 13 (M-06 — propagate cancellation through tools and UI delivery)**:
+  confirm branch `fix/v0.1.1-audit-remediation` + clean status, then follow the Task-13 block. Do not run
+  `make smoke` until the owner runs it on a disposable model/tag or an isolated Ollama store.
