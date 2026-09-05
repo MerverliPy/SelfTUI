@@ -7,6 +7,7 @@ package agent
 // runner re-budgets the same history every iteration).
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
@@ -151,4 +152,302 @@ func messageContents(in []ollama.ChatMessage) []string {
 		out[i] = msg.Content
 	}
 	return out
+}
+
+// --- M-02 protocol-safe context budgeting (external audit M-02) ------------
+//
+// BudgetMessages must evict conversation in ATOMIC exchange units, not one
+// message at a time: a tool turn is an assistant tool_calls message plus all
+// of its correlated role=tool results, and splitting that group (or leaving a
+// result behind when its call is dropped) sends Ollama a protocol-invalid
+// history. It must also never silently exceed the budget: an oversized
+// retained tool call or an oversized system prompt has no shrinkable Content,
+// so one-message eviction + truncateLatest cannot bound it. Regression
+// helpers here drive the six table scenarios in TestBudgetM02ProtocolSafe.
+
+// budgetLimitFor returns the smallest numCtx whose three-quarter budget is
+// exactly wantLimit, so table cases can express limits precisely.
+func budgetLimitFor(wantLimit int) int {
+	return (4*wantLimit + 2) / 3
+}
+
+// callToolMsg is an assistant tool_calls message for the named tool.
+func callToolMsg(name, args string) ollama.ChatMessage {
+	return ollama.ChatMessage{
+		Role: ollama.RoleAssistant,
+		ToolCalls: []ollama.ToolCall{{
+			Function: ollama.ToolCallFunction{Name: name, Arguments: jsonRaw(args)},
+		}},
+	}
+}
+
+func jsonRaw(s string) []byte { return []byte(s) }
+
+// toolResultMsg is one role=tool result correlated with a preceding call.
+func toolResultMsg(name, content string) ollama.ChatMessage {
+	return ollama.ChatMessage{Role: ollama.RoleTool, ToolName: name, Content: content}
+}
+
+// checkBudgetInvariants asserts the M-02 structural postconditions on any
+// BudgetMessages result: at most one truncation marker, no retained role=tool
+// message whose immediately preceding retained message is not an assistant
+// tool call, and — when a bound is achievable — ApproxTokens <= limit. When
+// idempotent is true the result must also be a fixed point of BudgetMessages
+// (the runner re-budgets the same history every iteration).
+func checkBudgetInvariants(t *testing.T, got []ollama.ChatMessage, limit int, idempotent bool) {
+	t.Helper()
+	markers := 0
+	for _, m := range got {
+		if m.Role == ollama.RoleSystem && m.Content == TruncationNotice {
+			markers++
+		}
+	}
+	if markers > 1 {
+		t.Errorf("marker count = %d, want at most 1", markers)
+	}
+	for i, m := range got {
+		if m.Role != ollama.RoleTool {
+			continue
+		}
+		if i == 0 {
+			t.Errorf("retained history begins with an orphan role=tool message")
+			continue
+		}
+		if prev := got[i-1]; prev.Role != ollama.RoleAssistant || len(prev.ToolCalls) == 0 {
+			t.Errorf("role=tool message at index %d lacks an immediately preceding assistant tool call", i)
+		}
+	}
+	if limit >= 0 && approximateTokens(got) > limit {
+		t.Errorf("output exceeds budget: approximateTokens = %d, limit = %d", approximateTokens(got), limit)
+	}
+	if idempotent {
+		if again := BudgetMessages(got, budgetLimitFor(limit)); !reflect.DeepEqual(again, got) {
+			t.Errorf("result is not a fixed point of BudgetMessages:\n first:  %+v\n second: %+v", got, again)
+		}
+	}
+}
+
+// rolesOf extracts the role sequence for compact structural assertions.
+func rolesOf(msgs []ollama.ChatMessage) []string {
+	out := make([]string, len(msgs))
+	for i, m := range msgs {
+		out[i] = string(m.Role)
+	}
+	return out
+}
+
+func wantRoles(t *testing.T, got []ollama.ChatMessage, want ...string) {
+	t.Helper()
+	if gotRoles := rolesOf(got); !reflect.DeepEqual(gotRoles, want) {
+		t.Fatalf("roles = %v, want %v\nmessages: %+v", gotRoles, want, got)
+	}
+}
+
+// contentPresent reports whether any retained message's content equals the
+// marker string (used to prove a whole exchange was dropped with it).
+func contentPresent(got []ollama.ChatMessage, marker string) bool {
+	for _, m := range got {
+		if m.Content == marker {
+			return true
+		}
+	}
+	return false
+}
+
+// TestBudgetM02ProtocolSafe is the M-02 table: atomic exchange eviction,
+// orphan prevention, newest-exchange preference, and deterministic bounded
+// representations for the two unshrinkable oversized shapes (a giant retained
+// tool call and a giant system prompt), plus a tiny num_ctx.
+func TestBudgetM02ProtocolSafe(t *testing.T) {
+	sys := sysMsg("s")
+	big := func(n int) string { return strings.Repeat("x", n) }
+	bigR := func(n int) string { return strings.Repeat("r", n) }
+
+	cases := []struct {
+		name   string
+		in     []ollama.ChatMessage
+		numCtx int
+		limit  int
+		check  func(t *testing.T, got []ollama.ChatMessage)
+	}{
+		{
+			// One assistant tool call + one result inside an OLDER exchange
+			// that must be dropped: the call and its result must vanish
+			// together. One-message eviction used to stop between them and
+			// start retained history with a role=tool orphan.
+			name:   "assistant call plus one result evicted atomically",
+			in:     []ollama.ChatMessage{sys, userMsg(big(400)), callToolMsg("read_file", `{"path":"/old"}`), toolResultMsg("read_file", bigR(400)), userMsg(bigN("n", 60)), asstMsg(bigN("m", 60))},
+			numCtx: budgetLimitFor(150),
+			limit:  150,
+			check: func(t *testing.T, got []ollama.ChatMessage) {
+				wantRoles(t, got, "system", "system", "user", "assistant")
+				if !strings.Contains(got[len(got)-2].Content, "n") {
+					t.Errorf("newest user turn lost: %+v", got)
+				}
+				if contentPresent(got, big(400)) || contentPresent(got, bigR(400)) {
+					t.Errorf("dropped exchange left a message behind: %+v", got)
+				}
+			},
+		},
+		{
+			// One assistant message carrying a parallel batch of calls plus
+			// ALL of their results: the whole group is one atomic exchange.
+			// No result may survive its calls, and no call may survive
+			// without every correlated result.
+			name: "parallel calls plus all results evicted atomically",
+			in: []ollama.ChatMessage{
+				sys, userMsg(big(400)),
+				assistantParallelCalls(`{"path":"/a"}`, `{"path":"/b"}`),
+				toolResultMsg("read_file", bigR(300)), toolResultMsg("list_dir", bigR(300)),
+				userMsg(bigN("n", 60)), asstMsg(bigN("m", 60)),
+			},
+			numCtx: budgetLimitFor(225),
+			limit:  225,
+			check: func(t *testing.T, got []ollama.ChatMessage) {
+				wantRoles(t, got, "system", "system", "user", "assistant")
+				if contentPresent(got, bigR(300)) || contentPresent(got, big(400)) {
+					t.Errorf("parallel batch left a call or result behind: %+v", got)
+				}
+			},
+		},
+		{
+			// Two older exchanges (one plain, one a full tool exchange) plus
+			// the newest exchange. The newest complete user-led exchange is
+			// preferred: both older exchanges must disappear whole, in order.
+			name: "two older exchanges dropped before the newest",
+			in: []ollama.ChatMessage{
+				sys,
+				userMsg(big(300)), asstMsg(bigN("y", 300)), // oldest plain exchange
+				userMsg(big(500)), callToolMsg("read_file", `{"path":"/p"}`), toolResultMsg("read_file", bigR(500)), // middle tool exchange
+				userMsg(bigN("w", 40)), asstMsg(bigN("z", 40)), // newest exchange
+			},
+			numCtx: budgetLimitFor(170),
+			limit:  170,
+			check: func(t *testing.T, got []ollama.ChatMessage) {
+				wantRoles(t, got, "system", "system", "user", "assistant")
+				if !strings.Contains(got[len(got)-1].Content, "z") || !strings.Contains(got[len(got)-2].Content, "w") {
+					t.Errorf("newest exchange not retained whole: %+v", got)
+				}
+				for _, lost := range []string{big(300), big(500), bigR(500)} {
+					if contentPresent(got, lost) {
+						t.Errorf("older exchange content survived: %+v", got)
+					}
+				}
+			},
+		},
+		{
+			// A retained tool exchange whose call arguments alone blow the
+			// budget. Content truncation cannot shrink arguments; the call
+			// must get a deterministic bounded representation and the whole
+			// exchange (call + result + user turn) must stay intact and under
+			// the limit — never silently sent raw.
+			name:   "latest oversized tool call bounded deterministically",
+			in:     []ollama.ChatMessage{sys, userMsg(bigN("q", 80)), callToolMsg("write_file", `{"content":"`+big(4000)+`"}`), toolResultMsg("write_file", "wrote /x")},
+			numCtx: budgetLimitFor(150),
+			limit:  150,
+			check: func(t *testing.T, got []ollama.ChatMessage) {
+				wantRoles(t, got, "system", "user", "assistant", "tool")
+				asst := got[2]
+				if len(asst.ToolCalls) != 1 || asst.ToolCalls[0].Function.Name != "write_file" {
+					t.Fatalf("tool call not retained: %+v", got)
+				}
+				if args := string(asst.ToolCalls[0].Function.Arguments); args != "{}" {
+					t.Errorf("arguments not compacted to the deterministic placeholder: %q", args)
+				}
+				if !strings.HasPrefix(got[1].Content, "q") || got[3].Content != "wrote /x" {
+					t.Errorf("user turn or result corrupted: %+v", got)
+				}
+			},
+		},
+		{
+			// An oversized system prompt cannot be evicted and has no
+			// conversational older turn to drop; the output must still be
+			// bounded via a deterministic representation of the pinned system
+			// message, in its intended position, with no marker added.
+			name:   "oversized system prompt bounded",
+			in:     []ollama.ChatMessage{sysMsg(big(20000)), userMsg(bigN("h", 40))},
+			numCtx: budgetLimitFor(48),
+			limit:  48,
+			check: func(t *testing.T, got []ollama.ChatMessage) {
+				if len(got) != 2 {
+					t.Fatalf("len = %d, want 2 (system + user): %+v", len(got), got)
+				}
+				if got[0].Role != ollama.RoleSystem || !strings.HasPrefix(got[0].Content, "[truncated] ") {
+					t.Errorf("system message not bounded deterministically: %+v", got[0])
+				}
+				if got[1].Role != ollama.RoleUser {
+					t.Errorf("second message is not the user turn: %+v", got[1])
+				}
+			},
+		},
+		{
+			// num_ctx so small that the whole budget is a handful of tokens:
+			// a lone huge user turn (and a system + huge user) must still be
+			// represented within the limit when that is possible.
+			name:   "tiny num_ctx still bounded",
+			in:     []ollama.ChatMessage{userMsg(big(1000))},
+			numCtx: budgetLimitFor(6),
+			limit:  6,
+			check: func(t *testing.T, got []ollama.ChatMessage) {
+				if len(got) != 1 || !strings.HasPrefix(got[0].Content, "[truncated] ") {
+					t.Fatalf("lone huge turn not bounded: %+v", got)
+				}
+			},
+		},
+		{
+			name:   "tiny num_ctx with system pinned",
+			in:     []ollama.ChatMessage{sys, userMsg(big(1000))},
+			numCtx: budgetLimitFor(6),
+			limit:  6,
+			check: func(t *testing.T, got []ollama.ChatMessage) {
+				wantRoles(t, got, "system", "user")
+				if got[0].Content != "s" || !strings.HasPrefix(got[1].Content, "[truncated] ") {
+					t.Fatalf("system or user not as expected: %+v", got)
+				}
+			},
+		},
+		{
+			// A newest retained tool exchange whose RESULT is enormous (not
+			// its args): the call and its result must stay together and the
+			// result content is what gets the deterministic bound.
+			name:   "oversized newest result keeps its call",
+			in:     []ollama.ChatMessage{sys, userMsg(bigN("q", 80)), callToolMsg("read_file", `{"path":"/x"}`), toolResultMsg("read_file", bigR(2000))},
+			numCtx: budgetLimitFor(300),
+			limit:  300,
+			check: func(t *testing.T, got []ollama.ChatMessage) {
+				wantRoles(t, got, "system", "user", "assistant", "tool")
+				if len(got[2].ToolCalls) != 1 || got[2].ToolCalls[0].Function.Name != "read_file" {
+					t.Fatalf("tool call lost while its result was trimmed: %+v", got)
+				}
+				if got[3].Role != ollama.RoleTool || !strings.HasPrefix(got[3].Content, "[truncated] ") {
+					t.Errorf("oversized result not bounded in place: %+v", got)
+				}
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := BudgetMessages(tc.in, tc.numCtx)
+			checkBudgetInvariants(t, got, tc.limit, true)
+			if tc.check != nil {
+				tc.check(t, got)
+			}
+		})
+	}
+}
+
+// bigN is like big but with a distinct filler byte so exchanges are easy to
+// tell apart in assertions.
+func bigN(b string, n int) string { return strings.Repeat(b, n) }
+
+// assistantParallelCalls is one assistant message carrying two tool calls.
+func assistantParallelCalls(argsA, argsB string) ollama.ChatMessage {
+	return ollama.ChatMessage{
+		Role: ollama.RoleAssistant,
+		ToolCalls: []ollama.ToolCall{
+			{Function: ollama.ToolCallFunction{Name: "read_file", Arguments: jsonRaw(argsA)}},
+			{Function: ollama.ToolCallFunction{Name: "list_dir", Arguments: jsonRaw(argsB)}},
+		},
+	}
 }
