@@ -3289,3 +3289,74 @@ task).
 - Fresh Pi session: runbook **Task 14 (M-07 — render the in-flight delete overlay)**. Confirm branch
   `fix/v0.1.1-audit-remediation` + clean status, then follow the Task-14 block. Do not run `make smoke`
   until the owner runs it on a disposable model/tag or an isolated Ollama store.
+### 2026-09-06 — Runbook Task 14: M-07 in-flight delete busy overlay (owner task)
+**Milestone:** `SelfTUI-Pi-Audit-Remediation-Runbook-2026-09-04.md` Task 14 (M-07). No §10 row to tick
+(runbook-owned step). **Result:** done — red-green on branch `fix/v0.1.1-audit-remediation`; code commit
+`1c0545a` (`fix(models): render delete progress overlay`), docs commit follows this entry. Worktree
+clean; focused + full `./internal/ui` and `make check` all exit 0. `make smoke` NOT run (owner-run on a
+disposable model/tag — unchanged by this task).
+
+**Context (what M-07 actually was)**
+- Audit evidence `models_view.go:539-545,599-612,754-767`: approval (`y`) set `confirmDelete=false` +
+  `deleting=true` and `handleKey` already ignored keys in the `deleting` state, but `View`'s dialog
+  switch handled only `confirmDelete`/`inputMode`/`pulling`. With `deleting=true` the frame fell
+  through to the ordinary interactive model list while keys stayed dead — the promised busy overlay
+  never rendered (its spinner body existed only inside `confirmLines`, unreachable once
+  `confirmDelete` was false). Tests asserted state/commands but never rendered between approval and
+  completion.
+
+**Reproduction (RED, decisive)**
+- Extended `TestModelsViewDeleteConfirmFlow` to render immediately after `y` and before the DELETE
+  command runs: it required a "Deleting qwen3:8b" title, the "deleting qwen3:8b…" spinner body, no
+  interactive list body (non-target model `gemma3:12b` must be absent), and key-ignoring (a `j` must
+  neither move the list nor dismiss the busy state). RED at HEAD: the frame showed the full model list
+  (title missing, `gemma3:12b` visible) at 88×40.
+- New `TestModelsViewDeleteBusyOverlayFitsGeometries` drives `x` → `y` on fresh views at the two
+  canonical geometries (72×30 and 120×40) and asserts the busy frame is bounded — exactly `h-2` body
+  rows, no row wider than the terminal — plus the same title/spinner/target/list-hidden content.
+  RED at HEAD at both geometries for every content assertion.
+
+**Fix (green)**
+- `models_view.go` `View()` gained a `case v.deleting` that renders the centered overlay
+  `renderOverlay(bodyH, "Deleting "+v.deleteTarget, v.deleteProgressLines())` — the same dialog
+  machinery as confirm/input/pull, so `fitContent` keeps it bounded on a phone (mirrors the existing
+  "Pulling <name>" busy dialog). New `deleteProgressLines()` holds the spinner + " deleting
+  <target>…" line; the old unreachable `if v.deleting` branch inside `confirmLines` was removed (it
+  could never fire: `confirmDelete` is false whenever `deleting` is true). No cancellation was
+  re-enabled: `esc` stays inert during the in-flight delete because the DELETE HTTP round-trip is not
+  safely interruptible (the pull path keeps its explicit `esc` cancel; delete deliberately has none).
+
+**Tests (red-green)**
+- RED at HEAD captured above (flow extension + both-geometry content assertions).
+- GREEN: `go test -count=1 ./internal/ui -run 'TestModelsViewDelete|TestGoldenFramesFitTerminal'` → ok;
+  `go test -count=1 ./internal/ui` → ok; `go test -race -count=1 ./internal/ui -run 'TestModelsViewDelete'`
+  → ok (hygiene); `make check` → 0 (build + full suite + vet + gofmt); `git diff --check` → clean.
+  No golden fixtures changed (existing render scenarios are untouched — the only render change is the
+  deleting state, which has no App-level golden; the geometry guard `TestGoldenFramesFitTerminal`
+  stays green). `go.mod`/`go.sum` untouched.
+
+**Commands + exit codes**
+- Session guard at start: `git status --short` → empty · branch `fix/v0.1.1-audit-remediation` · HEAD
+  `cf3b30f`. Red evidence and green gates as listed above; code commit `1c0545a`; `git status --short`
+  after the code commit → only the docs files pending.
+- `make smoke`/`make smoke-model` NOT run — owner-run on a disposable model/tag (H-04 preflight). No
+  release-check (Task 22).
+
+**Decisions / lines to respect**
+- Deleting overlay title mirrors the pull busy dialog (`"Deleting "+target` beside `"Pulling "+name`);
+  body line reuses the exact text the audit cited as unreachable (`spinner + " deleting <target>…"`),
+  now rendered from the state that owns it.
+- The dialog switch order is `deleting` first, then confirm/input/pull — states are mutually
+  exclusive, so order is cosmetic; the comment on `View` now lists deleting among the modal states.
+- Success/error completion paths were already correct and are re-proven by the existing flow +
+  error tests (`onDeleteDone` closes the busy state and surfaces `notice`/inline `deleteErr`).
+
+**Blockers / open decisions**
+- None for Task 14. Carried env note from Task 02/04: `make vuln` needs `$(go env GOPATH)/bin` on PATH.
+- Task 15 (M-08) follows next: redirect-safe bearer-token policy for the Ollama HTTP client
+  (`[needs runtime verification]`), then M-09 spinner lifecycle etc.
+
+**Next action**
+- Fresh Pi session: runbook **Task 15 (M-08 — enforce a redirect-safe bearer-token policy)**. Confirm
+  branch `fix/v0.1.1-audit-remediation` + clean status, then follow the Task-15 block. Do not run
+  `make smoke` until the owner runs it on a disposable model/tag or an isolated Ollama store.
