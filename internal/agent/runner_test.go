@@ -29,6 +29,13 @@ func finalEvent(text string) string {
 	return fmt.Sprintf(`{"message":{"role":"assistant","content":%s},"done":true,"done_reason":"stop"}`+"\n", b)
 }
 
+// multiToolEvent streams one NDJSON event whose message carries many native
+// tool calls at once (the shape a hostile or pathological endpoint uses to
+// request an unbounded batch in a single iteration).
+func multiToolEvent(calls []string) string {
+	return `{"message":{"role":"assistant","tool_calls":[` + strings.Join(calls, ",") + `]},"done":true,"done_reason":"tool_calls"}` + "\n"
+}
+
 func TestReadOnlyToolsStayInsideWorkspace(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "hello.txt"), []byte("hello agent\nsecond line\n"), 0o600); err != nil {
@@ -61,6 +68,140 @@ func TestReadOnlyToolsRejectSymlinkEscape(t *testing.T) {
 	}
 	if _, err := ReadFile(root, "link"); err == nil || !strings.Contains(err.Error(), "escapes workspace") {
 		t.Errorf("symlink read error = %v, want workspace escape", err)
+	}
+}
+
+// TestRunnerRejectsOversizedNativeToolArgument is the H-03 regression for the
+// 1 MiB decoded-argument ceiling: one native tool call whose arguments exceed
+// 1 MiB must abort the run before the tool executes. Before the fix the runner
+// had no per-call argument bound, so the call was executed (the giant path
+// failed deep inside the filesystem layer) and the loop continued.
+func TestRunnerRejectsOversizedNativeToolArgument(t *testing.T) {
+	root := t.TempDir()
+	requests := 0
+	executed := 0
+	// ~1 MiB + slack of text inside a valid JSON arguments object: the decoded
+	// arguments cross the 1 MiB per-call ceiling while the single NDJSON event
+	// stays far below the 4 MiB per-event wire cap.
+	huge := strings.Repeat("a", (1<<20)+512)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if err := json.NewDecoder(r.Body).Decode(new(ollama.ChatRequest)); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		if requests == 1 {
+			io.WriteString(w, toolEvent(nativeCall("read_file", fmt.Sprintf(`{"path":"%s"}`, huge))))
+			return
+		}
+		io.WriteString(w, finalEvent("done"))
+	}))
+	t.Cleanup(srv.Close)
+
+	r := NewRunnerWithPolicy(ollama.New(srv.URL, ""), root, "", 4, &ToolPolicy{})
+	err := r.Run(context.Background(), Request{
+		Model: "qwen3:8b", Messages: []ollama.ChatMessage{{Role: ollama.RoleUser, Content: "read it"}},
+	}, func(msg Msg) {
+		if _, ok := msg.(ToolStartMsg); ok {
+			executed++
+		}
+	})
+	if err == nil {
+		t.Fatal("want per-call argument limit error, got nil")
+	}
+	if !strings.Contains(err.Error(), "tool call argument exceeds 1048576 bytes") {
+		t.Errorf("error = %v, want per-call argument ceiling message", err)
+	}
+	if executed != 0 {
+		t.Errorf("tool executions = %d, want 0 (oversized call must not execute)", executed)
+	}
+	if requests != 1 {
+		t.Errorf("chat requests = %d, want 1 (run must stop at the crossing iteration)", requests)
+	}
+}
+
+// TestRunnerRejectsBatchOverCallLimit is the H-03 regression for a single
+// batch that alone exceeds the 64-call per-run ceiling: none of its calls may
+// execute. Before the fix the runner executed every call in the returned
+// batch, bounded only by max_tool_iterations.
+func TestRunnerRejectsBatchOverCallLimit(t *testing.T) {
+	root := t.TempDir()
+	requests := 0
+	executed := 0
+	calls := make([]string, 70)
+	for i := range calls {
+		calls[i] = nativeCall("list_dir", `{"path":"."}`)
+	}
+	batch := multiToolEvent(calls)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if err := json.NewDecoder(r.Body).Decode(new(ollama.ChatRequest)); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		io.WriteString(w, batch)
+	}))
+	t.Cleanup(srv.Close)
+
+	r := NewRunnerWithPolicy(ollama.New(srv.URL, ""), root, "", 3, &ToolPolicy{})
+	err := r.Run(context.Background(), Request{
+		Model: "qwen3:8b", Messages: []ollama.ChatMessage{{Role: ollama.RoleUser, Content: "list everything"}},
+	}, func(msg Msg) {
+		if _, ok := msg.(ToolStartMsg); ok {
+			executed++
+		}
+	})
+	if err == nil || !strings.Contains(err.Error(), "tool call limit (64)") {
+		t.Errorf("error = %v, want run-wide call limit error", err)
+	}
+	if executed != 0 {
+		t.Errorf("tool executions = %d, want 0 (crossing batch must not execute)", executed)
+	}
+	if requests != 1 {
+		t.Errorf("chat requests = %d, want 1 (run must stop at the crossing iteration)", requests)
+	}
+}
+
+// TestRunnerBoundsToolCallsPerRun is the H-03 regression for the 64-call
+// ceiling across model iterations: a later batch that would push the run past
+// the cap is rejected in full, so exactly the calls from accepted batches run.
+// Before the fix there was no run-wide call count, so every batch executed
+// until max_tool_iterations was exhausted.
+func TestRunnerBoundsToolCallsPerRun(t *testing.T) {
+	root := t.TempDir()
+	requests := 0
+	executed := 0
+	calls := make([]string, 40)
+	for i := range calls {
+		calls[i] = nativeCall("list_dir", `{"path":"."}`)
+	}
+	batch := multiToolEvent(calls)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if err := json.NewDecoder(r.Body).Decode(new(ollama.ChatRequest)); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		io.WriteString(w, batch)
+	}))
+	t.Cleanup(srv.Close)
+
+	r := NewRunnerWithPolicy(ollama.New(srv.URL, ""), root, "", 5, &ToolPolicy{})
+	err := r.Run(context.Background(), Request{
+		Model: "qwen3:8b", Messages: []ollama.ChatMessage{{Role: ollama.RoleUser, Content: "list everything"}},
+	}, func(msg Msg) {
+		if _, ok := msg.(ToolStartMsg); ok {
+			executed++
+		}
+	})
+	if err == nil || !strings.Contains(err.Error(), "tool call limit (64)") {
+		t.Errorf("error = %v, want run-wide call limit error", err)
+	}
+	if executed != 40 {
+		t.Errorf("tool executions = %d, want 40 (only the first accepted batch runs)", executed)
+	}
+	if requests != 2 {
+		t.Errorf("chat requests = %d, want 2 (crossing second batch rejected)", requests)
 	}
 }
 
@@ -129,11 +270,113 @@ func TestRunnerExecutesNativeToolAndStreamsFinal(t *testing.T) {
 }
 
 func TestMergeToolCallsAssemblesStreamedArguments(t *testing.T) {
-	calls := mergeToolCalls(nil, []ollama.ToolCall{{Function: ollama.ToolCallFunction{Name: "read_file", Arguments: json.RawMessage(`{"path":"`)}}})
-	calls = mergeToolCalls(calls, []ollama.ToolCall{{Function: ollama.ToolCallFunction{Name: "read_file", Arguments: json.RawMessage(`README.md"}`)}}})
+	calls, err := mergeToolCalls(nil, []ollama.ToolCall{{Function: ollama.ToolCallFunction{Name: "read_file", Arguments: json.RawMessage(`{"path":"`)}}})
+	if err != nil {
+		t.Fatalf("first merge: %v", err)
+	}
+	calls, err = mergeToolCalls(calls, []ollama.ToolCall{{Function: ollama.ToolCallFunction{Name: "read_file", Arguments: json.RawMessage(`README.md"}`)}}})
+	if err != nil {
+		t.Fatalf("second merge: %v", err)
+	}
 	if len(calls) != 1 || string(calls[0].Function.Arguments) != `{"path":"README.md"}` {
 		t.Errorf("merged calls = %+v, want one complete argument object", calls)
 	}
+}
+
+// TestMergeToolCallsAdversarial pins the H-03 merge contract directly at the
+// boundary: two simultaneous calls, repeated complete calls, fragmented
+// arguments, same-name calls, and ambiguous fragments all resolve
+// deterministically — and a mixture of a complete call with a fragment at the
+// same slot is refused rather than merged by guesswork.
+func TestMergeToolCallsAdversarial(t *testing.T) {
+	call := func(name, args string) ollama.ToolCall {
+		return ollama.ToolCall{Function: ollama.ToolCallFunction{Name: name, Arguments: json.RawMessage(args)}}
+	}
+	readA := call("read_file", `{"path":"a.txt"}`)
+	readB := call("read_file", `{"path":"b.txt"}`)
+	listDot := call("list_dir", `{"path":"."}`)
+
+	t.Run("two simultaneous calls survive", func(t *testing.T) {
+		got, err := mergeToolCalls(nil, []ollama.ToolCall{readA, listDot})
+		if err != nil {
+			t.Fatalf("merge: %v", err)
+		}
+		if len(got) != 2 || got[0].Function.Name != "read_file" || got[1].Function.Name != "list_dir" {
+			t.Errorf("calls = %+v, want read_file then list_dir", got)
+		}
+	})
+
+	t.Run("repeated complete call deduplicates", func(t *testing.T) {
+		got, err := mergeToolCalls([]ollama.ToolCall{readA}, []ollama.ToolCall{readA})
+		if err != nil {
+			t.Fatalf("merge: %v", err)
+		}
+		if len(got) != 1 {
+			t.Errorf("calls = %+v, want the single repeated call deduplicated", got)
+		}
+	})
+
+	t.Run("same-name complete calls both survive", func(t *testing.T) {
+		got, err := mergeToolCalls([]ollama.ToolCall{readA}, []ollama.ToolCall{readB})
+		if err != nil {
+			t.Fatalf("merge: %v", err)
+		}
+		if len(got) != 2 || string(got[1].Function.Arguments) != `{"path":"b.txt"}` {
+			t.Errorf("calls = %+v, want a.txt kept and b.txt appended", got)
+		}
+	})
+
+	t.Run("fragmented arguments concatenate", func(t *testing.T) {
+		got, err := mergeToolCalls([]ollama.ToolCall{call("read_file", `{"path":"`)}, []ollama.ToolCall{call("read_file", `a.txt"}`)})
+		if err != nil {
+			t.Fatalf("merge: %v", err)
+		}
+		if len(got) != 1 || string(got[0].Function.Arguments) != `{"path":"a.txt"}` {
+			t.Errorf("args = %q, want the two fragments joined", got[0].Function.Arguments)
+		}
+	})
+
+	t.Run("ambiguous fragment then complete is refused", func(t *testing.T) {
+		// A fragment at the same slot followed by a complete value cannot be
+		// told apart from a retransmission of the same call; concatenating
+		// would corrupt the arguments, so the merge must fail instead.
+		_, err := mergeToolCalls([]ollama.ToolCall{call("read_file", `{"path":"`)}, []ollama.ToolCall{readA})
+		if err == nil || !strings.Contains(err.Error(), "ambiguous tool call fragments") {
+			t.Errorf("error = %v, want ambiguous-fragments rejection", err)
+		}
+	})
+
+	t.Run("complete then fragment is refused", func(t *testing.T) {
+		_, err := mergeToolCalls([]ollama.ToolCall{readA}, []ollama.ToolCall{call("read_file", `{"path":"`)})
+		if err == nil || !strings.Contains(err.Error(), "ambiguous tool call fragments") {
+			t.Errorf("error = %v, want ambiguous-fragments rejection", err)
+		}
+	})
+
+	t.Run("null arguments carry no fragment", func(t *testing.T) {
+		got, err := mergeToolCalls([]ollama.ToolCall{readA}, []ollama.ToolCall{call("read_file", "null")})
+		if err != nil {
+			t.Fatalf("merge: %v", err)
+		}
+		if len(got) != 1 || string(got[0].Function.Arguments) != `{"path":"a.txt"}` {
+			t.Errorf("calls = %+v, want a.txt preserved", got)
+		}
+	})
+
+	t.Run("fragment accumulation is capped at 1 MiB", func(t *testing.T) {
+		big := strings.Repeat("x", maxToolArgBytes-16)
+		_, err := mergeToolCalls([]ollama.ToolCall{call("write_file", `{"content":"`+big)}, []ollama.ToolCall{call("write_file", strings.Repeat("y", 64)+"\"}")})
+		if err == nil || !strings.Contains(err.Error(), "tool call argument exceeds 1048576 bytes") {
+			t.Errorf("error = %v, want per-call argument ceiling", err)
+		}
+	})
+
+	t.Run("single oversized complete call is refused", func(t *testing.T) {
+		_, err := mergeToolCalls(nil, []ollama.ToolCall{call("read_file", `{"path":"`+strings.Repeat("a", maxToolArgBytes+64)+"\"}")})
+		if err == nil || !strings.Contains(err.Error(), "tool call argument exceeds 1048576 bytes") {
+			t.Errorf("error = %v, want per-call argument ceiling", err)
+		}
+	})
 }
 
 func TestRunnerParsesContentEmbeddedToolJSON(t *testing.T) {

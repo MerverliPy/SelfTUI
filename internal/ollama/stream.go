@@ -25,9 +25,10 @@ const (
 	// streamIdleTimeout is how long a stream may deliver no bytes before the
 	// client aborts it.
 	streamIdleTimeout = 90 * time.Second
-	// maxChatStreamBytes caps the cumulative decoded content+thinking a chat
-	// stream may deliver (thinking arrives in message.thinking or top-level
-	// thinking, depending on the server).
+	// maxChatStreamBytes caps the cumulative raw NDJSON bytes a chat stream may
+	// deliver. The ceiling counts complete event bytes — JSON framing,
+	// content, thinking, and tool calls — so tool arguments cannot escape the
+	// 16 MiB budget the way decoded content-only accounting would (H-03).
 	maxChatStreamBytes = 16 << 20
 )
 

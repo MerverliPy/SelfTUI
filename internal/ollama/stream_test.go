@@ -79,11 +79,50 @@ func TestChatOversizedEventRejected(t *testing.T) {
 	}
 }
 
+func TestChatCumulativeToolBytesOverflowRejected(t *testing.T) {
+	// H-03: tool calls must count toward the cumulative 16 MiB chat ceiling.
+	// Each event carries one native tool call whose arguments hold ~2.5 MiB
+	// of text: every event is well under the 4 MiB per-event raw cap, but the
+	// raw NDJSON bytes (JSON framing and tool calls included) cross the
+	// cumulative cap on the seventh event. Before the fix the ceiling counted
+	// only decoded content/thinking, so tool-argument bytes escaped it and
+	// every event was delivered.
+	chunk := strings.Repeat("a", 2_600_000)
+	event := fmt.Sprintf(`{"message":{"role":"assistant","tool_calls":[{"function":{"name":"read_file","arguments":{"path":"%s"}}}]},"done":false}`+"\n", chunk)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Tolerate this host's localhost port prober (stray GET /); only the
+		// real POST matters.
+		if r.Method != http.MethodPost || r.URL.Path != "/api/chat" {
+			w.WriteHeader(404)
+			return
+		}
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		for i := 0; i < 7; i++ {
+			io.WriteString(w, event)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	c := New(srv.URL, "")
+
+	delivered := 0
+	err := c.ChatStream(context.Background(), chatReq(), func(ChatEvent) { delivered++ })
+	if err == nil {
+		t.Fatal("want cumulative cap error, got nil")
+	}
+	if !strings.Contains(err.Error(), "chat stream exceeds 16777216 bytes") {
+		t.Errorf("error = %v, want chat cumulative cap message", err)
+	}
+	if delivered != 6 {
+		t.Errorf("events delivered = %d, want 6 (crossing event rejected before delivery)", delivered)
+	}
+}
+
 func TestChatCumulativeOverflowRejected(t *testing.T) {
 	// Four content events of ~4 MiB each stay under both caps; a fifth event
-	// carrying thinking bytes crosses the 16 MiB cumulative content+thinking
-	// budget. The cap must count content and thinking together and reject the
-	// crossing event before it is delivered.
+	// carrying thinking bytes crosses the 16 MiB cumulative chat ceiling.
+	// The cap counts complete raw NDJSON event bytes (content, thinking,
+	// framing, and any tool calls), so the crossing event is rejected before
+	// it is delivered.
 	chunk := strings.Repeat("a", 4*miB-8*1024) // each event stays under 4 MiB raw
 	var b strings.Builder
 	for i := 0; i < 4; i++ {

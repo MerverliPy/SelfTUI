@@ -98,9 +98,10 @@ type ChatEvent struct {
 // inside the stream (HTTP 200) is the in-band error channel.
 //
 // Streams are bounded (phase 5): a single NDJSON event larger than 4 MiB, or
-// cumulative content+thinking beyond 16 MiB, aborts the call, and a body that
-// delivers no bytes for the 90s idle window times out (no total request
-// deadline, so long generations with steady deltas keep running).
+// cumulative raw NDJSON bytes beyond 16 MiB (JSON framing, content, thinking,
+// and tool calls all count — H-03), aborts the call, and a body that delivers
+// no bytes for the 90s idle window times out (no total request deadline, so
+// long generations with steady deltas keep running).
 func (c *Client) Chat(ctx context.Context, req ChatRequest, onContent func(string)) error {
 	return c.ChatStream(ctx, req, func(ev ChatEvent) {
 		if ev.Message.Content != "" && onContent != nil {
@@ -139,11 +140,14 @@ func (c *Client) ChatStream(ctx context.Context, req ChatRequest, onEvent func(C
 	}
 
 	// Decode through the shared NDJSON stream decoder: a single event larger
-	// than 4 MiB, or cumulative content+thinking over 16 MiB, aborts the
+	// than 4 MiB, or cumulative raw NDJSON bytes over 16 MiB, aborts the
 	// stream; a body silent for the idle window times out (no total request
-	// deadline, so long generations with steady deltas keep running).
+	// deadline, so long generations with steady deltas keep running). The
+	// cumulative ceiling counts the complete raw event bytes — JSON framing,
+	// content, thinking, and tool calls included — so decoded tool arguments
+	// cannot slip past the cap the way content-only accounting would (H-03).
 	dec := newNDJSONStream(resp.Body, cancel, c.streamIdle, path)
-	var contentBytes int64
+	var rawBytes int64
 	for {
 		raw, err := dec.next()
 		if errors.Is(err, io.EOF) {
@@ -151,6 +155,10 @@ func (c *Client) ChatStream(ctx context.Context, req ChatRequest, onEvent func(C
 		}
 		if err != nil {
 			return err
+		}
+		rawBytes += int64(len(raw))
+		if rawBytes > maxChatStreamBytes {
+			return fmt.Errorf("ollama POST %s: %w", path, errChatStreamTooLarge)
 		}
 		var wire struct {
 			Message struct {
@@ -169,10 +177,6 @@ func (c *Client) ChatStream(ctx context.Context, req ChatRequest, onEvent func(C
 		}
 		if wire.Error != "" {
 			return fmt.Errorf("ollama POST %s: %s", path, wire.Error)
-		}
-		contentBytes += int64(len(wire.Message.Content) + len(wire.Message.Thinking) + len(wire.Thinking))
-		if contentBytes > maxChatStreamBytes {
-			return fmt.Errorf("ollama POST %s: %w", path, errChatStreamTooLarge)
 		}
 		ev := ChatEvent{
 			Message: ChatMessage{

@@ -21,6 +21,27 @@ const (
 	maxConfirmTimeout     = 60 * time.Second
 )
 
+// H-03 execution budgets: one tool call's decoded arguments may not exceed
+// maxToolArgBytes, and one Run may execute at most maxToolCallsPerRun calls
+// across every model iteration. A batch that would cross the call ceiling is
+// rejected in full before any of its calls execute, so a misbehaving or
+// malicious endpoint cannot force unbounded per-iteration batches or
+// unbounded fragment accumulation (see the external audit H-03).
+const (
+	maxToolArgBytes    = 1 << 20 // 1 MiB per decoded tool-call argument
+	maxToolCallsPerRun = 64
+)
+
+// H-03 boundary errors (agent side). The ollama package owns the 16 MiB
+// cumulative raw chat-stream ceiling and the 4 MiB per-event wire cap; these
+// three errors gate per-call argument size, per-run call count, and ambiguous
+// fragment merging. Callers and tests match on the stable text.
+var (
+	errToolArgumentTooLarge = errors.New("tool call argument exceeds 1048576 bytes")
+	errToolCallLimit        = errors.New("tool call limit (64) exceeded for this run")
+	errAmbiguousToolStream  = errors.New("ambiguous tool call fragments: no stable call id or index")
+)
+
 // Msg is an event consumed by the UI. Concrete messages intentionally contain
 // presentation-neutral data so the agent loop can be tested without Bubble Tea.
 type Msg interface{}
@@ -164,12 +185,17 @@ func (r *Runner) run(ctx context.Context, req Request, emit func(Msg), reasonOut
 		return r.runPlainChat(ctx, req, messages, req.NumCtx, options, emit, reasonOut)
 	}
 
+	// H-03 run-wide call budget: executedCalls counts every tool executed
+	// across all iterations and is checked per batch before any call runs.
+	executedCalls := 0
+
 	for iteration := 0; iteration < r.maxIterations; iteration++ {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		var content strings.Builder
 		var calls []ollama.ToolCall
+		var mergeErr error
 		streamedLen := 0
 		var lastReason string
 		err := r.client.ChatStream(ctx, ollama.ChatRequest{
@@ -191,7 +217,10 @@ func (r *Runner) run(ctx context.Context, req Request, emit func(Msg), reasonOut
 			if ev.Done && ev.DoneReason != "" {
 				lastReason = ev.DoneReason
 			}
-			calls = mergeToolCalls(calls, ev.Message.ToolCalls)
+			if mergeErr != nil {
+				return // the stream already failed to merge: stop accumulating
+			}
+			calls, mergeErr = mergeToolCalls(calls, ev.Message.ToolCalls)
 		})
 		if err != nil {
 			if iteration == 0 && isToolUnsupported(err) {
@@ -199,6 +228,9 @@ func (r *Runner) run(ctx context.Context, req Request, emit func(Msg), reasonOut
 				return r.runPlainChat(ctx, req, messages, req.NumCtx, options, emit, reasonOut)
 			}
 			return err
+		}
+		if mergeErr != nil {
+			return fmt.Errorf("agent: %w", mergeErr)
 		}
 
 		if len(calls) == 0 {
@@ -214,6 +246,20 @@ func (r *Runner) run(ctx context.Context, req Request, emit func(Msg), reasonOut
 			*reasonOut = lastReason
 			return nil
 		}
+
+		// H-03 batch gate: a batch that violates the per-call argument
+		// ceiling, or that would cross the run-wide call budget, is rejected
+		// in full — no call in it executes, and nothing from it reaches the
+		// confirmation dialogs or the transcript.
+		for _, call := range calls {
+			if len(call.Function.Arguments) > maxToolArgBytes {
+				return fmt.Errorf("agent: %w", errToolArgumentTooLarge)
+			}
+		}
+		if executedCalls+len(calls) > maxToolCallsPerRun {
+			return fmt.Errorf("agent: %w", errToolCallLimit)
+		}
+		executedCalls += len(calls)
 
 		// Preserve the assistant tool-call turn in the next request, but never
 		// emit embedded JSON as final text.
@@ -411,44 +457,61 @@ func looksLikeEmbeddedJSON(text string) bool {
 	return strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[") || strings.HasPrefix(trimmed, "```")
 }
 
-func mergeToolCalls(existing, incoming []ollama.ToolCall) []ollama.ToolCall {
+// mergeToolCalls folds the tool_calls of one stream event into the calls
+// accumulated so far for this iteration (H-03). Fragments are concatenated
+// only while both sides are clearly incomplete JSON; any mixture of a
+// complete call and a fragment at the same slot is ambiguous — the wire type
+// carries no stable per-call id/index to tell a retransmission from a second
+// call — so the merge refuses instead of corrupting the arguments. Repeated
+// complete calls deduplicate; distinct complete calls at one slot (parallel
+// calls) both survive. Every call and every fragment accumulation is bounded
+// by maxToolArgBytes, keeping merging linear and memory bounded.
+func mergeToolCalls(existing, incoming []ollama.ToolCall) ([]ollama.ToolCall, error) {
 	for i, candidate := range incoming {
+		if len(candidate.Function.Arguments) > maxToolArgBytes {
+			return nil, errToolArgumentTooLarge
+		}
 		if i >= len(existing) {
 			existing = append(existing, candidate)
 			continue
 		}
 		current := &existing[i]
 		if current.Function.Name != candidate.Function.Name {
+			// A different tool at this slot is a new call, not a fragment of
+			// the previous one.
 			existing = append(existing, candidate)
 			continue
 		}
-		if string(current.Function.Arguments) == string(candidate.Function.Arguments) {
-			continue // the stream repeated a complete call
+		cur, cand := current.Function.Arguments, candidate.Function.Arguments
+		if len(cand) == 0 || string(cand) == "null" {
+			continue // the event carried no argument text for this call
 		}
-		if json.Valid(current.Function.Arguments) && json.Valid(candidate.Function.Arguments) {
-			// Distinct complete calls may be emitted in separate events.
-			existing = append(existing, candidate)
+		if len(cur) == 0 || string(cur) == "null" {
+			current.Function.Arguments = append(current.Function.Arguments[:0], cand...)
 			continue
 		}
-		current.Function.Arguments = mergeArguments(current.Function.Arguments, candidate.Function.Arguments)
+		if string(cur) == string(cand) {
+			continue // the stream repeated a complete call (or an identical fragment)
+		}
+		switch {
+		case json.Valid(cur) && json.Valid(cand):
+			// Two distinct complete calls delivered at the same slot: the
+			// first stays in place, the later one becomes a new call.
+			existing = append(existing, candidate)
+		case json.Valid(cur) || json.Valid(cand):
+			// One side complete, the other a fragment: without a stable
+			// id/index a blind concatenation would corrupt the arguments, and
+			// guessing which side is authoritative can misassociate calls.
+			return nil, errAmbiguousToolStream
+		default:
+			// Both fragments of the same call: bounded linear accumulation.
+			if len(cur)+len(cand) > maxToolArgBytes {
+				return nil, errToolArgumentTooLarge
+			}
+			current.Function.Arguments = append(append(json.RawMessage(nil), cur...), cand...)
+		}
 	}
-	return existing
-}
-
-func mergeArguments(current, next json.RawMessage) json.RawMessage {
-	if len(current) == 0 || string(current) == "null" {
-		return next
-	}
-	if len(next) == 0 || string(next) == "null" {
-		return current
-	}
-	if json.Valid(current) && json.Valid(next) {
-		// Complete native calls are sometimes repeated with the same call
-		// metadata; differing complete values represent a later call, not a
-		// fragment. The positional merger has already retained the first.
-		return current
-	}
-	return append(append(json.RawMessage(nil), current...), next...)
+	return existing, nil
 }
 
 func isToolUnsupported(err error) bool {
