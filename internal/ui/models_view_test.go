@@ -1275,3 +1275,210 @@ func TestModelsViewCompactReloadDropsStaleDetail(t *testing.T) {
 		}
 	}
 }
+
+// --- M-09: maintain exactly one spinner command chain -----------------------
+//
+// The dialog spinner (pulling / deleting) must keep a single chain seeded on
+// the busy-state transition and rescheduled only by consumed ticks — paced by
+// spinner.FPS — instead of one unpaced chain per handled event. The scheduler
+// count is observable deterministically through the v.spinnerPending seam:
+// it counts scheduled spinner ticks whose TickMsg has not yet arrived (0 or 1
+// in every steady state, reset when the busy state closes).
+
+// TestModelsViewDeleteKeepsOneSpinnerChain is the delete half of M-09: one
+// chain is seeded when deleting opens, unrelated keys never add chains, each
+// consumed tick schedules exactly one successor, and completion (success or
+// error retry) stops rescheduling.
+func TestModelsViewDeleteKeepsOneSpinnerChain(t *testing.T) {
+	v := testModels(t, nil)
+	v, _ = v.Update(modelsLoadedMsg{list: sampleModels()})
+
+	// Idle: no busy state, no chain.
+	if got := v.spinnerPending; got != 0 {
+		t.Fatalf("idle spinnerPending = %d, want 0", got)
+	}
+	// x opens the confirm dialog — not a spinner state, still no chain.
+	v, _ = v.Update(tea.KeyPressMsg{Text: "x"})
+	if got := v.spinnerPending; got != 0 {
+		t.Fatalf("confirm dialog spinnerPending = %d, want 0", got)
+	}
+	// y approves: deleting opens and exactly one chain is seeded alongside
+	// the DELETE command.
+	v, cmd := v.Update(tea.KeyPressMsg{Text: "y"})
+	if !v.deleting || v.deleteTarget != "qwen3:8b" {
+		t.Fatalf("after y: deleting=%v target=%q", v.deleting, v.deleteTarget)
+	}
+	if cmd == nil {
+		t.Fatal("y: expected the DELETE command (batched with the one seed)")
+	}
+	if got := v.spinnerPending; got != 1 {
+		t.Fatalf("after delete start spinnerPending = %d, want exactly 1 (one seed)", got)
+	}
+
+	// Unrelated input while deleting (ignored by the busy state) must never
+	// schedule another chain: five ignored keys leave the count at 1.
+	for i := 0; i < 5; i++ {
+		idx := v.list.Index()
+		v, cmd = v.Update(tea.KeyPressMsg{Text: "j"})
+		if cmd != nil {
+			t.Fatalf("ignored key %d returned a command (a spinner re-seed?)", i)
+		}
+		if v.list.Index() != idx {
+			t.Fatalf("ignored key %d moved the list while deleting", i)
+		}
+		if got := v.spinnerPending; got != 1 {
+			t.Fatalf("after ignored key %d spinnerPending = %d, want 1 (no new chain)", i, got)
+		}
+	}
+
+	// Consume the seed tick: the spinner hands back its FPS-paced successor,
+	// so exactly one tick stays scheduled (the count never leaves 1).
+	v, cmd = v.Update(modelsEventMsg{msg: v.spinner.Tick()})
+	if cmd == nil {
+		t.Fatal("consumed tick while deleting: expected the one successor command")
+	}
+	if got := v.spinnerPending; got != 1 {
+		t.Fatalf("after seed tick spinnerPending = %d, want 1 (one successor)", got)
+	}
+
+	// A second real tick keeps exactly one successor scheduled.
+	v, cmd = v.Update(modelsEventMsg{msg: v.spinner.Tick()})
+	if cmd == nil {
+		t.Fatal("second consumed tick: expected the one successor command")
+	}
+	if got := v.spinnerPending; got != 1 {
+		t.Fatalf("after second tick spinnerPending = %d, want 1", got)
+	}
+
+	// Success completion stops rescheduling: the count resets, and a tick
+	// that was already in flight when the delete finished must not restart it.
+	v, _ = v.Update(modelsDeleteDoneMsg{name: "qwen3:8b"})
+	if v.deleting {
+		t.Fatal("deleting still true after success completion")
+	}
+	if got := v.spinnerPending; got != 0 {
+		t.Fatalf("after delete completion spinnerPending = %d, want 0", got)
+	}
+	v, cmd = v.Update(modelsEventMsg{msg: v.spinner.Tick()})
+	if cmd != nil {
+		t.Errorf("in-flight tick after delete completion returned a command (chain restarted?)")
+	}
+	if got := v.spinnerPending; got != 0 {
+		t.Fatalf("after post-completion straggler tick spinnerPending = %d, want 0", got)
+	}
+}
+
+// TestModelsViewDeleteErrorStopsSpinnerChain is the error-retry half: a
+// failed delete returns to the confirm dialog, and the busy spinner chain is
+// stopped (the confirm dialog has no spinner) until a retry seeds a fresh one.
+func TestModelsViewDeleteErrorStopsSpinnerChain(t *testing.T) {
+	v := testModels(t, nil)
+	v, _ = v.Update(modelsLoadedMsg{list: sampleModels()})
+	v, _ = v.Update(tea.KeyPressMsg{Text: "x"})
+	v, _ = v.Update(tea.KeyPressMsg{Text: "y"})
+	if got := v.spinnerPending; got != 1 {
+		t.Fatalf("after delete start spinnerPending = %d, want 1", got)
+	}
+	v, _ = v.Update(modelsEventMsg{msg: v.spinner.Tick()})
+	if got := v.spinnerPending; got != 1 {
+		t.Fatalf("after seed tick spinnerPending = %d, want 1", got)
+	}
+
+	// Failure completes the delete: back to the confirm dialog, chain dead.
+	v, _ = v.Update(modelsDeleteDoneMsg{name: "qwen3:8b", err: "boom"})
+	if v.deleting || !v.confirmDelete {
+		t.Fatalf("after delete error: deleting=%v confirmDelete=%v, want confirm retry", v.deleting, v.confirmDelete)
+	}
+	if got := v.spinnerPending; got != 0 {
+		t.Fatalf("after delete error spinnerPending = %d, want 0 (confirm has no spinner)", got)
+	}
+	v, cmd := v.Update(modelsEventMsg{msg: v.spinner.Tick()})
+	if cmd != nil {
+		t.Errorf("in-flight tick after delete error returned a command (chain restarted?)")
+	}
+	if got := v.spinnerPending; got != 0 {
+		t.Fatalf("after post-error straggler tick spinnerPending = %d, want 0", got)
+	}
+
+	// A retry (y again) seeds exactly one fresh chain.
+	v, cmd = v.Update(tea.KeyPressMsg{Text: "y"})
+	if !v.deleting {
+		t.Fatal("retry y: deleting should open again")
+	}
+	if cmd == nil {
+		t.Fatal("retry y: expected the DELETE command")
+	}
+	if got := v.spinnerPending; got != 1 {
+		t.Fatalf("after retry spinnerPending = %d, want exactly 1 (fresh seed)", got)
+	}
+}
+
+// TestModelsViewPullKeepsOneSpinnerChain is the pull half of M-09: a pull
+// whose stream emits many progress events must keep exactly one spinner chain
+// (seeded on entering pulling, rescheduled only by consumed ticks). Before
+// the fix every progress event appended a fresh unpaced spinner tick, so the
+// pending count grew with the stream.
+func TestModelsViewPullKeepsOneSpinnerChain(t *testing.T) {
+	client, _ := fakePullServer(t, pullUIFixture)
+	v := testModels(t, client)
+	v, _ = v.Update(modelsLoadedMsg{list: sampleModels()})
+
+	// Open the name input and pull for real; the stream drains into the
+	// activity channel while the scheduling contract is driven synchronously.
+	v, _ = v.Update(tea.KeyPressMsg{Text: "p"})
+	v, _ = v.Update(tea.KeyPressMsg{Text: "qwen3:0.6b"})
+	v, cmd := v.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if !v.pulling || v.pullName != "qwen3:0.6b" {
+		t.Fatalf("after enter: pulling=%v name=%q", v.pulling, v.pullName)
+	}
+	if cmd == nil {
+		t.Fatal("enter: expected the pull subscription (batched with the one seed)")
+	}
+	if got := v.spinnerPending; got != 1 {
+		t.Fatalf("after pull start spinnerPending = %d, want exactly 1 (one seed)", got)
+	}
+
+	// A flood of progress events — the M-09 multiplication trigger — must not
+	// schedule extra chains. Each handler resubscribes only the pull-activity
+	// command, never a spinner tick.
+	for i := 0; i < 20; i++ {
+		v, cmd = v.Update(modelsPullMsg{name: "qwen3:0.6b", progress: ollama.PullProgress{
+			Status: "pulling layer", Digest: "sha256:abc", Total: 100, Completed: int64(i)}})
+		if cmd == nil {
+			t.Fatalf("progress %d: expected the pull-activity resubscription", i)
+		}
+		if got := v.spinnerPending; got != 1 {
+			t.Fatalf("after progress %d spinnerPending = %d, want 1 (one chain)", i, got)
+		}
+	}
+
+	// Consumed ticks reschedule exactly one successor each.
+	for i := 0; i < 3; i++ {
+		v, cmd = v.Update(modelsEventMsg{msg: v.spinner.Tick()})
+		if cmd == nil {
+			t.Fatalf("tick %d: expected the one spinner successor command", i)
+		}
+		if got := v.spinnerPending; got != 1 {
+			t.Fatalf("after tick %d spinnerPending = %d, want 1", i, got)
+		}
+	}
+
+	// Completion stops rescheduling and resets the count.
+	v, cmd = v.Update(modelsPullDoneMsg{name: "qwen3:0.6b"})
+	if v.pulling {
+		t.Fatal("pulling still true after completion")
+	}
+	if cmd == nil {
+		t.Fatal("expected the reload command after a successful pull")
+	}
+	if got := v.spinnerPending; got != 0 {
+		t.Fatalf("after pull completion spinnerPending = %d, want 0", got)
+	}
+	v, cmd = v.Update(modelsEventMsg{msg: v.spinner.Tick()})
+	if cmd != nil {
+		t.Errorf("in-flight tick after pull completion returned a command (chain restarted?)")
+	}
+	if got := v.spinnerPending; got != 0 {
+		t.Fatalf("after post-completion straggler tick spinnerPending = %d, want 0", got)
+	}
+}

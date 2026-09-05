@@ -96,6 +96,15 @@ type ModelsView struct {
 	spinner  spinner.Model
 	progress progress.Model
 
+	// spinnerPending is the M-09 deterministic test seam: it counts live
+	// dialog-spinner chains — the one seed scheduled when pulling/deleting
+	// opens, plus each FPS-paced successor scheduled after a consumed tick —
+	// whose TickMsg has not yet arrived. It stays 0 or 1 in every steady
+	// state and is reset when a busy state closes, so tests can assert that
+	// progress events and unrelated input never create extra chains without
+	// waiting on real spinner.FPS timers.
+	spinnerPending int
+
 	selIdx int
 
 	list list.Model
@@ -383,8 +392,21 @@ func (v ModelsView) startPull(name string) (ModelsView, tea.Cmd) {
 	return v, v.waitPullCmd()
 }
 
-func (v ModelsView) spinnerTick() tea.Cmd {
+// spinnerSeed starts the single dialog-spinner chain: one immediate TickMsg
+// whose consumption makes spinner.Update hand back the first FPS-paced
+// successor. Only the transition into pulling/deleting seeds a chain (M-09);
+// the name-input and confirm states have no spinner.
+func (v ModelsView) spinnerSeed() tea.Cmd {
 	return func() tea.Msg { return modelsEventMsg{msg: v.spinner.Tick()} }
+}
+
+// spinnerResume keeps the one chain alive: it wraps the FPS-paced successor
+// command spinner.Update returned for a consumed TickMsg so the next tick
+// crosses the App shell inside modelsEventMsg (the envelope every async
+// Models result uses). Update schedules it only while the busy state that
+// owns the spinner is still active, so completion stops rescheduling (M-09).
+func (v ModelsView) spinnerResume(successor tea.Cmd) tea.Cmd {
+	return func() tea.Msg { return modelsEventMsg{msg: successor()} }
 }
 
 // ModalOpen reports whether the Models tab is showing a modal (confirm /
@@ -401,6 +423,7 @@ func (v ModelsView) ModalOpen() bool {
 func (v ModelsView) Update(msg tea.Msg) (ModelsView, tea.Cmd) {
 	cmds := make([]tea.Cmd, 0, 3)
 	var cmd tea.Cmd
+	spinnerBusy := v.deleting || v.pulling
 	switch msg := msg.(type) {
 	case modelsEventMsg:
 		// The App shell normally unwraps the envelope before delegating; when
@@ -475,7 +498,14 @@ func (v ModelsView) Update(msg tea.Msg) (ModelsView, tea.Cmd) {
 		return v, nil
 
 	case spinner.TickMsg:
-		v.spinner, _ = v.spinner.Update(msg)
+		v.spinner, cmd = v.spinner.Update(msg)
+		if msg.ID == v.spinner.ID() && v.spinnerPending > 0 {
+			v.spinnerPending-- // this scheduled tick arrived
+		}
+		if cmd != nil && (v.deleting || v.pulling) {
+			v.spinnerPending++
+			cmds = append(cmds, v.spinnerResume(cmd))
+		}
 
 	case modelsDeleteDoneMsg:
 		v, cmd = v.onDeleteDone(msg)
@@ -494,10 +524,15 @@ func (v ModelsView) Update(msg tea.Msg) (ModelsView, tea.Cmd) {
 		cmds = append(cmds, cmd)
 	}
 
-	// Keep the dialog spinner ticking while it is actually visible
-	// (deleting / pulling). The name-input and confirm states have no spinner.
-	if v.deleting || v.pulling {
-		cmds = append(cmds, v.spinnerTick())
+	// Seed exactly one spinner chain on the transition into a busy state
+	// (pulling / deleting). While a busy state is already open, progress,
+	// keys, and every other message schedule nothing: the spinner's own
+	// successor (above) is the only continuation, paced by spinner.FPS
+	// instead of by event volume. Before M-09 every message re-seeded an
+	// unpaced tick, so a long pull multiplied scheduled chains.
+	if !spinnerBusy && (v.deleting || v.pulling) {
+		v.spinnerPending++
+		cmds = append(cmds, v.spinnerSeed())
 	}
 	if len(cmds) == 0 {
 		return v, nil
@@ -595,6 +630,7 @@ func containsModel(models []ollama.Model, name string) bool {
 // under the question for an immediate retry.
 func (v ModelsView) onDeleteDone(m modelsDeleteDoneMsg) (ModelsView, tea.Cmd) {
 	v.deleting = false
+	v.spinnerPending = 0 // M-09: no live spinner chain once the busy state closes
 	if m.err != "" {
 		v.confirmDelete = true
 		v.deleteErr = sanitizeTerminalText(m.err) // remote DELETE error body
@@ -634,6 +670,7 @@ func (v ModelsView) onPullProgress(m modelsPullMsg) (ModelsView, tea.Cmd) {
 // failure surfaces the error in the view.
 func (v ModelsView) onPullDone(m modelsPullDoneMsg) (ModelsView, tea.Cmd) {
 	v.pulling = false
+	v.spinnerPending = 0 // M-09: no live spinner chain once the busy state closes
 	v.pullCh = nil
 	v.pullStreamDone = nil
 	v.pullCancel = nil
