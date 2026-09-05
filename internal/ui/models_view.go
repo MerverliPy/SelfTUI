@@ -505,8 +505,14 @@ func (v ModelsView) Update(msg tea.Msg) (ModelsView, tea.Cmd) {
 	return v, tea.Batch(cmds...)
 }
 
-// onLoaded replaces the model list. On wide/medium-split layouts the inspect
-// pane is always visible, so the first model is inspected immediately.
+// onLoaded replaces the model list. The bubbles list preserves (clamped) its
+// cursor across SetItems, so after a reload the selection is the model now
+// under that cursor — not necessarily the first item, and not necessarily the
+// model the retained detail payload belongs to. The inspect pane must always
+// describe the model under the cursor (its header is that model's name): a
+// reload that drops or reorders the previously inspected model therefore has
+// to drop the stale payload and re-inspect the new selection, or the pane
+// paints one model's header over another's facts (P1-3).
 func (v ModelsView) onLoaded(models []ollama.Model) (ModelsView, tea.Cmd) {
 	models = sanitizeModelNames(models) // H-05: /api/tags names are remote
 	v.models = models
@@ -514,23 +520,74 @@ func (v ModelsView) onLoaded(models []ollama.Model) (ModelsView, tea.Cmd) {
 	v.listErr = ""
 	v.pullErr = ""
 	v.notice = ""
-	v.selIdx = 0
 
 	items := make([]list.Item, len(models))
 	for i, m := range models {
 		items[i] = modelsItem{m}
 	}
 	cmds := []tea.Cmd{v.list.SetItems(items)}
+	// Sync our selection mirror to the list's actual (clamped) cursor: the
+	// bubbles cursor survives SetItems, so mirroring it here keeps selIdx,
+	// the highlight, and any later auto-inspect in agreement (P1-3).
+	cur := v.list.Index()
+	if len(models) > 0 {
+		cur = clampInt(cur, 0, len(models)-1)
+	} else {
+		cur = 0
+	}
+	v.selIdx = cur
 
-	if ForModels(v.w).SideBySide && len(models) > 0 {
-		// Wide/medium-split layout: the inspect pane is always visible, so
-		// the first model is inspected immediately. requestShow replaces any
-		// in-flight detail fetch for the pre-reload list.
-		var sc tea.Cmd
-		v, sc = v.requestShow(models[0].Name)
-		cmds = append(cmds, sc)
+	// Reconcile the detail pane with the reloaded list. PaneVisible is the
+	// geometry where the pane is drawn: side-by-side always, stacked after
+	// enter.
+	paneVisible := ForModels(v.w).SideBySide || v.showPane
+	switch {
+	case len(models) == 0:
+		// Nothing to inspect: no pane can render, drop any stale payload so a
+		// later reload cannot resurrect it under a fresh list.
+		v.detail = nil
+		v.detailName = ""
+		v = v.releaseShow()
+
+	case paneVisible:
+		name := models[cur].Name
+		if v.detailName != name || v.detail == nil {
+			// The retained payload belongs to a model that is no longer under
+			// the cursor (removed or reordered by the reload): drop it and
+			// inspect the new selection so header and body always agree.
+			// requestShow replaces any in-flight fetch for the pre-reload list
+			// (cancel + id guard), so a superseded completion cannot repaint.
+			v.detail = nil
+			v.detailName = ""
+			v = v.releaseShow()
+			var sc tea.Cmd
+			v, sc = v.requestShow(name)
+			cmds = append(cmds, sc)
+		}
+		// detailName == name with a payload: the pane already shows the model
+		// under the cursor; retain it (no redundant refetch on every reload).
+
+	default:
+		// Stacked layout with the pane closed: nothing is drawn, but a stale
+		// payload for a model no longer listed would be resurrected by the
+		// next enter on that name. Drop it when the inspected model vanished.
+		if v.detailName != "" && !containsModel(models, v.detailName) {
+			v.detail = nil
+			v.detailName = ""
+			v = v.releaseShow()
+		}
 	}
 	return v, tea.Batch(cmds...)
+}
+
+// containsModel reports whether models lists a model with the given name.
+func containsModel(models []ollama.Model, name string) bool {
+	for _, m := range models {
+		if m.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 // onDeleteDone finalizes a DELETE round-trip. Success closes the dialog and

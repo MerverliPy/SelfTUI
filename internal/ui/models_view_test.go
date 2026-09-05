@@ -1208,3 +1208,70 @@ func modelNames(models []ollama.Model) []string {
 	}
 	return names
 }
+
+// P1-3 regression: after a reload removes the inspected model, the compact
+// stacked detail pane must not paint the new selection's header over the old
+// model's payload. Inspect model A (detail for A), reload with only model B
+// present (cursor clamps to B), and the pane must show B's own facts, never
+// A's under B's name.
+func TestModelsViewCompactReloadDropsStaleDetail(t *testing.T) {
+	shows := map[string]string{}
+	client, _ := fakeShowServer(t, func(w http.ResponseWriter, name string) {
+		// Per-name payload so A's facts are distinguishable from B's.
+		payload, ok := shows[name]
+		if !ok {
+			payload = fmt.Sprintf(`{"parameters":"temperature 0.7","details":{"family":"%s","parameter_size":"9B","quantization_level":"Q4_K_M"},"capabilities":["completion"]}`, name)
+		}
+		w.Write([]byte(payload))
+	})
+	v := NewModelsView(client, NewStyles("dark"), "dark")
+	// Compact stacked geometry (the measured device width).
+	v, _ = v.Update(tea.WindowSizeMsg{Width: 72, Height: 30})
+
+	// Load [A=qwen3:8b, B=gemma3:12b]; enter inspects A.
+	v, _ = v.Update(modelsLoadedMsg{list: sampleModels()})
+	v, cmd := v.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("enter: expected show command")
+	}
+	if ev, ok := cmd().(modelsEventMsg); !ok {
+		t.Fatalf("enter cmd() = %T, want modelsEventMsg", cmd())
+	} else if show, ok := ev.msg.(modelsShowMsg); !ok || show.name != "qwen3:8b" {
+		t.Fatalf("enter cmd() payload = %#v, want show for qwen3:8b", ev.msg)
+	} else {
+		v, _ = v.Update(show) // A's detail lands
+	}
+	if v.detailName != "qwen3:8b" || v.detail == nil {
+		t.Fatalf("after inspect: detailName=%q detail=%v, want qwen3:8b + payload", v.detailName, v.detail)
+	}
+
+	// Reload with only gemma3:12b present (the inspected A is gone). The list
+	// cursor clamps to index 0 = gemma3:12b. The stale A payload must not
+	// survive to render B's header over A's facts.
+	v, cmd = v.Update(modelsLoadedMsg{list: sampleModels()[1:]})
+	if v.detailName != "" || v.detail != nil {
+		t.Errorf("after reload: stale detail survived (detailName=%q detail!=nil=%v); want it dropped", v.detailName, v.detail != nil)
+	}
+	if cmd == nil {
+		t.Fatal("reload with open pane: expected a show command for the new selection, got nil")
+	}
+	if ev, ok := cmd().(modelsEventMsg); !ok {
+		t.Fatalf("reload cmd() = %T, want modelsEventMsg", cmd())
+	} else if show, ok := ev.msg.(modelsShowMsg); !ok || show.name != "gemma3:12b" {
+		t.Fatalf("reload cmd() payload = %#v, want show for gemma3:12b", ev.msg)
+	} else {
+		v, _ = v.Update(show) // B's detail lands
+	}
+	if v.detailName != "gemma3:12b" {
+		t.Errorf("detailName after reload = %q, want gemma3:12b", v.detailName)
+	}
+	out := stripANSI(v.View())
+	if strings.Contains(out, "family qwen3") || strings.Contains(out, "qwen3:8b") {
+		t.Errorf("stale A facts/header leaked into the pane:\n%s", out)
+	}
+	for _, want := range []string{"gemma3:12b", "family gemma3"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("pane missing %q after reload:\n%s", want, out)
+		}
+	}
+}

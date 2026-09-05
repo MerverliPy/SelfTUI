@@ -18,7 +18,13 @@ import (
 func settingsApp(t *testing.T) (App, config.Config) {
 	t.Helper()
 	dir := t.TempDir()
-	path := dir + "/config.toml"
+	// The config file exists (possibly empty = defaults): an explicit path
+	// that does not exist is now a hard load error (P1-13), and these flows
+	// model an install whose Settings tab will persist into this file.
+	path := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	cfg, err := config.Load(config.Overrides{ConfigPath: &path})
 	if err != nil {
 		t.Fatal(err)
@@ -304,7 +310,7 @@ func TestSettingsFieldValidationReusesConfigPolicy(t *testing.T) {
 	if !strings.Contains(got, "max_tool_iterations must be between 1 and 100") {
 		t.Errorf("expected config.Validate's stable message inline, got:\n%s", got)
 	}
-	if _, err := os.Stat(cfg.ConfigPath()); !os.IsNotExist(err) {
-		t.Errorf("config file should not exist after a rejected edit (nothing was saved)")
+	if b, err := os.ReadFile(cfg.ConfigPath()); err != nil || len(b) != 0 {
+		t.Errorf("config file was written despite the rejected edit (len=%d err=%v); want it still empty", len(b), err)
 	}
 }
