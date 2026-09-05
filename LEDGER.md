@@ -2957,3 +2957,136 @@ unchanged by this task).
   latency reproduction): confirm branch `fix/v0.1.1-audit-remediation` + clean status, then follow the
   Task-11 block. Do not run `make smoke` until the owner runs it on a disposable model/tag or an isolated
   Ollama store.
+### 2026-09-05 — Runbook Task 11: M-04 move transcript persistence off the update loop (owner task)
+**Milestone:** `SelfTUI-Pi-Audit-Remediation-Runbook-2026-09-04.md` Task 11 (M-04 — nonblocking ordered
+transcript persistence). No §10 row to tick (runbook-owned step). **Result:** done — red-green on branch
+`fix/v0.1.1-audit-remediation`; code commit follows this entry, docs commit after it. Worktree clean, all
+gates exit 0. `make smoke` NOT run (owner-run on a disposable model/tag or an isolated Ollama store —
+unchanged by this task).
+
+**Context (what M-04 actually was)**
+- `agent_view.go` called `session.Open`/`Append`/`Close` synchronously on the Bubble Tea update loop for
+  every committed turn, and `/export` called `Flush` (fsync) synchronously in Update; `session.go`'s
+  `Log` did the directory/file I/O with retry sleeps and `Sync` on Flush/Close. `main.go` never closed the
+  session, so the last turns relied on process cleanup. Fix contract: **one ordered background actor owns
+  the Log** — Update only enqueues immutable append/flush jobs and processes completion/error messages; it
+  must never call Open/Append/Sync/Close. Transcript order stays deterministic (job FIFO through one
+  worker), `/export` flushes every earlier enqueued turn before reporting the exact path, recording stays
+  optional, and explicit flush/close on normal shutdown must not strand the worker.
+
+**Reproduction (structural + compile-red; no fake latency claim)**
+- HEAD's defect is structural and line-cited: Update ran the fs calls inline (`agent_view.go` at HEAD:
+  `appendSessionTurn` Open/Append/Close in Update; `/export` Flush in Update). Measured pre-fix cost shape
+  (throwaway probe, removed): 500 real `Open+Append+Flush+Close` cycles on this machine = ~1.7-1.8 ms mean
+  per cycle — i.e. every turn's inline fs work scales with the sink, and on a slow/network-backed XDG dir or
+  a large paste the update stalls with it. A *permanent-stall* behavioral red against HEAD is not
+  constructible in-process: the old code has **no injectable writer seam** (fresh `O_EXCL` regular-file
+  writes to a tmpdir cannot be made to block without one), so per the task's own gate I did not fake a
+  latency red. Instead: the seam/recorder tests are the RED (they fail to build against HEAD —
+  `recorder_test.go: undefined: Recorder/NewRecorder/Writer/…` — this repo's established compile-red for
+  structural findings), and the new stall tests would HANG an inline Update by construction (a stalled
+  writer means the old synchronous append never returns); post-fix they pass in ~0 s while the writer is
+  provably parked. The hard contract "Update never calls Open/Append/Flush/Close" is now enforced by the
+  code itself (no such calls remain in `agent_view.go`) and pinned by the seam tests.
+- Probe evidence recorded here so it is not lost: `500 open+append+flush+close cycles: total
+  894.8ms/860.0ms, mean 1.79ms/1.72ms per cycle` (two runs; dir under `/tmp`).
+
+**Green (minimum fix)**
+- **`internal/session/recorder.go` (new):** a `Recorder` actor owns the transcript sink. Public seam:
+  `Writer` interface (what a `*Log` satisfies), `OpenWriter` factory, `Result` per-job ack, `NewRecorder(dir,
+  host)` (production, opens a `*Log` lazily inside the worker), `NewRecorderWithOpener` (test seam), and
+  `ErrRecorderBacklog` (stable error when the bounded 256-job queue is full — the only enqueue failure, and
+  it fails fast, never blocking Update). `Append`/`Flush` enqueue immutable jobs through a non-blocking
+  buffered-channel select; every job acks exactly one `Result` on a cap-1 channel so a waiter can never
+  hang. One worker goroutine processes jobs in acceptance order: lazy Open on the first job, ordered
+  Append, Flush (the `/export` barrier), Close (flush+close+worker exit, idempotent via `sync.Once`).
+  Failure discipline: the first open/append/flush error becomes the recorder's stable failure — the broken
+  writer is closed, every later job acks the same error (nothing hangs), and no further I/O is attempted.
+- **`internal/ui/agent_view.go`:** `session *session.Log` → `recorder *session.Recorder`. Committed turns
+  (user in `sendInput`, assistant in `onChatDone`) go through `enqueueSessionTurn`, which sanitizes the
+  content (H-05 boundary preserved), lazily starts the recorder on the first turn, enqueues, and returns an
+  ack command that round-trips **nil on success** (no extra UI wakeups — bubbletea skips nil messages) or an
+  `agentEventMsg{sessionAppendMsg{err}}` on failure. New Update cases: `sessionAppendMsg` disables recording
+  once (`sessionErr` + one `session log: …` notice; later identical outcomes are ignored) and
+  `sessionExportMsg` lands the async `/export` result (`applySessionExport`: path → `transcript: <path>`;
+  error → disable once; empty path → the nothing-recorded hint). `exportSession` now enqueues a flush job
+  and returns the ack command — Update never touches the filesystem. `WithSessionDir` still lazily arms the
+  dir; `CloseRecorder()` is the shutdown boundary. Existing public error strings are preserved verbatim
+  ("session recording is off — no transcript is written", "nothing recorded yet — send a message first",
+  "transcript: ", "session log: "); the only new stable error is `ErrRecorderBacklog` (queue overflow).
+- **`internal/ui/app.go`:** exported `CloseSession()` → agent `CloseRecorder()`.
+- **`cmd/self-tui/main.go`:** `run()` now keeps the final model from `p.Run()` and calls the new
+  `closeSessionRecorder(final)` helper (interface-asserted `CloseSession() error`) after the program exits —
+  including on `Run` error paths — so every committed turn is flushed to the transcript and the worker is
+  stopped before the process returns; a close failure is logged, never fatal. `main_test.go` pins the
+  helper (closeable model called / nil / foreign model no-op).
+
+**Tests (red-green)**
+- RED (HEAD): `go test -count=1 ./internal/session -run 'TestRecorder'` → build failed
+  (`undefined: Recorder/NewRecorder/NewRecorderWithOpener/Writer/Result/ErrRecorderBacklog`). RED was
+  captured before `recorder.go` existed.
+- `internal/session/recorder_test.go` (new, 9): `TestRecorderOrdersCommittedTurns` (user→assistant→user
+  order + 0700 dir/0600 file + header, via the real Log), `TestRecorderFlushDrainsEarlierAppends` (export
+  barrier reports the real path after earlier turns), `TestRecorderAppendDoesNotBlockCallerOnStalledWriter`
+  (writer parked mid-append; caller keeps enqueueing; final order exact), `TestRecorderFlushWaitsForStalledEarlierTurn`,
+  `TestRecorderOpenRunsOffCaller` (stalled lazy Open), `TestRecorderStopsWritingAfterFirstFailure`
+  (exactly 2 writer calls, later jobs ack the same stable error, flush acks the failure, Close clean),
+  `TestRecorderOpenFailureIsReportedOnceAndStops`, `TestRecorderCloseFlushesPendingTurnsAndIsIdempotent`
+  (Close drains unacked turns, worker exits — `r.done` closed — second Close safe), and
+  `TestRecorderBacklogFullRejectsWithoutBlocking` (5 accepted while the worker holds one in a 4-slot queue,
+  next fails fast with `ErrRecorderBacklog`).
+- `internal/ui/session_ui_test.go`: existing four tests adapted to the async recorder (persistence waits
+  for the worker via a new `waitForSession` poller; `/export` executes its ack command; the no-dir test now
+  asserts `v.recorder == nil`). New tests: `TestAgentViewSessionTurnOrder` (two full chat turns; strict
+  user1 < assistant1 < user2 < assistant2 in the file), `TestAgentViewSessionWriteNeverBlocksUpdate`
+  (Update(Enter) returns while the writer is provably parked mid-append, then stays responsive, then the
+  turn lands once released), `TestAgentViewSessionWriteNeverBlocksUpdateStalledOpen` (same for the lazy
+  Open), `TestAgentViewExportWaitsForStalledEarlierTurn` (the `/export` ack cannot complete before its
+  stalled earlier turn; writer order is exactly append→flush after release), and
+  `TestAgentViewSessionFailureSurfacesOnce` (first failure disables with one notice; a later commit
+  enqueues nothing; writer saw exactly one append; `/export` after failure reports the disabled state
+  synchronously). `cmd/self-tui/main_test.go` adds `TestCloseSessionRecorder`.
+
+**Commands + exit codes**
+- Session guard at start: `git status --short` → empty · branch `fix/v0.1.1-audit-remediation` · HEAD `048db03`.
+- Red: `go test -count=1 ./internal/session -run 'TestRecorder'` → FAIL (build: undefined Recorder seam).
+- Green: focused `go test -count=1 ./internal/session ./internal/ui -run 'Test.*(Session|Transcript|Recorder|Export)'` → ok ·
+  `go test -count=1 ./cmd/self-tui ./internal/session ./internal/ui` → ok · `go vet ./...` → 0 ·
+  `make check` → 0 (build + full suite + vet + gofmt clean) · `make race` → 0 (full suite, `internal/ui`
+  10.1s) · `go test -race -count=3` on the new recorder + UI session tests → ok (no flakes) ·
+  `git diff --check` → clean.
+- `make smoke`/`make smoke-model` NOT run — owner-run on a disposable model/tag (H-04 preflight). No
+  release-check (Task 22). `git status --short` after commits → empty.
+
+**Decisions / lines to respect**
+- One recorder actor owns the Log; per-job ack channels (cap 1) mean no waiter can hang and the worker never
+  blocks on a dead waiter. Append acks return nil messages on success so the happy path adds no update-loop
+  wakeups. The queue is bounded (256) with a fail-fast stable error (`ErrRecorderBacklog`) — a wedged sink
+  disables recording once rather than ever blocking an update; committed turns are human-paced so the bound
+  is never reached in practice.
+- Failure discipline lives in the recorder: first open/append/flush error is terminal and stable; the view
+  mirrors it with exactly one notice (`sessionErr` guard). `/export` after a failure reports the same
+  nothing-recorded hint the pre-fix code produced after an append error (public strings preserved).
+- Ordering is the loop's enqueue order through one FIFO worker — user/assistant turns cannot interleave out
+  of commit order, and `/export` (a flush job) is processed strictly after every earlier enqueued turn.
+- `Close()` is the durable shutdown path and blocks until the worker exits; a wedged sink (hung fsync) can
+  delay it — process exit remains the escape hatch (documented in recorder.go). Normal shutdown (main →
+  `CloseSession` on the final model) never strands the worker; failures leave the recorder referenced on the
+  view so `CloseSession` still drains it.
+- H-05 sanitization still happens in Update at enqueue time (the file never receives unsanitized content);
+  session.Open/Append/Flush/Close + retry-sleep semantics in session.go are untouched (recorder tests reuse
+  the real Log for perms/header/order).
+- The runbook's "confirm current Update blocks" gate is satisfied by structural line-cited evidence + the
+  compile-red on the seam + the stall tests that cannot pass against an inline writer; I did not fabricate a
+  timing red against unseamed HEAD code. If the owner prefers a NOT_REPRODUCED disposition instead, this
+  entry documents exactly what was and was not reproducible.
+
+**Blockers / open decisions**
+- None for Task 11. Carried env note from Task 02/04: `make vuln` needs `$(go env GOPATH)/bin` on PATH.
+- Task 13 (M-06) follows this task's actor vocabulary (off-loop workers, bounded queues) when it makes the
+  agent/pull producers cancellable and context-aware.
+
+**Next action**
+- Fresh Pi session: runbook **Task 12 (M-05 — replace byte-based wrapping with cell-/ANSI-aware wrapping)**:
+  confirm branch `fix/v0.1.1-audit-remediation` + clean status, then follow the Task-12 block. Do not run
+  `make smoke` until the owner runs it on a disposable model/tag or an isolated Ollama store.

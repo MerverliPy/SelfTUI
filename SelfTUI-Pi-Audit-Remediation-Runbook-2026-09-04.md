@@ -64,7 +64,7 @@
 - [x] Task 08 — M-01 approval/modal behavior
 - [x] Task 09 — M-02 context grouping
 - [x] Task 10 — M-03 async request generations
-- [ ] Task 11 — M-04 transcript persistence
+- [x] Task 11 — M-04 transcript persistence
 - [ ] Task 12 — M-05 terminal wrapping
 - [ ] Task 13 — M-06 cancellation/backpressure
 - [ ] Task 14 — M-07 delete overlay
