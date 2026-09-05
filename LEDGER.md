@@ -3184,3 +3184,108 @@ on a disposable model/tag or an isolated Ollama store — unchanged by this task
 - Fresh Pi session: runbook **Task 13 (M-06 — propagate cancellation through tools and UI delivery)**:
   confirm branch `fix/v0.1.1-audit-remediation` + clean status, then follow the Task-13 block. Do not run
   `make smoke` until the owner runs it on a disposable model/tag or an isolated Ollama store.
+
+### 2026-09-06 — Runbook Task 13: M-06 cancellation through tools and stream producers (owner task)
+**Milestone:** `SelfTUI-Pi-Audit-Remediation-Runbook-2026-09-04.md` Task 13 (M-06). No §10 row to tick
+(runbook-owned step). **Result:** done — red-green on branch `fix/v0.1.1-audit-remediation`; code commit
+`0cbfcd7` (`fix(runtime): propagate cancellation through tools and streams`), docs commit follows this
+entry. Worktree clean; `make check` exit 0; `make race` exit 0; new saturation/cancel tests stable
+under `-race -count=10`. `make smoke` NOT run (owner-run on a disposable model/tag — unchanged by this
+task).
+
+**Context (what M-06 actually was)**
+- Audit evidence `runner.go:295-375` (executeTool invokes ReadFile/ListDir/Grep without ctx) and the UI
+  producers at `agent_view.go:267-275` / `models_view.go:262-284` (unconditional sends into 64-slot
+  channels). Task 02 had already made `Grep` ctx-aware (per-entry walk + between-file scan checks,
+  deterministic cancel tests in `policy_test.go`) and executeTool already passed ctx to it. Remaining
+  gaps at HEAD: `ReadFile`/`ListDir` ignored ctx entirely (a canceled turn still executed the tool and
+  reported a successful read behind the cancel); `WriteFile`/`EditFile` had no last gate between a
+  granted approval and the mutation; and both stream producers used unconditional `ch <- …` sends, so a
+  full channel with the UI not draining stranded the producer goroutine forever — cancellation could
+  never win the send.
+
+**Reproduction (RED, decisive)**
+- Agent boundary: `TestRunnerCancelsToolExecutionOnCanceledContext` cancels from the `ToolStartMsg`
+  handler and asserts `read_file` never executes (no OK ToolResultMsg) with a prompt
+  `context.Canceled` Run error. RED at HEAD: the tool executed anyway and reported
+  `OK summary="must not be read\n"` — the unthreaded-context boundary was real and reproducible.
+- Saturation: `TestAgentProducerSaturationCancellationTerminates` and
+  `TestModelsViewPullSaturationCancellationTerminates` stream 80 events (>64) from a burst fake host,
+  drain 3 to prove liveness, then stop draining, wait until `len(ch)==64` proves the producer is
+  blocked on its next unconditional send, cancel the parent, and assert the explicit producer-done
+  channel closes. RED at HEAD: both producers stayed blocked — "cancellation cannot win the send" — and
+  the done channels never closed. `runtime.NumGoroutine` is only a secondary check; the done channels
+  are the oracle (reading the activity channel would drain the backlog and unblock a stuck producer,
+  which is exactly why a channel-close oracle alone is insufficient).
+- Tool-work *stall* portion disposition: the audit's "stuck in a large/network filesystem walk" half is
+  **NOT_REPRODUCED as a stall beyond the deadline** at HEAD — Task 02 already bounds and checks grep
+  traversal/scanning, and read_file (≤ 256 KiB)/list_dir (one directory) are bounded single ops that
+  cannot stall on a normal filesystem. What WAS reproduced and fixed is the unthreaded-context boundary
+  (execution despite cancel + stale post-cancel results), which the audit's evidence lines described
+  literally. No total-file/total-byte/deadline limits were added: existing output caps already bound
+  every tool and the audit's "only where needed" carve-out did not apply (runbook step 4).
+
+**Fix (green)**
+- `tools.go`: `ReadFile`/`ListDir` now take `ctx` (same shape as `Grep`, established in Task 02) and
+  check it before and after the single-file operation — a canceled run neither starts a doomed read nor
+  reports a result that only finished after the context died. Syscall errors still win over a post-check
+  so real I/O failures are never masked.
+- `runner.go`: executeTool passes ctx into `ReadFile`/`ListDir`; `write_file`/`edit_file` get a last
+  ctx gate between a granted approval and the mutation (never mutate after a cancel; the atomic write
+  itself is never masked by a late cancel). A tool error that `errors.Is` `context.Canceled` /
+  `context.DeadlineExceeded` now ends the turn immediately — no stale failed ToolResultMsg round-trips
+  to the model and invites a retry; M-01's approval-timeout stop is unchanged and still distinct.
+- UI: one context-aware helper `emitEvent(ctx, ch, msg)` (agent_view.go, package-shared) replaces the
+  unconditional producer sends in `startChat` and `startPull`. Semantics: delivery succeeds in order or
+  cancellation wins; while the context is alive a blocked send yields to cancellation (a full channel
+  can never strand the producer); once canceled a send never blocks again — a single nonblocking retry
+  delivers if a consumer is draining at that instant (that is the one race where the terminal
+  `AgentDoneMsg`/`modelsPullDoneMsg` must still land), otherwise the event is dropped. The channel is
+  owned by the producing goroutine and closed only after its last send, so nothing can ever send on a
+  closed channel. Single-owner Bubble Tea update model and FIFO ordering preserved (one producer per
+  stream, in-order sends; the App/Update routing is untouched).
+- Producers now close an explicit `chatDone` / `pullStreamDone` channel on exit (cleared in
+  onChatDone/onPullDone) so tests can observe goroutine termination without draining the backlog.
+
+**Tests (red-green)**
+- RED at HEAD captured above (runner boundary; both saturation tests).
+- GREEN: `go test -count=1 ./internal/agent -run 'Test.*Cancel.*Tool'` → ok (includes the new
+  `TestRunnerCancelsToolExecutionOnCanceledContext`); `go test -count=1 ./internal/ui -run
+  'Test.*(Saturation|Backpressure|Cancellation)'` → ok (two new saturation tests + the three existing
+  parent-cancellation tests unchanged); `go test -count=1 ./internal/agent ./internal/ui` → ok;
+  `make check` → 0 (build + full suite + vet + gofmt); `make race` → 0. Stability: both new saturation
+  tests and the runner cancel test green under `go test -race -count=10`. `git diff --check` → clean.
+  No golden fixtures touched (no render output changed); `go.mod`/`go.sum` untouched.
+
+**Commands + exit codes**
+- Session guard at start: `git status --short` → empty · branch `fix/v0.1.1-audit-remediation` · HEAD
+  `b3df635`. Red evidence and green gates as listed above; code commit `0cbfcd7`; `git status --short`
+  after the code commit → only the docs files pending.
+- `make smoke`/`make smoke-model` NOT run — owner-run on a disposable model/tag (H-04 preflight). No
+  release-check (Task 22).
+
+**Decisions / lines to respect**
+- Exported `ReadFile`/`ListDir` signatures gained a leading `ctx` to match `Grep(ctx, …)`; their only
+  external callers are runner.go and package tests (both updated). `mutation.go` was out of the allowed
+  file set, so the write/edit ctx gate lives at the runner boundary (last gate after approval), not
+  inside the executors.
+- The terminal-message guarantee is producer-side: `Run` still emits exactly one `AgentDoneMsg` and the
+  pull producer exactly one `modelsPullDoneMsg`; each goes through `emitEvent` last (FIFO). The only
+  case a terminal is dropped is a full channel with nobody draining at the cancel instant — the same
+  state in which the view can make no progress regardless — and the producer still closes its channel
+  and done channel, so it never leaks.
+- No consumer-side end-of-stream synthesis was added (a nil read from a closed channel is not mapped to
+  a synthetic done): with a live consumer the backlog drains and the terminal send lands (the nonblocking
+  retry covers the exact cancel/drain race); synthesis would add routing payloads to both views for a
+  corner that pre-exists (a frozen full-channel producer previously blocked forever instead of exiting).
+
+**Blockers / open decisions**
+- None for Task 13. Carried env note from Task 02/04: `make vuln` needs `$(go env GOPATH)/bin` on PATH.
+- Task 14 (M-07) follows next: render the in-flight delete overlay (ModelsView `deleting` state has a
+  confirm/input/pull `View` branch but no `deleting` branch — the audit's M-07 evidence), then M-08
+  redirect policy etc.
+
+**Next action**
+- Fresh Pi session: runbook **Task 14 (M-07 — render the in-flight delete overlay)**. Confirm branch
+  `fix/v0.1.1-audit-remediation` + clean status, then follow the Task-14 block. Do not run `make smoke`
+  until the owner runs it on a disposable model/tag or an isolated Ollama store.
