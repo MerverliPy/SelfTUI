@@ -95,10 +95,14 @@ func NewSettingsView(cfg *config.Config, styles Styles) SettingsView {
 type settingsThemeMsg struct{ theme string }
 
 // settingsSaveDoneMsg reports a completed config-file write. cfg is the
-// snapshot that was saved; the App live-applies it on success.
+// snapshot that was saved; the App live-applies it on success. rollbackTheme
+// is non-empty when the submit was made from a live theme preview the write
+// failed to commit: the App re-applies it so a failed save never leaves the
+// shell on an unsaved theme (the discard path's rollback, mirrored here).
 type settingsSaveDoneMsg struct {
-	cfg config.Config
-	err error
+	cfg           config.Config
+	err           error
+	rollbackTheme string
 }
 
 // Editing reports whether the Settings tab currently owns an active form.
@@ -390,8 +394,14 @@ func (s SettingsView) Update(msg tea.Msg) (SettingsView, tea.Cmd) {
 		// resolves (settingsSaveDoneMsg handled by the App).
 		s.state = settingsSaving
 		snapshot := s.snapshot()
+		// If the shell is on a previewed theme the failed write must not
+		// commit, carry the theme to restore on error (mirrors discard).
+		rollbackTheme := ""
+		if s.appliedTheme != s.startTheme {
+			rollbackTheme = s.startTheme
+		}
 		return s, func() tea.Msg {
-			return settingsSaveDoneMsg{cfg: snapshot, err: config.Save(snapshot)}
+			return settingsSaveDoneMsg{cfg: snapshot, err: config.Save(snapshot), rollbackTheme: rollbackTheme}
 		}
 
 	case huh.StateAborted:

@@ -130,6 +130,12 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case settingsSaveDoneMsg:
 		if msg.err != nil {
 			a.settings = a.settings.noteSaveError(msg.err)
+			// A failed write must not leave the shell on a theme the form
+			// only previewed: roll back to the theme this edit started from
+			// (the same rollback the discard path performs).
+			if msg.rollbackTheme != "" && a.curTheme != msg.rollbackTheme {
+				a.applyTheme(msg.rollbackTheme)
+			}
 			return a, nil
 		}
 		cmd := a.applySaved(msg.cfg)

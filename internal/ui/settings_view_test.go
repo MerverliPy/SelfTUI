@@ -314,3 +314,60 @@ func TestSettingsFieldValidationReusesConfigPolicy(t *testing.T) {
 		t.Errorf("config file was written despite the rejected edit (len=%d err=%v); want it still empty", len(b), err)
 	}
 }
+
+// P1-4 regression: when a config write fails after the user previewed a
+// different theme, the shell must roll back to the theme this editing session
+// started from — a failed save must not leave the app stuck on an unsaved
+// preview (the "write failure leaves in-session state untouched" contract).
+// RED before the fix: the error panel showed but the previewed theme stayed
+// live because only the discard path rolled previews back.
+func TestThemePreviewRollsBackOnSaveFailure(t *testing.T) {
+	m, cfg := settingsApp(t)
+	if cfg.Theme != "dark" {
+		t.Fatalf("test fixture expects a dark start theme, got %q", cfg.Theme)
+	}
+	dir := filepath.Dir(cfg.ConfigPath())
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+
+	m = openSettings(t, m)
+
+	// Walk to the Theme select (Connection 2 + Model defaults 4 fields) and
+	// preview Light.
+	keys := make([]tea.Msg, 0, 7)
+	for i := 0; i < 6; i++ {
+		keys = append(keys, tea.KeyPressMsg{Code: tea.KeyEnter})
+	}
+	app := drive(t, m, append(keys, tea.KeyPressMsg{Code: tea.KeyDown})...).(App)
+	if app.curTheme != "light" || app.settings.val.theme != "light" {
+		t.Fatalf("preview did not apply: curTheme=%q val.theme=%q, want light/light",
+			app.curTheme, app.settings.val.theme)
+	}
+
+	// Submit the remaining fields (Theme select, then Agent group). The save
+	// to the read-only dir must fail and surface the error panel.
+	keys = make([]tea.Msg, 5)
+	for i := range keys {
+		keys[i] = tea.KeyPressMsg{Code: tea.KeyEnter}
+	}
+	app = drive(t, app, keys...).(App)
+	if app.settings.state != settingsError {
+		t.Fatalf("state = %v, want settingsError (save to read-only dir should fail)\n%s",
+			app.settings.state, view(t, app))
+	}
+
+	// The shell must be back on the committed (start) theme, not the unsaved
+	// Light preview, and the session config must be untouched.
+	if app.curTheme != "dark" {
+		t.Errorf("curTheme after failed save = %q, want dark (roll back the unsaved preview)", app.curTheme)
+	}
+	if app.cfg.Theme != "dark" {
+		t.Errorf("cfg.Theme mutated by failed save = %q, want dark", app.cfg.Theme)
+	}
+	got := view(t, app)
+	if !strings.Contains(got, "Could not save settings") {
+		t.Errorf("expected the save-error panel, got:\n%s", got)
+	}
+}
