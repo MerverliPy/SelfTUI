@@ -61,7 +61,7 @@
 - [x] Task 05 — H-04 smoke model safety
 - [x] Task 06 — H-05 terminal sanitization
 - [x] Task 07 — H-06 audit-package completeness
-- [ ] Task 08 — M-01 approval/modal behavior
+- [x] Task 08 — M-01 approval/modal behavior
 - [ ] Task 09 — M-02 context grouping
 - [ ] Task 10 — M-03 async request generations
 - [ ] Task 11 — M-04 transcript persistence

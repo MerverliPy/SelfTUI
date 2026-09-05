@@ -2695,3 +2695,84 @@ historical audit ZIP (see evidence below). Generated disposable pack (not commit
 - Fresh Pi session: runbook **Task 08 (M-01 — enforce approval expiry and modal key ownership)**:
   confirm branch `fix/v0.1.1-audit-remediation` + clean status, then follow the Task-08 block. Do not run
   `make smoke` until the owner runs it on a disposable model/tag or an isolated Ollama store.
+### 2026-09-05 — Runbook Task 08: M-01 approval expiry + modal key ownership (owner task)
+**Milestone:** `SelfTUI-Pi-Audit-Remediation-Runbook-2026-09-04.md` Task 08 (M-01 — enforce approval expiry
+and modal key ownership). No §10 row to tick (runbook-owned step). **Result:** done — red-green on branch
+`fix/v0.1.1-audit-remediation`; code commit `ad69fe6` (`fix(agent): expire approvals and retain modal focus`),
+docs commit follows this entry. Worktree clean, all gates exit 0. `make smoke` NOT run (owner-run on a
+disposable model/tag or an isolated Ollama store — unchanged by this task).
+
+**Context (what M-01 actually was)**
+- Agent mutation approval had **no real timeout**: `runner.go` `confirm` showed `Timeout: 30s` on the dialog but
+  selected only on the reply channel or `ctx.Done()`, so an unanswered write/edit approval could stall a turn
+  until cancellation. Root `app.go` routed Tab/Shift-Tab to the tab bar **before** consulting child modal state
+  (only the 1/2/3 digit jumps checked `ModalOpen`), so a tab press could hide the only approval surface.
+- Fix contracts: per-Runner duration seam (no package-global mutable timeout hook), production default 30s,
+  max 60s clamp preserved; approval expiry is **terminal for the turn** (the owner not answering means they are
+  not present to supervise further mutations) with one stable error; late replies stay harmless (nonblocking
+  buffered send, nothing to read or mutate); every Agent/Models child modal owns Tab/Shift-Tab until it closes;
+  ctrl+c keeps its documented quit behavior (handled before modal routing).
+
+**Reproduction (runtime-verified)**
+- **Agent red:** new `TestWriteConfirmExpiresWithoutResponse` (injected `r.confirmTimeout = 50ms`, nobody
+  responds, 2s bounded ctx) — pre-fix the runner ignored the seam and returned `context deadline exceeded` after
+  the 2s harness deadline (`mutation_test.go:135: Run error = context deadline exceeded, want the stable
+  approval-timeout error`, 2.00s). Post-fix the timer fires first: 0.05s PASS.
+- **UI red:** new root-level `TestModalOwnsTabAndShiftTabWhileOpen` — 8 sub-tests (Models confirm/input/pull/
+  delete, Agent confirmation/help/selector/clear) each failed pre-fix: Tab moved Models→Agent (`tab=1`) and
+  Agent→Settings (`tab=2`; Shift+Tab wrapped Agent→Models `tab=0`) while the modal stayed open. Post-fix all 8
+  PASS (tab unchanged, modal still open + overlay text rendered, then tab bar restored once each modal closed).
+
+**Green (minimum fix)**
+- **Agent (`internal/agent/runner.go`):** `confirm` now arms a real `time.NewTimer(timeout)` (per-Runner
+  `confirmTimeout` seam, 0 ⇒ 30s default, clamped to the 60s max), stopped+drained on every non-timer exit so a
+  fired timer can never wake a later select. New `case <-timer.C` returns the stable sentinel
+  `errApprovalTimedOut` (`approval timed out`) wrapped with the tool name. In `run`, an expired approval is
+  distinguished from an ordinary decline: `errors.Is(toolErr, errApprovalTimedOut)` aborts the whole turn
+  (`agent: write_file: approval timed out`) instead of recording a failed tool result and letting the model keep
+  requesting mutations — `Run` emits exactly one `AgentDoneMsg` carrying the stable error, nothing is written,
+  and the server sees no retry request.
+- **UI (`internal/ui/app.go`):** after the ctrl+c, palette, and settings-form cases, the KeyMsg path now routes
+  every key to the ACTIVE child while that child's modal is open (`a.tab==0 && a.models.ModalOpen()` /
+  `a.tab==1 && a.agent.ModalOpen()`), so Tab/Shift-Tab reach the child (which consumes/ignores them) before any
+  global tab navigation. Children already dismiss their own modals, so tab keys return as soon as the modal
+  closes; `onChatDone` already clears a stale confirmation overlay when a turn ends (timeout path).
+- The UI overlay already showed `timeout: <duration>` (agent_view) and Models delete confirm / pull input were
+  untouched; smoke's x→confirm→y and p→name→enter flows are unaffected (no Tab presses there), so `make smoke`
+  behavior on the owner's disposable model/tag is unchanged.
+
+**Commands + exit codes**
+- Session guard at start: `git status --short` → empty · branch `fix/v0.1.1-audit-remediation` · HEAD `240ab7f`.
+- Red: `go test -count=1 ./internal/agent -run 'TestWriteConfirmExpiresWithoutResponse'` → FAIL (2.00s,
+  `context deadline exceeded`) · `go test -count=1 ./internal/ui -run 'TestModalOwnsTabAndShiftTabWhileOpen'`
+  → FAIL (8/8 sub-tests, tabs moved).
+- Green: `go test -count=1 ./internal/agent -run 'Test.*Confirm.*(Timeout|Expire)'` → ok (0.05s) ·
+  `go test -count=1 ./internal/ui -run 'Test.*Modal.*Tab'` → ok (8 sub-tests) ·
+  `go test -count=1 ./internal/agent ./internal/ui` → ok · `make check` → 0 (build/test/vet/fmt clean) ·
+  `make race` → 0 (full suite, `internal/ui` 10.1s) · `git diff --check` → clean.
+- `make smoke` and `make smoke-model` NOT run — owner-run on a disposable model/tag (H-04 preflight). No
+  release-check (Task 22). `git status --short` after commits → empty.
+
+**Decisions / lines to respect**
+- Approval expiry is a **turn-terminal** stable error (`agent: write_file: approval timed out`), not a per-call
+  decline: an owner who does not answer within the window is not present to supervise the rest of the turn.
+  Matching text on the stable substring `approval timed out`.
+- The window seam lives on the Runner (`confirmTimeout`, unexported, package-agent tests set it directly); the
+  30s production default and 60s max are unchanged. No clock indirection added — the real `time.Timer` with a
+  stop/drain defer is the deterministic-enough seam for tests.
+- Child modals own **every** key while open (mirrors how palette/settings-form already own keys); the routing
+  sits after ctrl+c/palette/settings-form cases so ctrl+c quit, palette gating, and form editing semantics are
+  untouched. `modelsTab=0`/`agentTab=1` are referenced by literal in the new tests because only `agentTab` has a
+  package constant.
+- Agent view state rows (help/clear/picker/approval) and Models rows (confirm/input/pull/delete) are the
+  canonical modal set for future routing changes.
+
+**Blockers / open decisions**
+- None for Task 08. Carried env note from Task 02/04: `make vuln` needs `$(go env GOPATH)/bin` on PATH.
+- Next runbook task (09 — M-02) will need `internal/agent/context.go` budgeting changes; the M-01 turn-terminal
+  timeout interacts with the budget only in that an expired turn emits one AgentDoneMsg (already covered).
+
+**Next action**
+- Fresh Pi session: runbook **Task 09 (M-02 — preserve atomic tool exchanges during context trimming)**:
+  confirm branch `fix/v0.1.1-audit-remediation` + clean status, then follow the Task-09 block. Do not run
+  `make smoke` until the owner runs it on a disposable model/tag or an isolated Ollama store.
