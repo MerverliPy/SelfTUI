@@ -40,6 +40,13 @@ var (
 	errToolArgumentTooLarge = errors.New("tool call argument exceeds 1048576 bytes")
 	errToolCallLimit        = errors.New("tool call limit (64) exceeded for this run")
 	errAmbiguousToolStream  = errors.New("ambiguous tool call fragments: no stable call id or index")
+
+	// M-01: a mutation approval that receives no answer within its window
+	// ends the whole turn with this stable error (wrapped with the tool
+	// name). The runner's own timer enforces the window, so an unanswered
+	// mutation can never stall a turn; a reply that arrives afterwards is a
+	// nonblocking no-op and nothing is written.
+	errApprovalTimedOut = errors.New("approval timed out")
 )
 
 // Msg is an event consumed by the UI. Concrete messages intentionally contain
@@ -101,6 +108,12 @@ type Runner struct {
 	workspaceRoot string
 	systemPrompt  string
 	maxIterations int
+
+	// confirmTimeout is the M-01 per-Runner approval-window seam: <= 0 means
+	// the 30s production default and confirm clamps larger values to the 60s
+	// maximum. It exists so tests can inject a short expiry deterministically;
+	// there is deliberately no package-global mutable timeout hook.
+	confirmTimeout time.Duration
 
 	// policy is nil when tools are disabled (the NewRunner compatibility
 	// constructor): the runner then never sends tool definitions and behaves
@@ -275,6 +288,14 @@ func (r *Runner) run(ctx context.Context, req Request, emit func(Msg), reasonOut
 			emit(ToolStartMsg{Name: name, Input: input})
 			result, toolErr := r.executeTool(ctx, call, emit)
 			if toolErr != nil {
+				// M-01: an approval that expired without an answer is not an
+				// ordinary declined call — the owner is not present to
+				// supervise the rest of the turn, so stop instead of letting
+				// the model keep requesting mutations. Run then emits exactly
+				// one AgentDoneMsg carrying the stable timeout error.
+				if errors.Is(toolErr, errApprovalTimedOut) {
+					return fmt.Errorf("agent: %w", toolErr)
+				}
 				emit(ToolResultMsg{Name: name, OK: false, Summary: toolErr.Error()})
 				messages = append(messages, ollama.ChatMessage{
 					Role: ollama.RoleTool, ToolName: name,
@@ -433,6 +454,11 @@ func (r *Runner) executeTool(ctx context.Context, call ollama.ToolCall, emit fun
 
 func (r *Runner) confirm(ctx context.Context, call ollama.ToolCall, seconds int, emit func(Msg)) error {
 	timeout := defaultConfirmTimeout
+	if r != nil && r.confirmTimeout > 0 {
+		// M-01 seam: the per-Runner approval window (tests inject a short
+		// expiry here; production callers leave it at the 30s default).
+		timeout = r.confirmTimeout
+	}
 	if seconds > 0 {
 		timeout = time.Duration(seconds) * time.Second
 	}
@@ -441,12 +467,30 @@ func (r *Runner) confirm(ctx context.Context, call ollama.ToolCall, seconds int,
 	}
 	msg := ToolConfirmMsg{Name: call.Function.Name, Input: string(call.Function.Arguments), Workspace: r.workspaceRoot, Timeout: timeout, reply: make(chan bool, 1)}
 	emit(msg)
+
+	// M-01: the approval window is a real timer, not a claim. When it fires
+	// with no answer the turn fails with the stable errApprovalTimedOut; the
+	// timer is stopped and drained on every other exit so a fired timer can
+	// never wake a later select or leak. A reply after expiry is harmless:
+	// Respond is a nonblocking send into a buffered channel that nobody
+	// reads once confirm has returned, so it cannot mutate anything.
+	timer := time.NewTimer(timeout)
+	defer func() {
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+	}()
 	select {
 	case approved := <-msg.reply:
 		if !approved {
 			return fmt.Errorf("%s: not approved", call.Function.Name)
 		}
 		return nil
+	case <-timer.C:
+		return fmt.Errorf("%s: %w", call.Function.Name, errApprovalTimedOut)
 	case <-ctx.Done():
 		return ctx.Err()
 	}

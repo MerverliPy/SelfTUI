@@ -174,6 +174,23 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.settings = updated
 			return a, cmd
 		}
+		// M-01: a child modal on the ACTIVE tab owns every key — including
+		// Tab/Shift-Tab, which the shell used to route to the tab bar before
+		// the child was consulted (only the 1/2/3 digit jumps checked
+		// ModalOpen). A tab press could therefore hide a pending mutation
+		// approval, a delete/pull dialog, or the picker/help/clear overlays.
+		// The child consumes or ignores the key while its modal is open;
+		// ctrl+c above keeps its documented quit behavior.
+		if a.tab == 0 && a.models.ModalOpen() {
+			models, cmd := a.models.Update(msg)
+			a.models = models
+			return a, cmd
+		}
+		if a.tab == 1 && a.agent.ModalOpen() {
+			agent, cmd := a.agent.Update(msg)
+			a.agent = agent
+			return a, cmd
+		}
 
 		switch {
 		case k.Mod.Contains(tea.ModShift) && k.Code == tea.KeyTab:
