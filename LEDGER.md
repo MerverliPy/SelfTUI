@@ -3435,3 +3435,84 @@ this entry. Worktree clean; focused + full `./internal/ollama`/`./internal/confi
 - Fresh Pi session: runbook **Task 16 (M-09 — maintain exactly one spinner command chain)**. Confirm
   branch `fix/v0.1.1-audit-remediation` + clean status, then follow the Task-16 block. Do not run
   `make smoke` until the owner runs it on a disposable model/tag or an isolated Ollama store.
+
+---
+
+### 2026-09-06 — Read-only repository audit + optimization map (5 parallel lanes, owner task)
+**Milestone:** n/a (analysis, no code changed) · **Result:** done — report delivered to the owner;
+map recorded here. Branch `fix/v0.1.1-audit-remediation` @ `dc25c58`, tree clean, `make check` green.
+
+**Work done**
+- Ran a **5-lane read-only audit** (subagent fan-out: `ai-code-security-auditor`, `codebase-archaeologist`,
+  `reviewer`, `test-automation-engineer`, `developer-tooling-engineer`), every lane instructed to read
+  `AGENTS.md` + both audit docs + the runbook first and to cross-reference (not duplicate) runbook
+  tasks 00–22. Spot-verified the top cross-lane claims myself (`main.go` shutdown order, `App.Init`
+  double fetch, `load.go` env-error names, workflow action pins). No files edited.
+- **Baseline (real output):** `make check` `0` · `gofmt -l .` empty · `go vet ./...` clean · all Go
+  packages `ok` on go1.27.1 · coverage `internal/{ollama,session,ui,config}` 90–92%,
+  `internal/agent` 79.7%, `cmd/self-tui` 8.9% (entrypoint is the dark corner). No secrets in any
+  tracked file.
+
+**Findings — NEW (not on any runbook queue)**
+- P1 correctness cluster (the owner-approved next step): **#1** shutdown can hang on a wedged
+  transcript sink (`main.go:171-182` closes recorder before `cancel()`; `recorder.go Close()` blocks;
+  NotifyContext still catches Ctrl+C) · **#2** non-2xx stream error bodies bypass the idle watchdog
+  (`chat.go:138`, `pull.go:53` read the capped error body with no idle bound on the no-timeout stream
+  client) · **#3** stale detail pane after model-list refresh (`models_view.go:510-534` clears the list
+  but not `detail`/`detailName`) · **#4** theme preview not rolled back on save failure
+  (`app.go:130-133`) · **#5** `/export` misreports a wedged recorder as "nothing recorded"
+  (`agent_view.go:875-876`) · **#6** HTTP client rebuilt on every settings save even when host/token
+  unchanged (`app.go:341-350`) · **#7** byte-offset truncation can cut multibyte chars
+  (`context.go:181,226`) · **#12** env parse errors name nonexistent vars (reads `SELFTUI_AGENT_*`,
+  errors say `SELFTUI_*`; `load.go:179-203`) · **#13** explicit `-config /typo.toml` silently falls back
+  to defaults (pinned by `config_test.go:212`) — an explicit path should hard-error.
+- Supply-chain/CI (P0): actions float on mutable majors + no Dependabot + no `timeout-minutes`;
+  release checkout persists `contents: write` token; `.env*` not gitignored; no `make secret-scan`;
+  two offline regression suites orphaned from automation (`create-audit-pack-test.sh`,
+  `pull_delete_smoke_test.py` — no Makefile target, no CI job).
+- DX/polish (P2/P3): double `/api/tags` on boot (`app.go:84-85`); `-config`/env/flag surface uneven;
+  `f`/`h`/`l`/`b` page keys on Models vs `f`=follow on Agent; help only reachable from Agent.
+- Test gaps (P1-tests): entrypoint 0.0%; `App/Models/Agent Init()` never exercised; hostile-shape
+  tool-JSON + `sanitizeInfoValue` recursion + `ApproxTokens` absolute values uncovered; fault-injection
+  branches (decode error, `newIdleReader` default, session mkdir, `atomicWrite`).
+- Cleanup (P3): remove `ReadOnlyTools()`/`chatChOnce`/legacy `agentTokenMsg`/`agentDoneMsg` dispatch;
+  stale comments ("constrained command", "placeholder persona"); `scripts/__pycache__` left in tree.
+
+**Findings — queued-runbook overlaps (evidence handed to tasks, NOT re-reported as new)**
+- M-09/Task 16: spinner ticks are unpaced immediate `TickMsg`s self-feeding with no `spinner.FPS`
+  pacing (`models_view.go:497-500`, `386-388`) · M-10/Task 17: **v0.1.0's published `SHA256SUMS` is
+  `dist/`-prefixed** (downloads can't `sha256sum -c` from the download dir); release-check never
+  verifies toolchain versions · M-11/Task 18: smoke scripts still use fixed `/tmp/selftui-*.log` ·
+  M-12/Task 19: SECURITY.md wildcard claims broader than tests, pull stream-cap claim overstated,
+  README still "release hardening", PLAN §12 stale / §13 truncated · L-01/Task 20: light loop
+  special-cases only 8/19 frames · L-02/Task 21: `internal/ui/timer.sh` proven unused (arrived in
+  `b6bd9a0` as debug leftover); `make clean` removes only `bin/selftui`.
+
+**Planned map (as agreed with the owner)**
+- **P0 — release blockers (fold near Task 22):** action SHA-pinning + Dependabot + `timeout-minutes` +
+  `persist-credentials: false` · `.env*` + `make secret-scan` · `make scripts-test` wired into
+  `make check` + CI · `make vuln` PATH note (carried env note).
+- **P1 — correctness (owner: start now, this session):** findings #1–#7, #12, #13 above, red-green TDD.
+- **P1-tests:** entrypoint + boot-wiring + hostile-shape tables + fault injection.
+- **P2 — perf/DX:** single boot fetch; list_dir/grep work bounds; CLI/env surface consistency.
+- **P3 — cleanup:** dead code + comment drift (can ride with L-02/Task 21).
+
+**Commands + exit codes**
+- `make check` `0` · `go test -count=1 ./...` `0` · `go vet ./...` `0` · `gofmt -l .` empty
+- coverage probe `go test -cover ./...` `0` (numbers above) · `git status --short` empty
+- five subagent lanes exited 0 with bounded reports (L1 security / L2 drift / L3 architecture /
+  L4 tests / L5 DX) — outputs in-session only, not committed.
+
+**Decisions / lines to respect**
+- The runbook 16–22 queue stands; nothing here re-plans it. P1 is a separate owner-assigned step on
+  the same branch, ahead of / independent of Task 16.
+- No code changed by this entry; the map lives here (owner chose LEDGER append over a new doc).
+
+**Blockers / open decisions (carry to next session)**
+- Owner queued decisions unchanged: public-visibility of the repo, gitleaks-in-CI, actionlint,
+  Node-20 action bumps, signed-tag policy.
+
+**Next action**
+- Same session (owner instruction): implement **P1 correctness cluster (#1–#7, #12, #13)** red-green
+  on this branch, gate with `make check`/`make race`, commit per finding cluster. Then a fresh
+  session resumes runbook **Task 16 (M-09)**.
