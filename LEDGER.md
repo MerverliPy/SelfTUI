@@ -3587,3 +3587,94 @@ red-green with regression tests; `make check` + `go test -race ./...` green. Bra
 - Fresh session: resume runbook **Task 16 (M-09 — single spinner chain)**, or the owner may pick
   a P0/P1-test item from the recorded map instead. Commit history since `dc25c58` is the P1
   cluster above (9 commits, clean).
+
+### 2026-09-05 — Runbook Task 16: M-09 single spinner command chain (owner task)
+**Milestone:** `SelfTUI-Pi-Audit-Remediation-Runbook-2026-09-04.md` Task 16 (M-09). No §10 row to tick
+(runbook-owned step). **Result:** done — REPRODUCED + red-green on branch `fix/v0.1.1-audit-remediation`;
+code commit `64fcfc4` (`fix(models): keep one spinner command chain`), docs commit follows this entry.
+Worktree clean; focused spinner/delete/pull tests, full `./internal/ui`, `make check`, and `make race`
+all exit 0. `make smoke`/`make smoke-model` NOT run (owner-run on a disposable model/tag — unchanged
+by this task).
+
+**Context (what M-09 actually was)**
+- Audit evidence `models_view.go:290-291,343-344,363-367`: `spinnerTick()` wrapped a fresh unpaced
+  `v.spinner.Tick()`; the `spinner.TickMsg` update discarded the command `v.spinner.Update(msg)`
+  returns; and a bottom-of-update re-seed appended a new `spinnerTick()` after **every** message while
+  `deleting || pulling`. Every pull-progress event (and every key/tick) therefore scheduled another
+  independent chain instead of maintaining one subscription.
+
+**Pinned dependency API evidence (bubbles/v2 v2.2.1, module-cache spinner.go — reproduced the audit's
+`[needs runtime verification]`)**
+- `spinner.Model.Tick()` returns an **immediate `TickMsg`** (with `id` + current `tag`) — it is *not*
+  a timed command. The FPS pacing lives in `spinner.Update(TickMsg)`: it advances one frame, bumps the
+  tag, and returns the successor `m.tick(m.id, m.tag)` = `tea.Tick(FPS)`.
+- The view threw that successor away (`v.spinner, _ = v.spinner.Update(msg)`) and re-seeded an unpaced
+  tick per event instead — so the spinner advanced at event volume (never at `spinner.FPS`), scheduled
+  chains piled up while progress events flooded, and during a stream gap (long layer download, no
+  events) the spinner **froze** because nothing self-sustained the chain.
+- `spinner.Update` rejects ticks whose `id`/`tag` don't match the spinner's current state, so once the
+  view stops re-seeding stale tags, duplicates self-heal — the one-chain fix is safe by construction.
+
+**Reproduction (RED, decisive — M-09 REPRODUCED)**
+- Deterministic test seam first: `ModelsView.spinnerPending` counts scheduled spinner ticks whose
+  `TickMsg` has not yet arrived (0 or 1 in every steady state; reset when a busy state closes). With
+  the pre-fix re-seed still in place, the seam shows the multiplication without real `spinner.FPS`
+  waits: increment wherever a tick is scheduled, decrement when a tick whose `id` matches the view's
+  spinner arrives.
+- RED at HEAD (seam only): `TestModelsViewDeleteKeepsOneSpinnerChain` — after `x` → `y` (deleting
+  open, 1 chain seeded), the **first ignored key while deleting returned a command** (a re-seed);
+  `TestModelsViewPullKeepsOneSpinnerChain` — after a real pull start, the **first progress event
+  pushed `spinnerPending` to 2** (seed + progress re-seed). Both `t.Fatalf` on assertion 1.
+
+**Fix (green)**
+- `spinnerTick()` split into `spinnerSeed()` (one immediate TickMsg; only the transition into
+  pulling/deleting seeds a chain) and `spinnerResume(successor)` (wraps the FPS-paced successor
+  `spinner.Update` returned so its TickMsg crosses the App shell inside `modelsEventMsg`).
+- `Update` records `spinnerBusy` before the switch; the bottom re-seed is gone, replaced by "seed
+  exactly one chain when a busy state opens". The `spinner.TickMsg` case now captures the successor
+  and schedules it **only while the busy state is still active** — so a long pull keeps exactly one
+  FPS-paced chain (the spinner keeps animating through silent stream gaps, which pre-fix it froze),
+  and completion stops rescheduling.
+- Progress handlers were already right (they resubscribe only `waitPullCmd`); they now provably add
+  no spinner chain. Unrelated events/keys while busy add none either.
+- `onPullDone`/`onDeleteDone` reset `spinnerPending` (success *and* error-retry paths): a successor
+  tick already in flight when a busy state closes arrives inert (state gate + floor-guarded count).
+
+**Tests (red-green)**
+- Three new tests in `models_view_test.go`: delete chain (seed on `x`→`y`, five ignored keys never
+  re-seed, per-tick single successor, success completion stops + inert straggler), delete-error
+  retry (failure returns to confirm with the chain stopped; a retry seeds exactly one fresh chain),
+  and pull chain (real enter-pull seeds 1; 20 synthetic progress events leave `spinnerPending` at 1;
+  3 consumed ticks reschedule exactly one successor each; completion resets to 0 and a straggler
+  tick returns no command). Existing delete/pull/spinner/routing tests unchanged and green.
+- RED run captured above (2 failing). GREEN: `go test -count=1 ./internal/ui -run 'Test.*Spinner|TestModelsViewDelete|TestModelsViewPull'` → ok (incl. the 3 new tests); `go test -count=1 ./internal/ui` → ok;
+  `make check` → 0 (build + full suite + vet + gofmt); `make race` → 0 (full suite, race detector);
+  `gofmt -l` → empty; `git diff --check` → clean. No golden fixtures changed (no render path changed).
+
+**Commands + exit codes**
+- Session guard at start: `git status --short` → empty · branch `fix/v0.1.1-audit-remediation` · HEAD
+  `5d45a37`. RED and GREEN runs as above; code commit `64fcfc4`; `git status --short` after → only
+  LEDGER.md + runbook pending.
+- `make smoke`/`make smoke-model` NOT run — owner-run on a disposable model/tag (H-04 preflight). No
+  release-check (Task 22).
+
+**Decisions / lines to respect**
+- The one chain is seeded on the state transition, then sustained only by `spinner.Update`'s own
+  FPS-paced successors — never by event volume. Stale/duplicate ticks are rejected by the pinned
+  spinner's id/tag guard, so no explicit de-dup bookkeeping is needed beyond the state gate.
+- `spinnerPending` is a documented test seam (0/1 invariant; floor-guarded decrement on ticks whose
+  `id` matches `v.spinner.ID()`; reset on completion) so the scheduler-count test is deterministic
+  with no real timers. Production behavior does not depend on it.
+- Progress messages still resubscribe the pull-activity command (`waitPullCmd`) exactly as before;
+  this change only removed the per-event spinner re-seed.
+
+**Blockers / open decisions**
+- None for Task 16. Carried env note from Task 02/04: `make vuln` needs `$(go env GOPATH)/bin` on PATH.
+- Task 17 (M-10) follows next: reproducible release toolchain/archive modes/checksum paths
+  (`scripts/release-check.sh` + new test harness), then M-11 etc.
+
+**Next action**
+- Fresh Pi session: runbook **Task 17 (M-10 — release gate portability/reproducibility)**. Confirm
+  branch `fix/v0.1.1-audit-remediation` + clean status, then follow the Task-17 block. Do not run
+  `make smoke` until the owner runs it on a disposable model/tag or an isolated Ollama store; do not
+  run the full release-check until Task 22 and a clean worktree.
