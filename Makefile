@@ -83,4 +83,4 @@ audit-pack: ## manifest-complete deterministic source snapshot for external audi
 	scripts/create-audit-pack.sh
 
 clean:
-	rm -rf $(BIN)
+	rm -rf $(BIN) bin/size-probe dist
