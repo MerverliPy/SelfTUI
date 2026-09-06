@@ -6,7 +6,9 @@
 > identically on PC (native terminal) and iPhone 16 Pro (SSH into the host, responsive to
 > narrow screens).
 
-> **Status (2026-09-04):** v0.1 release hardening on `hardening/v0.1`.
+> **Status (2026-09-06):** **v0.1.0 released 2026-09-04** (tag `v0.1.0`);
+> **v0.1.1 audit-remediation hardening in progress** on
+> `fix/v0.1.1-audit-remediation` (§12 has the current next action).
 >
 > **Release-hardening correction (2026-09-04, owner task — phase 7 of the v0.1
 > hardening plan).** The public **v0.1 product contract** is: a **single-process
@@ -18,8 +20,8 @@
 > not shipped**; a bearer token on a **non-loopback host requires `https://`**.
 > Planning-era prose above and milestone rows below predate this note: they
 > are **historical records**, and where they conflict with this contract the
-> contract wins. See `CHANGELOG.md` (Unreleased) and the dated phase-7
-> `LEDGER.md` entry.
+> contract wins. See `CHANGELOG.md` (`[v0.1.0] - 2026-09-04`) and the dated
+> phase-7 `LEDGER.md` entry.
 
 ---
 
@@ -185,8 +187,10 @@ Thin typed wrapper over the REST API:
   idle-only — there is deliberately **no total request deadline**, so pulls
   keep running for minutes while progress lines keep arriving, and caller
   cancellation always wins over the idle watchdog. Chat additionally caps
-  cumulative content+thinking at 16 MiB (`chat stream exceeds 16777216
-  bytes`); EOF before a terminal `done`/`success` event stays an error. The
+  cumulative **raw** NDJSON bytes at 16 MiB (`chat stream exceeds 16777216
+  bytes`) — counting JSON framing, content, thinking, and tool calls, so
+  decoded tool arguments cannot slip past the cap (H-03); EOF before a
+  terminal `done`/`success` event stays an error. The
   idle window defaults to 90s per client and is injectable in tests
   (`Client.streamIdle`); public `Client`/`Chat`/`ChatStream`/`Pull`
   signatures are unchanged.
@@ -572,9 +576,9 @@ targets (`race`, `vuln`, `release-check`, `build-linux-amd64`/
 reachable advisories (goldmark v1.7.17 GO-2026-5320, x/text v0.39.0
 GO-2026-5970). Two code-review lanes: 0 hard violations, findings fixed in
 the separate commits listed in the LEDGER phase-8 entry; spec verdict
-`V0_1_RELEASE_CANDIDATE_READY`.
-Next: **v0.1 release** (tag `v0.1.0` + release notes) in a fresh session; do
-not tag in a hardening phase.
+`V0_1_RELEASE_CANDIDATE_READY`. The v0.1.0 release then landed the same day
+(runbook steps 4–6 below): tag `v0.1.0` + release notes, in a fresh session
+per the runbook rule "do not tag in a hardening phase".
 **Release runbook step 4 landed 2026-09-04**: `hardening/v0.1` merged to
 `main` via **PR #1** (commit `1a45554`, merge commit, branch kept); CI
 bring-up fixed three latent defects found by the first remote runs — job
@@ -609,11 +613,25 @@ full reachable history (`--all --full-history`: 45 commits, all refs incl.
 tag `v0.1.0` + `hardening/v0.1`) and the working tree found **0 leaks**;
 unreachable objects (stash entries, superseded tag, orphan blobs) scanned as
 supplementary evidence — also 0. `SECRET_HISTORY_SCAN=RESOLVED`. No
-remediation or code changes needed. **The public-visibility decision is the
-owner's next call** (repo remains private until then). v0.1.1-era queue:
-changelog cut (`[Unreleased]` → `[v0.1.0] - 2026-09-04`), **gitleaks-in-CI
-(recommended — see LEDGER step-6 entry)**, actionlint in the local gate,
-Node-20 action bumps, signed-tag decision.
+remediation or code changes needed.
+**M-12 documentation alignment (runbook Task 19, 2026-09-06):** the changelog
+cut landed — the `[Unreleased]` material became `## [v0.1.0] - 2026-09-04`
+and a fresh `[Unreleased]` now carries the v0.1.1 audit-remediation work —
+and `SECURITY.md`/`README.md` state the exact sensitive-path policy, stream
+limits, and the v0.1.0-published/v0.1.1-hardening state (see the LEDGER
+Task-19 entry).
+**Current next action (2026-09-06):** continue the audit-remediation runbook
+(`SelfTUI-Pi-Audit-Remediation-Runbook-2026-09-04.md`) on
+`fix/v0.1.1-audit-remediation`: **Task 20 (L-01, shared light-theme golden
+scenario builders)**, then Task 21 (L-02 cleanup), then **Task 22, the final
+release-candidate gate** (`VERSION=v0.1.1 make release-check`, govulncheck
+v1.7.0 pinned on PATH), after which the owner tags and publishes **v0.1.1**.
+**Queued, not started** — none of this has landed yet: **gitleaks-in-CI**
+(recommended; see LEDGER step-6 entry), **actionlint in the local gate**, and
+the **signed-tag decision**. The workflows already pin Node-20 majors
+(`actions/checkout@v4`, `actions/setup-go@v5`), so no Node action bump
+remains. **The public-visibility decision stays the owner's call** — the repo
+remains private until then.
 
 ---
 
@@ -621,7 +639,10 @@ Node-20 action bumps, signed-tag decision.
 
 `LEDGER.md` is the persistent work/decision log that keeps sessions efficient and
 high-performant. It is the **past-facing** record (what happened, why, what you hit, what
-happens next) that complements `PLAN.md` (future-facing) and `COUNCIL-MEMO.md` (this
+happens next) that complements `PLAN.md` (future-facing) and `COUNCIL-MEMO.md`
+(the 2026-09-03 advisory audit that re-cut the roadmap; retained verbatim as
+history — see the product contract at the top of this file for the current
+line).
 
 ---
 

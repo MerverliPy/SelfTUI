@@ -7,6 +7,59 @@ for tagged releases.
 
 ## [Unreleased]
 
+### Security
+
+- **v0.1.1 audit-remediation hardening** (2026-09-05/06 on
+  `fix/v0.1.1-audit-remediation`; findings in
+  `SelfTUI-External-Audit-2026-09-04.md`, task blocks in
+  `SelfTUI-Pi-Audit-Remediation-Runbook-2026-09-04.md`):
+  - **Host and config trust.** Default XDG config loading is restored (H-01);
+    workspace roots are validated canonically — `/` and the home directory are
+    rejected as roots and recursive grep cannot observe a denied descendant
+    (H-02).
+  - **Bounded tools and streams.** A single raw NDJSON event over 4 MiB, or
+    cumulative raw chat bytes over 16 MiB — counting JSON framing, content,
+    thinking, and tool-call bytes — aborts the stream; a decoded tool-call
+    argument over 1 MiB or a run-wide total of 64 tool calls is refused before
+    execution (H-03). HTTP redirects are refused so a bearer token is never
+    forwarded to another origin or downgraded to plain `http://` (M-08).
+  - **Terminal and interaction safety.** One sanitization boundary strips
+    terminal control sequences (OSC/CSI/C0/C1) from every remote-derived
+    render path (H-05); tool approvals expire and modals keep keyboard focus
+    (M-01); context trimming preserves atomic tool exchanges (M-02); stale
+    model/host completions are ignored (M-03); cancellation propagates through
+    tools and stream producers (M-06).
+  - **Smoke and audit hygiene.** The live smoke test is non-destructive — it
+    captures the host's state first and aborts when the target model already
+    exists (H-04) — and writes its evidence to private unique `0700`/`0600`
+    temp paths (M-11); audit packages are manifest-complete and verified
+    (H-06).
+
+### Fixed
+
+- **Correctness cluster** (2026-09-06): context truncation stays on UTF-8
+  rune boundaries; the Ollama client is rebuilt only when host/token change;
+  `/export` echoes the real recorder failure instead of dead-end advice; an
+  unsaved theme preview rolls back when the config write fails; stale model
+  detail is dropped after a list reload; recorder shutdown is bounded so a
+  wedged sink cannot hang exit; a missing explicit `-config` path hard-errors;
+  config parse errors name the real `AGENT_` environment variable; a failed
+  stream's error body is read under the idle watchdog rather than hanging the
+  producer.
+- Model deletes render an in-flight progress overlay (M-07) and each
+  operation keeps exactly one spinner command chain (M-09).
+- Transcript persistence moved off the UI update loop (M-04); long lines wrap
+  by terminal display cell instead of by byte (M-05).
+
+### Changed
+
+- **Reproducible release tooling** (M-10): the release gate and audit pack
+  produce byte-identical artifacts under any umask — fixed archive member
+  modes and flat `SHA256SUMS` entries — and `go.mod` pins the Go 1.27.1
+  toolchain to match CI.
+
+## [v0.1.0] - 2026-09-04
+
 ### Changed
 
 - **Product contract aligned for v0.1** (`hardening/v0.1`, 2026-09-04): public
@@ -57,7 +110,8 @@ for tagged releases.
 
 ### Security
 
-- Earlier v0.1 hardening already removed command execution, made workspace
-  tools opt-in with a real workspace root, validated/atomically saved config,
+- Earlier v0.1 hardening removed command execution, made workspace tools
+  opt-in with a real workspace root, validated/atomically saved config,
   bounded Ollama streams, and envelope-routed async UI events; those changes
-  are documented in `LEDGER.md` and will ship in the v0.1.0 release notes.
+  are documented in `LEDGER.md` and shipped in the v0.1.0 release
+  (2026-09-04).

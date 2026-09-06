@@ -7,7 +7,9 @@ terminal on Linux (or Windows Subsystem for Linux), or over SSH from a phone
 (Moshi, Blink, Termius, …) into that host, and the layout adapts to narrow
 windows. Native Windows and native macOS are **not supported** in v0.1.
 
-**Status: v0.1 release hardening (2026-09-04).** The Models tab lists live
+**Status: v0.1.0 released 2026-09-04; v0.1.1 hardening in progress** (audit
+remediation on the `fix/v0.1.1-audit-remediation` branch; see
+`CHANGELOG.md`). The Models tab lists live
 models from the Ollama host (`/api/tags`) with selection + an inspect pane
 (`/api/show`): key facts, parameters, template, modelfile, model info,
 license — scrollable, side-by-side on wide screens and stacked
@@ -108,10 +110,10 @@ Release binaries are static, CGO-disabled Linux builds stamped with a version
 ```sh
 make build-linux-amd64                     # dist/selftui-linux-amd64
 make build-linux-arm64                     # dist/selftui-linux-arm64
-VERSION=v0.1.0 make release-check          # the full gate; never tags
+VERSION=v0.1.1 make release-check          # the full gate; never tags
 ```
 
-`scripts/release-check.sh` (`VERSION=v0.1.0 make release-check`) is the gate
+`scripts/release-check.sh` (`VERSION=v0.1.1 make release-check`) is the gate
 a release must pass before the owner tags it. It requires a clean worktree,
 a `VERSION` of the form `v<major>.<minor>.<patch>`, and the enforced
 toolchain pin above (fails fast, before any gate work, if go/gofmt/
@@ -120,8 +122,9 @@ verify`, the gofmt check, `go vet`, uncached tests, race tests,
 `govulncheck`, both Linux builds, a version-stamp check of each binary
 (executed where the host can run it, otherwise the exact string `-X` linked
 in), and writes deterministic archives plus `dist/SHA256SUMS`. The script
-**never creates or pushes a git tag** — tagging `v0.1.0` and publishing the
-release is the owner's separate step. Regression suite:
+**never creates or pushes a git tag** — tagging and publishing is the
+owner's step (`v0.1.0` was released this way on 2026-09-04 via `release.yml`;
+`v0.1.1` is next, from the audit-remediation branch). Regression suite:
 `bash scripts/release-check-test.sh` (fake go/gofmt/govulncheck fixtures
 proving wrong versions fail fast, cross-umask byte-identical archives, and
 flat-checksum verification — it never touches this tree's `dist/`).

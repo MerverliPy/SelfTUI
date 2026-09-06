@@ -3904,3 +3904,83 @@ in private temp paths` (see below). Worktree clean after commit.
 - Fresh Pi session: runbook **Task 19 (M-12 — SECURITY/README/CHANGELOG/PLAN alignment)**. Confirm
   branch `fix/v0.1.1-audit-remediation` + clean status, then follow the Task-19 block. Do not run
   `make smoke` (owner-run) or the full release-check (Task 22).
+
+### 2026-09-06 — Runbook Task 19: M-12 security/release documentation alignment (owner task)
+**Milestone:** `SelfTUI-Pi-Audit-Remediation-Runbook-2026-09-04.md` Task 19 (M-12). No §10 row to tick
+(runbook-owned step; the runbook is not in this task's allowed-files list — the runbook Task-19
+checkbox stays unticked until Task 22 or a task whose allowed files include the runbook, per the
+Task-16/17/18 precedent).
+**Result:** done — evidence-backed doc patch on branch `fix/v0.1.1-audit-remediation`; commit
+`docs: align security and v0.1 release state` (see below). Worktree clean after commit.
+
+**Session guard:** branch `fix/v0.1.1-audit-remediation`, `git status --short` empty, HEAD `be91851`
+(pre-Task-19). Prerequisite reading done first: SECURITY.md/README.md/CHANGELOG.md, PLAN §§10–13,
+latest LEDGER entries, `internal/agent/toolpolicy.go` + `policy_test.go`, stream limits
+(`internal/ollama/{client,stream,chat,pull}.go`), runner execution budgets (`internal/agent/runner.go`),
+workflow pins (`.github/workflows/*.yml`), audit M-12 section, and the git topology
+(merge-base `fix/v0.1.1-audit-remediation` ↔ tag `v0.1.0` = `c70bf89`; all pre-tag CHANGELOG content is
+v0.1.0 material; the 29 code commits after the tag are the v0.1.1 work recorded in the new
+`[Unreleased]` section).
+
+**Work done (facts checked against code, then written into the five allowed files):**
+1. **Exact sensitive-path policy** (toolpolicy.go): sensitive components `.ssh`, `.gnupg`, `.aws`,
+   `.azure`, `.kube` anywhere + adjacent `.config`/`gcloud` pair; final-element denylist = dotenv
+   family (`.env` and any `.env.*`) except the `.env.example` template carve-out, plus exactly
+   `credentials` and `credentials.json` (not `credentials*` — e.g. `credentials.json.backup` is
+   allowed, per `policy_test.go`). SECURITY.md's old `.env*`/`credentials*` wildcards (broader than
+   tests) replaced with that exact statement.
+2. **Exact stream/run limits** (client/stream/chat/pull/runner): per-event raw cap 4 MiB; 90s idle
+   watchdog, no total request deadline; chat cumulative **raw** NDJSON cap 16 MiB counting framing +
+   content + thinking + tool calls (H-03); pull has no cumulative cap (per-event + idle only); finite
+   requests time out at 30s and read capped at 64 MiB; error bodies under the idle watchdog; redirects
+   refused on both clients (M-08); agent budgets 1 MiB/decoded tool argument, 64 calls/run, 12
+   iterations default (flag `-max-tool-iterations`, config range 1–100). SECURITY.md's "pull/chat
+   bodies cannot grow without limit" and PLAN §5's "cumulative content+thinking at 16 MiB" corrected
+   (the §5 row predated H-03's raw-event accounting).
+3. **README state:** Status line moved from "v0.1 release hardening (2026-09-04)" to
+   v0.1.0-released/v0.1.1-hardening; release-engineering prose now records that v0.1.0 shipped via
+   `release.yml` 2026-09-04 and v0.1.1 is next; gate examples bumped `VERSION=v0.1.0` → `v0.1.1`
+   (CONTRIBUTING's gate example aligned to the same one consistent statement).
+4. **CHANGELOG cut:** existing `[Unreleased]` material became `## [v0.1.0] - 2026-09-04` verbatim
+   (no entries lost; only the Security bullet's "will ship in the v0.1.0 release notes" rewritten to
+   shipped past tense); a fresh `[Unreleased]` now carries the v0.1.1 work — H-01..H-06/M-01..M-03/
+   M-06/M-08/M-11 hardening, the P1 correctness cluster, M-04/M-05/M-07/M-09 fixes, and M-10
+   reproducible release tooling + go.mod Go 1.27.1 toolchain pin. Nothing unlanded (L-01/L-02,
+   gitleaks-in-CI, actionlint, signed-tag) is claimed as done.
+5. **PLAN reconcile:** §12's stale mid-history "Next: v0.1 release …" rewritten to past tense; the
+   step-6 tail queue replaced by one current next action (runbook Task 20 after this Task 19, then
+   Task 21, then Task 22 final gate → owner tags/publishes v0.1.1) plus the queued-not-started set
+   (gitleaks-in-CI, actionlint, signed-tag decision — workflows already pin Node-20 majors
+   checkout@v4/setup-go@v5, so no Node action bump remains; public-visibility decision stays the
+   owner's call, repo private). Top status banner updated to v0.1.0-released/v0.1.1-in-progress, and
+   the visibly truncated §13 sentence (dangling "and `COUNCIL-MEMO.md` (this") repaired.
+
+**Evidence / gates**
+- Item-7 token search `rg -n 'release hardening|will ship|credentials\*|\.env\*|pull/chat bodies
+  cannot grow without limit' README.md CHANGELOG.md SECURITY.md PLAN.md` → no matches (exit 1).
+  Broader state sweep (will ship/upcoming/preparing/… across README/CHANGELOG/SECURITY/CONTRIBUTING)
+  → every remaining match reviewed and current (product-contract statements and historical
+  [v0.1.0]/runbook-step records; none stale).
+- `make check` → 0 (build + full Go suite incl. `internal/ui` goldens + vet + gofmt). Docs-only
+  change; no Go files touched.
+- `git diff --check` → clean. Commit SHA recorded below.
+
+**Decisions / lines to respect**
+- Allowed-files discipline held: only SECURITY.md, README.md, CHANGELOG.md, PLAN.md, CONTRIBUTING.md,
+  LEDGER.md edited; runbook/audit files untouched; no runbook checkbox ticked (Task 22).
+- Documentation describes the branch as it is now: exact denylist + `.env.example` carve-out, exact
+  stream/run limits, v0.1.0-published/v0.1.1-hardening state, fresh `[Unreleased]` for v0.1.1 —
+  without claiming unlanded work (L-01/L-02, gitleaks-in-CI, actionlint, signed-tag) is complete.
+- Historical record preserved: v0.1.0's entries were cut verbatim (only the "will ship" phrase
+  tensed), and §12 keeps the runbook-step history; LEDGER remains the past record.
+
+**Blockers / open decisions**
+- None for Task 19. Carried: govulncheck NOT installed — Task 22 (final gate) needs
+  `go install golang.org/x/vuln/cmd/govulncheck@v1.7.0` AND the pinned bin first on PATH
+  (`export PATH="$(go env GOROOT)/bin:$PATH"`). Runbook Task-19 checkbox stays unticked — tick it at
+  Task 22 or in a task whose allowed files include the runbook.
+
+**Next action**
+- Fresh Pi session: runbook **Task 20 (L-01 — shared light-theme golden scenario builders)**. Confirm
+  branch `fix/v0.1.1-audit-remediation` + clean status, then follow the Task-20 block. Do not run
+  `make smoke` (owner-run) or the full release-check (Task 22).

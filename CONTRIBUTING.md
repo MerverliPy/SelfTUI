@@ -63,7 +63,7 @@ go test ./internal/ui -run TestGoldenRender -update
 ## Releases
 
 v0.1.x releases are gated end-to-end by `scripts/release-check.sh`
-(`VERSION=v0.1.0 make release-check`): it demands a clean worktree, a
+(`VERSION=v0.1.1 make release-check`): it demands a clean worktree, a
 `VERSION` matching `v<major>.<minor>.<patch>`, and the enforced toolchain
 pin above (go 1.27.1 + same-distribution gofmt + govulncheck v1.7.0 — fails
 fast before any slow step), then runs module verification, gofmt, vet,
