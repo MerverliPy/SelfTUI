@@ -3984,3 +3984,34 @@ v0.1.0 material; the 29 code commits after the tag are the v0.1.1 work recorded 
 - Fresh Pi session: runbook **Task 20 (L-01 — shared light-theme golden scenario builders)**. Confirm
   branch `fix/v0.1.1-audit-remediation` + clean status, then follow the Task-20 block. Do not run
   `make smoke` (owner-run) or the full release-check (Task 22).
+
+### 2026-09-06 — Runbook Task 20 (L-01): Shared light-theme golden scenario builders (DONE)
+**Milestone:** `SelfTUI-Pi-Audit-Remediation-Runbook-2026-09-04.md` Task 20 (L-01). **Result:** done — `internal/ui/golden_test.go` refactored.
+
+**Work done**
+- Added `lightApp`/`bootLightApp` helpers that force `cfg.Theme = "light"` (mirrors `goldenApp`).
+- Added `buildLightFrame(t, name, w, h) App` — a `switch` mapping every `goldenFrames` name to an explicit light-theme builder. Unknown names call `t.Fatalf` (no silent default).
+- Added `TestLightFrameCoverage` — iterates `goldenFrames` and calls `buildLightFrame` for each, failing if any frame lacks an explicit builder.
+- Refactored `TestLightThemeRendersEveryTab` to use `buildLightFrame` instead of its own partial `switch` (the old switch only handled 7 of 19 frames; agent-turn, picker, slash, help/clear, and palette fell through to an empty/default Agent state).
+- Added pre-geometry state assertions per frame: active-tab presence, inspect model name, turn content (`"It is a mobile-first"`), picker model list, slash `/` hint, help text, clear-confirm action, palette content, Settings tab.
+- Confirmed the old loop misconstructed the 6 uncovered cases; all now render explicitly.
+- `make check` + `go test -race` green (all 19 frames at both 72×30 and 120×40 verified for light theme).
+
+**Commands + exit codes**
+- `go build ./internal/ui` `0`
+- `go test ./internal/ui -run 'TestLightTheme|TestLightFrame|TestGolden' -count=1` `0`
+- `go test ./internal/ui -count=1` `0`
+- `make check` `0` (build + full suite + vet + gofmt)
+- `go vet ./...` `0` · `gofmt -l internal/ui/golden_test.go` empty · `git diff --check` clean
+
+**Decisions / lines to respect**
+- Only `internal/ui/golden_test.go` was modified (the sole allowed file for L-01).
+- `buildLightFrame` uses `t.Fatalf` on unknown names so the coverage assertion is enforced at the builder level, not just the test loop.
+- Content assertions check the actual rendered token (e.g. `"qwen3:8b"` for the picker, `"It is a mobile-first"` for turns) rather than a keyword that may not appear in the overlay.
+- Preserved the 72×30 and 120×40 raw display-width/height guards and all existing byte-exact dark fixtures.
+
+**Blockers / open decisions**
+- None. Next: **Task 21 (L-02 — complete clean target and timer artifact disposition)**.
+
+**Next action**
+- Fresh Pi session: runbook **Task 21 (L-02)**. Confirm branch `fix/v0.1.1-audit-remediation` + clean status, then follow the Task-21 block.
