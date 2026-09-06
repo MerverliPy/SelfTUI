@@ -4015,3 +4015,28 @@ v0.1.0 material; the 29 code commits after the tag are the v0.1.1 work recorded 
 
 **Next action**
 - Fresh Pi session: runbook **Task 21 (L-02)**. Confirm branch `fix/v0.1.1-audit-remediation` + clean status, then follow the Task-21 block.
+
+### 2026-09-06 — Runbook Task 21 (L-02): Owned artifact cleanup and timer disposition (DONE)
+**Milestone:** `SelfTUI-Pi-Audit-Remediation-Runbook-2026-09-04.md` Task 21 (L-02). **Result:** done — `internal/ui/timer.sh` deleted, `make clean` extended.
+
+**Work done**
+- **Deleted `internal/ui/timer.sh`** — proven unused. The file contained only `#!/bin/sh\nsleep 10`. `routing_regression_test.go` uses `"timer.sh"` as an in-memory tool-call path string and creates its fixture in `t.TempDir()`, never referencing this file. No runtime, fixture, packaging, or documentation consumer exists.
+- **Extended `make clean`** — was `rm -rf $(BIN)` (only `bin/selftui`). Now `rm -rf $(BIN) bin/size-probe dist`, removing all three repository-owned artifact directories with explicit repository-relative paths.
+- **Verified end-to-end:** `make check` → 0, `make probe-build` → `bin/size-probe` exists, `make clean` removes `bin/selftui` + `bin/size-probe` + `dist`, `make check` → 0 after cleanup.
+
+**Commands + exit codes**
+- `git rm internal/ui/timer.sh` `0`
+- `make check` `0` (build + full suite + vet + gofmt)
+- `make probe-build` `0` · `test -f bin/size-probe` `0`
+- `make clean` `0` · `test ! -e bin/selftui` `0` · `test ! -e bin/size-probe` `0` · `test ! -e dist` `0`
+- `make check` `0`
+- `git diff --check` clean · `git diff --stat` shows 2 files changed
+- `go test -count=1 ./...` `0`
+
+**Decisions / lines to respect**
+- `timer.sh` deleted (not retained): no consumer exists per the audit finding's own evidence and the grep of all tracked files + history.
+- `make clean` uses explicit repository-relative paths (`bin/selftui`, `bin/size-probe`, `dist`), not broad globs or environment variables.
+- `.gitignore` already had `/bin/` and `/dist/` entries; no change needed there.
+
+**Blockers / open decisions**
+- None. Next: **Task 22 (final release-candidate gate)**.
