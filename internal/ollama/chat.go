@@ -76,6 +76,17 @@ type ChatRequest struct {
 	Options *ChatOptions `json:"options,omitempty"`
 }
 
+// ChatMetrics carries the final chunk's generation stats (the /api/chat
+// metrics block): prompt and completion token counts with the wall durations
+// that produced them, in nanoseconds. It is zero on every non-final chunk
+// and when a host omits the fields.
+type ChatMetrics struct {
+	PromptTokens int64   // prompt_eval_count
+	PromptNanos  float64 // prompt_eval_duration (ns)
+	Tokens       int64   // eval_count
+	Nanos        float64 // eval_duration (ns)
+}
+
 // ChatEvent is one decoded NDJSON response from /api/chat. Thinking is
 // deliberately separate from Content: qwen3 may stream reasoning that must
 // not be shown as the assistant's final answer or fed to a tool parser.
@@ -85,6 +96,9 @@ type ChatEvent struct {
 	Done       bool
 	DoneReason string
 	Error      string
+	// Metrics is populated only on the terminal done:true event; every
+	// earlier chunk leaves it zero.
+	Metrics ChatMetrics
 }
 
 // Chat streams POST /api/chat. The response is NDJSON: every event carries a
@@ -170,6 +184,13 @@ func (c *Client) ChatStream(ctx context.Context, req ChatRequest, onEvent func(C
 			DoneReason string `json:"done_reason"`
 			Thinking   string `json:"thinking"`
 			Error      string `json:"error"`
+
+			// Final-chunk generation metrics (N3). Zero on earlier chunks;
+			// omitted fields decode as zero and stay zero.
+			PromptEvalCount    int64   `json:"prompt_eval_count"`
+			PromptEvalDuration float64 `json:"prompt_eval_duration"`
+			EvalCount          int64   `json:"eval_count"`
+			EvalDuration       float64 `json:"eval_duration"`
 		}
 		if err := json.Unmarshal(raw, &wire); err != nil {
 			return fmt.Errorf("ollama POST %s: decode stream: %w", path, err)
@@ -187,6 +208,12 @@ func (c *Client) ChatStream(ctx context.Context, req ChatRequest, onEvent func(C
 			Thinking:   wire.Thinking,
 			Done:       wire.Done,
 			DoneReason: wire.DoneReason,
+		}
+		if wire.Done {
+			ev.Metrics = ChatMetrics{
+				PromptTokens: wire.PromptEvalCount, PromptNanos: wire.PromptEvalDuration,
+				Tokens: wire.EvalCount, Nanos: wire.EvalDuration,
+			}
 		}
 		if onEvent != nil {
 			onEvent(ev)

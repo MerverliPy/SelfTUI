@@ -62,6 +62,15 @@ type AgentView struct {
 	systemPrompt string
 	truncated    bool
 
+	// Measured tokens (N3): prompt_eval_count from the last completed turn's
+	// final chunk, shown by the ctx meter until the user edits the draft
+	// again (input no longer equals measuredDraft) or a new turn starts —
+	// ApproxTokens stays authoritative for live drafting. measuredDraft is
+	// the draft at measurement time (the sentinel the meter validates
+	// against, so every edit path is covered without touching each one).
+	measuredPromptTokens int
+	measuredDraft        string
+
 	streaming    bool                  // generation in flight
 	streamText   string                // in-flight assistant content (deltas appended)
 	stopRequest  bool                  // esc asked to stop; treat stream end as a stop
@@ -362,6 +371,7 @@ func (v AgentView) startChat() (AgentView, tea.Cmd) {
 	v.notice = ""
 	v.follow = true
 	v.turnStart = time.Now()
+	v.measuredPromptTokens = 0 // new turn: the meter is approximate again
 
 	model := v.model
 	msgs := make([]ollama.ChatMessage, 0, len(v.turns))
@@ -582,12 +592,26 @@ func (v AgentView) onChatDone(m agent.AgentDoneMsg) (AgentView, tea.Cmd) {
 	v.toolStatus = ""
 	v.confirmation = nil
 
+	// N3: the done event's metrics describe the payload that was just sent,
+	// independent of whether any text streamed back. When the final chunk
+	// carried a measured prompt token count, the ctx meter shows it until
+	// the draft or turn changes; an older host (no metrics) clears any
+	// stale measurement instead.
+	if m.Metrics.PromptTokens > 0 {
+		v.measuredPromptTokens = int(m.Metrics.PromptTokens)
+		v.measuredDraft = v.input.Value()
+	} else {
+		v.measuredPromptTokens = 0
+	}
+
 	var recCmd tea.Cmd // ack waiter for the committed assistant turn, if any
 
 	if v.streamText != "" {
 		// The Ollama done_reason on the done event is remote text rendered on
 		// the assistant header; sanitize it before it becomes turn meta.
-		meta := turnFooter(v.turnStart, sanitizeTerminalText(m.Reason), v.stopRequest)
+		// N3: when the final chunk carried generation metrics, the measured
+		// tok/s rides the same meta row.
+		meta := turnFooter(v.turnStart, sanitizeTerminalText(m.Reason), v.stopRequest, turnTokPerSec(m.Metrics))
 		v.turns = append(v.turns, turn{
 			msg:    ollama.ChatMessage{Role: ollama.RoleAssistant, Content: v.streamText},
 			model:  v.model,
@@ -872,10 +896,11 @@ func (v AgentView) sendInput() (AgentView, tea.Cmd) {
 		v.notice = "no model selected — press m or pull one in the Models tab"
 		return v, nil
 	}
-	ti := v.input
-	ti.Reset()
-	v.input = ti
+	i := v.input
+	i.Reset()
+	v.input = i
 	v = v.fitComposer()
+	v.measuredPromptTokens = 0 // a new draft/send: budget check is approximate again
 
 	v.turns = append(v.turns, turn{
 		msg:    ollama.ChatMessage{Role: ollama.RoleUser, Content: text},
@@ -1176,6 +1201,7 @@ func (v AgentView) applySessionLoaded(m sessionLoadedMsg) AgentView {
 	// checkContextBudget): an over-budget transcript must surface the
 	// truncation marker now, not only after the next send.
 	v.truncated = false
+	v.measuredPromptTokens = 0 // the conversation was replaced wholesale
 	v.checkContextBudget()
 	v.scroll = 0
 	v.follow = true
@@ -1389,6 +1415,7 @@ func (v AgentView) clearConfirmKey(k tea.Key) (AgentView, tea.Cmd) {
 		v.scroll = 0
 		v.follow = true
 		v.truncated = false
+		v.measuredPromptTokens = 0
 	case k.Text == "n" || k.Code == tea.KeyEsc:
 		v.clearConfirm = false
 		v.notice = "clear cancelled"
@@ -1422,6 +1449,13 @@ func (v AgentView) payloadMessages() []ollama.ChatMessage {
 // ctxTokens counts the approximate tokens of the next payload using the same
 // estimator as agent.BudgetMessages (4 chars per token).
 func (v AgentView) ctxTokens() int {
+	// N3: while the draft is untouched since the measured turn completed,
+	// the meter shows the host-reported prompt token count (exact) instead
+	// of the approximate estimator; any edit or new turn falls back to
+	// ApproxTokens (see the measuredPromptTokens field comment).
+	if v.measuredPromptTokens > 0 && v.input.Value() == v.measuredDraft {
+		return v.measuredPromptTokens
+	}
 	return agent.ApproxTokens(v.payloadMessages())
 }
 
@@ -1507,11 +1541,14 @@ func (v AgentView) userHeader() string {
 
 // turnFooter renders the per-turn meta (M7-B): elapsed wall time plus the
 // terminal reason — the model's ollama done_reason ("stop"/"length") or
-// "stopped" when the user cut the stream with esc. Returns "" when no start
-// time was recorded (an assistant block committed without startChat), so
-// hand-constructed transcripts in tests render no meta. Displayed on the
-// assistant header's right side.
-func turnFooter(start time.Time, reason string, stopped bool) string {
+// "stopped" when the user cut the stream with esc — and, when the turn's
+// final chunk carried generation metrics, the measured tok/s (N3). Returns
+// "" when no start time was recorded (an assistant block committed without
+// startChat), so hand-constructed transcripts in tests render no meta.
+// Displayed on the assistant header's right side. tokPerSec <= 0 (metrics
+// absent, zero duration, or a user stop) keeps the footer byte-identical to
+// the pre-N3 shape.
+func turnFooter(start time.Time, reason string, stopped bool, tokPerSec int) string {
 	elapsed := ""
 	if !start.IsZero() {
 		elapsed = fmt.Sprintf("%.1fs", time.Since(start).Seconds())
@@ -1519,14 +1556,29 @@ func turnFooter(start time.Time, reason string, stopped bool) string {
 	if elapsed == "" {
 		return ""
 	}
+	var meta string
 	switch {
 	case stopped:
 		return elapsed + " · stopped"
 	case reason != "":
-		return elapsed + " · " + reason
+		meta = elapsed + " · " + reason
 	default:
-		return elapsed
+		meta = elapsed
 	}
+	if tokPerSec > 0 {
+		meta += fmt.Sprintf(" · %d tok/s", tokPerSec)
+	}
+	return meta
+}
+
+// turnTokPerSec converts a done event's final-chunk metrics into the footer's
+// integer tok/s (eval_count / eval_duration, the duration in nanoseconds).
+// 0 means no displayable rate: metrics absent or a zero duration.
+func turnTokPerSec(m ollama.ChatMetrics) int {
+	if m.Tokens <= 0 || m.Nanos <= 0 {
+		return 0
+	}
+	return int(math.Round(float64(m.Tokens) * 1e9 / m.Nanos))
 }
 
 // ensureRenderer builds the glamour renderer when it is missing or the width

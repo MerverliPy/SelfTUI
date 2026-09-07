@@ -399,15 +399,43 @@ func TestTurnFooterShowsElapsedAndStopReason(t *testing.T) {
 }
 
 func TestStopReasonLength(t *testing.T) {
-	f := turnFooter(time.Now(), "length", false)
+	f := turnFooter(time.Now(), "length", false, 0)
 	if !strings.Contains(f, "· length") {
 		t.Errorf("footer = %q, want length reason", f)
 	}
-	if f2 := turnFooter(time.Now(), "", true); !strings.Contains(f2, "· stopped") {
+	if f2 := turnFooter(time.Now(), "", true, 0); !strings.Contains(f2, "· stopped") {
 		t.Errorf("stopped footer = %q, want stopped", f2)
 	}
-	if f3 := turnFooter(time.Time{}, "stop", false); f3 != "" {
+	if f3 := turnFooter(time.Time{}, "stop", false, 41); f3 != "" {
 		t.Errorf("footer without a start = %q, want empty", f3)
+	}
+	// N3: measured tok/s rides the meta after the reason.
+	if f4 := turnFooter(time.Now(), "stop", false, 41); !strings.Contains(f4, "· stop · 41 tok/s") {
+		t.Errorf("footer = %q, want elapsed · stop · 41 tok/s", f4)
+	}
+	if f5 := turnFooter(time.Now(), "", false, 12); !strings.HasSuffix(f5, "· 12 tok/s") {
+		t.Errorf("footer = %q, want elapsed · 12 tok/s", f5)
+	}
+	// A user stop keeps the pre-N3 shape (no tok/s) and tokPerSec<=0 changes
+	// nothing.
+	if f6 := turnFooter(time.Now(), "stop", true, 41); strings.Contains(f6, "tok/s") || !strings.Contains(f6, "· stopped") {
+		t.Errorf("stopped footer = %q, want plain stopped without tok/s", f6)
+	}
+	if f7 := turnFooter(time.Now(), "stop", false, 0); strings.Contains(f7, "tok/s") {
+		t.Errorf("footer without metrics = %q, want no tok/s", f7)
+	}
+}
+
+func TestTurnTokPerSec(t *testing.T) {
+	// 300 tokens over 10 s of eval wall time → 30 tok/s, rounded.
+	if got := turnTokPerSec(ollama.ChatMetrics{Tokens: 299, Nanos: 1e10}); got != 30 {
+		t.Errorf("tok/s = %d, want 30 (rounded)", got)
+	}
+	if got := turnTokPerSec(ollama.ChatMetrics{Tokens: 41, Nanos: 0}); got != 0 {
+		t.Errorf("tok/s with zero duration = %d, want 0", got)
+	}
+	if got := turnTokPerSec(ollama.ChatMetrics{}); got != 0 {
+		t.Errorf("tok/s without metrics = %d, want 0", got)
 	}
 }
 
@@ -622,6 +650,56 @@ func TestContextMeterMathMirrorsAgentEstimator(t *testing.T) {
 	}
 }
 
+func TestContextMeterSwitchesToMeasuredTokens(t *testing.T) {
+	// N3: a completed turn with measured prompt tokens drives the meter
+	// until the draft is edited again; ApproxTokens stays authoritative for
+	// live drafting.
+	v := testAgent(t, nil)
+	v.systemPrompt = config.Default().Agent.SystemPrompt
+	approx := agent.ApproxTokens(v.payloadMessages())
+
+	// A done event without metrics keeps the estimator (and clears any
+	// stale measurement — the conversation changed underneath it).
+	v.measuredPromptTokens = 12345
+	v.measuredDraft = ""
+	v, _ = v.Update(agentEventMsg{msg: agent.AgentDoneMsg{Reason: "stop"}})
+	if v.measuredPromptTokens != 0 || v.ctxTokens() != approx {
+		t.Errorf("done without metrics: measured=%d ctx=%d, want 0/%d", v.measuredPromptTokens, v.ctxTokens(), approx)
+	}
+
+	// A done event with measured prompt tokens takes over the meter while
+	// the draft is untouched.
+	v, _ = v.Update(agentEventMsg{msg: agent.AgentDoneMsg{Reason: "stop", Metrics: ollama.ChatMetrics{PromptTokens: 4242, Tokens: 137, Nanos: 3.4e9}}})
+	if v.ctxTokens() != 4242 {
+		t.Errorf("ctxTokens = %d, want measured 4242", v.ctxTokens())
+	}
+	want := 4242 * 100 / v.ctxLimit()
+	if want > 100 {
+		want = 100
+	}
+	if v.ctxPct() != want {
+		t.Errorf("ctxPct = %d, want %d (measured, clamped at 100)", v.ctxPct(), want)
+	}
+
+	// Editing the draft falls back to the approximate estimator.
+	v, _ = v.Update(tea.KeyPressMsg{Text: "h"})
+	if v.ctxTokens() == 4242 {
+		t.Error("draft edit should leave the measured reading")
+	}
+	if v.ctxTokens() < approx {
+		t.Errorf("ctxTokens = %d, want approximate (>= %d)", v.ctxTokens(), approx)
+	}
+
+	// A user stop (no metrics) also clears the stale measurement.
+	v.measuredPromptTokens = 9999
+	v.measuredDraft = ""
+	v.input.Reset()
+	v, _ = v.Update(agentEventMsg{msg: agent.AgentDoneMsg{Reason: "stop", Metrics: ollama.ChatMetrics{Tokens: 137, Nanos: 3.4e9}}})
+	if v.measuredPromptTokens != 0 {
+		t.Errorf("done with eval metrics but no prompt count: measured = %d, want 0", v.measuredPromptTokens)
+	}
+}
+
 func TestAssistantHeaderCarriesRightAlignedMeta(t *testing.T) {
 	v := testAgent(t, nil) // 88x40: chat inner width is 86
 	h := v.assistantHeaderRow("qwen3:8b", "0.4s · stop")
@@ -657,5 +735,71 @@ func TestStreamingStatusLineArmsInterrupt(t *testing.T) {
 	out = stripANSI(v.View())
 	if !strings.Contains(out, "esc again to interrupt") {
 		t.Errorf("armed statusline missing the second-esc warning:\n%s", out)
+	}
+}
+
+func TestTurnFooterShowsMeasuredTokPerSec(t *testing.T) {
+	// N3: a turn whose final chunk carries generation metrics commits with
+	// "elapsed · stop · 41 tok/s" meta and switches the ctx meter to the
+	// measured prompt token count until the draft is edited.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/tags":
+			w.Header().Set("Content-Type", "application/json")
+			io.WriteString(w, uiTagsBody)
+		case "/api/chat":
+			w.Header().Set("Content-Type", "application/x-ndjson")
+			io.WriteString(w, `{"message":{"role":"assistant","content":"final answer"},"done":false}`+"\n")
+			io.WriteString(w, `{"message":{"role":"assistant","content":""},"done":true,"done_reason":"stop","prompt_eval_count":4242,"prompt_eval_duration":22818421,"eval_count":41,"eval_duration":1e9}`+"\n")
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	v := testAgent(t, ollama.New(srv.URL, ""))
+	v, _ = v.Update(agentModelsLoadedMsg{models: sampleModels()})
+	typeText(t, &v, "hello")
+	v, _ = v.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	drainChat(t, &v)
+
+	if len(v.turns) != 2 {
+		t.Fatalf("turns = %d, want user + assistant", len(v.turns))
+	}
+	meta := v.turns[1].meta
+	if !strings.Contains(meta, "· stop · 41 tok/s") {
+		t.Errorf("footer meta = %q, want elapsed · stop · 41 tok/s", meta)
+	}
+	if !strings.Contains(stripANSI(v.View()), "· stop · 41 tok/s") {
+		t.Errorf("tok/s not rendered on the assistant header:\n%s", stripANSI(v.View()))
+	}
+	// The ctx meter now shows the measured prompt token count (exact).
+	if v.ctxTokens() != 4242 {
+		t.Errorf("ctxTokens = %d, want measured 4242", v.ctxTokens())
+	}
+	// Editing the draft hands the meter back to the approximate estimator.
+	typeText(t, &v, "x")
+	if v.ctxTokens() == 4242 {
+		t.Error("draft edit should leave the measured reading")
+	}
+}
+
+func TestTurnFooterWithoutMetricsUnchanged(t *testing.T) {
+	// A host that omits the metrics block keeps the pre-N3 footer exactly.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		io.WriteString(w, doneEvent("final answer", "stop"))
+	}))
+	t.Cleanup(srv.Close)
+	v := testAgent(t, ollama.New(srv.URL, ""))
+	v, _ = v.Update(agentModelsLoadedMsg{models: sampleModels()})
+	typeText(t, &v, "hello")
+	v, _ = v.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	drainChat(t, &v)
+	if len(v.turns) != 2 {
+		t.Fatalf("turns = %d, want user + assistant", len(v.turns))
+	}
+	meta := v.turns[1].meta
+	if !strings.HasSuffix(meta, "· stop") || strings.Contains(meta, "tok/s") {
+		t.Errorf("footer meta = %q, want plain elapsed · stop without tok/s", meta)
 	}
 }

@@ -93,10 +93,13 @@ type FallbackMsg struct{ Reason string }
 // AgentDoneMsg is emitted exactly once, after the loop or any error. Reason
 // is the terminal Ollama done_reason of the final stream ("stop", "length",
 // "tool_calls") so the UI can show why the turn ended (M7-B); it stays empty
-// on errors where no terminal event arrived.
+// on errors where no terminal event arrived. Metrics carries the final
+// chunk's generation stats of the turn's last stream (N3); it stays zero
+// when no terminal event arrived (error/stop paths keep today's shape).
 type AgentDoneMsg struct {
-	Err    string
-	Reason string
+	Err     string
+	Reason  string
+	Metrics ollama.ChatMetrics
 }
 
 // Request is one agent turn. Messages should contain the current conversation
@@ -167,8 +170,9 @@ func (r *Runner) Run(ctx context.Context, req Request, emit func(Msg)) error {
 		emit = func(Msg) {}
 	}
 	var reason string
-	err := r.run(ctx, req, emit, &reason)
-	done := AgentDoneMsg{Reason: reason}
+	var metrics ollama.ChatMetrics
+	err := r.run(ctx, req, emit, &reason, &metrics)
+	done := AgentDoneMsg{Reason: reason, Metrics: metrics}
 	if err != nil {
 		done.Err = err.Error()
 	}
@@ -176,7 +180,7 @@ func (r *Runner) Run(ctx context.Context, req Request, emit func(Msg)) error {
 	return err
 }
 
-func (r *Runner) run(ctx context.Context, req Request, emit func(Msg), reasonOut *string) error {
+func (r *Runner) run(ctx context.Context, req Request, emit func(Msg), reasonOut *string, metricsOut *ollama.ChatMetrics) error {
 	if r == nil || r.client == nil {
 		return errors.New("agent: nil Ollama client")
 	}
@@ -211,12 +215,17 @@ func (r *Runner) run(ctx context.Context, req Request, emit func(Msg), reasonOut
 	// unsolicited tool_calls-shaped reply — may turn into an execution.
 	tools := r.tools()
 	if len(tools) == 0 {
-		return r.runPlainChat(ctx, req, messages, req.NumCtx, options, emit, reasonOut)
+		return r.runPlainChat(ctx, req, messages, req.NumCtx, options, emit, reasonOut, metricsOut)
 	}
 
 	// H-03 run-wide call budget: executedCalls counts every tool executed
 	// across all iterations and is checked per batch before any call runs.
 	executedCalls := 0
+
+	// N3: the turn's measured metrics come from the LAST final chunk of the
+	// turn — each stream's done event overwrites the previous one, so a
+	// multi-iteration tool loop reports the stream that ended the turn.
+	var turnMetrics ollama.ChatMetrics
 
 	for iteration := 0; iteration < r.maxIterations; iteration++ {
 		if err := ctx.Err(); err != nil {
@@ -246,6 +255,9 @@ func (r *Runner) run(ctx context.Context, req Request, emit func(Msg), reasonOut
 			if ev.Done && ev.DoneReason != "" {
 				lastReason = ev.DoneReason
 			}
+			if ev.Done {
+				turnMetrics = ev.Metrics
+			}
 			if mergeErr != nil {
 				return // the stream already failed to merge: stop accumulating
 			}
@@ -254,7 +266,7 @@ func (r *Runner) run(ctx context.Context, req Request, emit func(Msg), reasonOut
 		if err != nil {
 			if iteration == 0 && isToolUnsupported(err) {
 				emit(FallbackMsg{Reason: "model does not support tools; using plain chat"})
-				return r.runPlainChat(ctx, req, messages, req.NumCtx, options, emit, reasonOut)
+				return r.runPlainChat(ctx, req, messages, req.NumCtx, options, emit, reasonOut, metricsOut)
 			}
 			return err
 		}
@@ -273,6 +285,7 @@ func (r *Runner) run(ctx context.Context, req Request, emit func(Msg), reasonOut
 				emit(TokenMsg{Text: content.String()[streamedLen:]})
 			}
 			*reasonOut = lastReason
+			*metricsOut = turnMetrics
 			return nil
 		}
 
@@ -337,7 +350,7 @@ func (r *Runner) run(ctx context.Context, req Request, emit func(Msg), reasonOut
 // tools are disabled and the fallback when an enabled model rejects the tool
 // surface. The terminal done_reason is recorded so the plain-chat footer
 // shows why the turn ended, mirroring the tool loop.
-func (r *Runner) runPlainChat(ctx context.Context, req Request, messages []ollama.ChatMessage, numCtx int, options *ollama.ChatOptions, emit func(Msg), reasonOut *string) error {
+func (r *Runner) runPlainChat(ctx context.Context, req Request, messages []ollama.ChatMessage, numCtx int, options *ollama.ChatOptions, emit func(Msg), reasonOut *string, metricsOut *ollama.ChatMetrics) error {
 	return r.client.ChatStream(ctx, ollama.ChatRequest{
 		// The plain-chat fallback must honor the same context budget as the
 		// tool loop: a giant first message is truncated, never sent raw
@@ -349,6 +362,9 @@ func (r *Runner) runPlainChat(ctx context.Context, req Request, messages []ollam
 		}
 		if ev.Done && ev.DoneReason != "" && reasonOut != nil {
 			*reasonOut = ev.DoneReason
+		}
+		if ev.Done && metricsOut != nil {
+			*metricsOut = ev.Metrics
 		}
 	})
 }
