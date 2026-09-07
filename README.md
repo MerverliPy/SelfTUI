@@ -124,7 +124,9 @@ verify`, the gofmt check, `go vet`, uncached tests, race tests,
 in), and writes deterministic archives plus `dist/SHA256SUMS`. The script
 **never creates or pushes a git tag** — tagging and publishing is the
 owner's step (`v0.1.0` was released this way on 2026-09-04 via `release.yml`;
-`v0.1.1` is next, from the audit-remediation branch). Regression suite:
+`v0.1.1` is next, from the audit-remediation branch). Since 2026-09-07 every
+`v*` tag is GPG-signed (`git tag -s`; `release.yml` verifies the signature
+before building anything — see CONTRIBUTING "Signed release tags"). Regression suite:
 `bash scripts/release-check-test.sh` (fake go/gofmt/govulncheck fixtures
 proving wrong versions fail fast, cross-umask byte-identical archives, and
 flat-checksum verification — it never touches this tree's `dist/`).
@@ -171,7 +173,7 @@ CI and releases run on GitHub Actions (`.github/workflows/`): `ci.yml` runs
 the local gate's checks minus the release-only steps (per-binary
 version-stamp, archives, `SHA256SUMS`) on every pull request and push to
 `main`; `release.yml` runs only on a pushed `v*` tag — it re-runs the
-complete release gate, verifies the tag is exactly the version stamped into
+complete release gate, verifies the tag's GPG signature, verifies the tag is exactly the version stamped into
 both binaries, uploads the two archives + `SHA256SUMS`, and publishes
 release notes generated from `CHANGELOG.md`. Both workflows pin **Go 1.27.1**
 and govulncheck **v1.7.0** as workflow configuration (env + `setup-go`); the

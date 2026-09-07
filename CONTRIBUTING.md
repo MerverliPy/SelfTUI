@@ -79,6 +79,28 @@ release.yml`, which re-runs the gate, verifies the tag against both binaries'
 stamped versions, uploads the archives + `SHA256SUMS`, and generates release
 notes from `CHANGELOG.md`. See README "Release engineering (v0.1)".
 
+### Signed release tags (owner policy, 2026-09-07)
+
+Every `v*` release tag is GPG-signed (`v0.1.0`/`v0.1.1` predate the policy
+and are unsigned). The signing key is Ed25519, no passphrase, living in the
+release host's GPG home; the public half is committed at
+`docs/release-signing-key.asc` so `release.yml` can verify every pushed tag
+(`git verify-tag` — unsigned or lightweight tags fail the release before
+any asset is built). Local repo config signs tags by default
+(`git config --local tag.gpgsign true` + `user.signingkey`); that config is
+machine-local and does not transfer with a clone. Tagging practice:
+
+```sh
+git tag -s vX.Y.Z -m "SelfTUI vX.Y.Z"  # signed; -a/-m without -s fails CI
+git verify-tag vX.Y.Z                    # Good signature before pushing
+git push origin vX.Y.Z
+```
+
+Back up the private key (`gpg --export-secret-keys <keyid>`) somewhere the
+repo never sees (private key material must never be committed —
+`secret-scan` guards this). For the green "Verified" badge on GitHub,
+the owner also uploads the public key under github.com/settings/keys.
+
 ## Style of contribution
 
 - Test-first for behavior changes: a red test that pins the new contract, then

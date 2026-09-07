@@ -20,6 +20,17 @@ on:
 permissions:
   contents: write
 
+env:
+  # Current official stable Go release at phase-8 time (2026-09-04).
+  GO_VERSION: "1.27.1"
+  # golang.org/x/vuln release pinned for reproducibility.
+  GOVULNCHECK_VERSION: "v1.7.0"
+  # The pushed tag, e.g. v0.1.0 — release-check.sh stamps this into both
+  # binaries via -X main.Version. (Restored 2026-09-07: the P0 supply-chain
+  # commit dropped this block while fixing the job-name env-context issue;
+  # without it VERSION/GO_VERSION are empty and the release fails.)
+  VERSION: ${{ github.ref_name }}
+
 defaults:
   run:
     shell: bash
@@ -36,6 +47,16 @@ jobs:
       # Pinned SHA (not mutable @v ref) — supply-chain audit item.
       # actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Verify the release tag carries a valid GPG signature
+        run: |
+          set -euo pipefail
+          # Owner policy (2026-09-07): every v* release tag is GPG-signed.
+          # The tag object is present because checkout fetched the tag ref;
+          # verify-tag fails on unsigned or lightweight tags, failing the
+          # release before any asset is built or published.
+          gpg --import docs/release-signing-key.asc
+          git verify-tag "$VERSION"
 
       - name: Set up Go ${{ env.GO_VERSION }}
         # actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
