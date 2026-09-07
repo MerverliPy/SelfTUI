@@ -27,4 +27,4 @@
 │❯ / for commands, or chat with the selected model…                    │
 ╰──────────────────────────────────────────────────────────────────────╯
 tools off · /tmp · enter send · / commands · m model · r refresh        
- ⏻ http://localhost:11434 · tools off · /tmp    Agent · 72x30 · compact 
+ ⏻ http://localhost:11434 · tools off           Agent · 72x30 · compact 

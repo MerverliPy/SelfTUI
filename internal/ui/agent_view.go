@@ -71,6 +71,13 @@ type AgentView struct {
 	measuredPromptTokens int
 	measuredDraft        string
 
+	// lastTokPerSec (N4): the measured tok/s of the last completed turn
+	// (same turnTokPerSec source the footer uses), surfaced in the shell
+	// status row. Zero until a turn's final chunk carried usable metrics; a
+	// user stop records no rate (the footer omits it there too); cleared
+	// wherever the conversation is replaced (/clear, import, resume).
+	lastTokPerSec int
+
 	streaming    bool                  // generation in flight
 	streamText   string                // in-flight assistant content (deltas appended)
 	stopRequest  bool                  // esc asked to stop; treat stream end as a stop
@@ -602,6 +609,11 @@ func (v AgentView) onChatDone(m agent.AgentDoneMsg) (AgentView, tea.Cmd) {
 		v.measuredDraft = v.input.Value()
 	} else {
 		v.measuredPromptTokens = 0
+	}
+	// N4: remember the measured rate for the shell status row; a user stop
+	// keeps no rate, exactly like the turn footer.
+	if t := turnTokPerSec(m.Metrics); t > 0 && !v.stopRequest {
+		v.lastTokPerSec = t
 	}
 
 	var recCmd tea.Cmd // ack waiter for the committed assistant turn, if any
@@ -1202,6 +1214,7 @@ func (v AgentView) applySessionLoaded(m sessionLoadedMsg) AgentView {
 	// truncation marker now, not only after the next send.
 	v.truncated = false
 	v.measuredPromptTokens = 0 // the conversation was replaced wholesale
+	v.lastTokPerSec = 0        // its last turn's rate no longer describes this one
 	v.checkContextBudget()
 	v.scroll = 0
 	v.follow = true
@@ -1416,6 +1429,7 @@ func (v AgentView) clearConfirmKey(k tea.Key) (AgentView, tea.Cmd) {
 		v.follow = true
 		v.truncated = false
 		v.measuredPromptTokens = 0
+		v.lastTokPerSec = 0 // the conversation was wiped; the rate described its last turn
 	case k.Text == "n" || k.Code == tea.KeyEsc:
 		v.clearConfirm = false
 		v.notice = "clear cancelled"
@@ -1490,6 +1504,37 @@ func (v AgentView) ctxPct() int {
 	return pct
 }
 
+// amberCtxPct is the amber context tier (N4): at or above 80% of the meter's
+// existing displayed scale — the ¾-num_ctx input budget the runner enforces —
+// usage warns amber before the red-100% tier. OWNER DECISION (PLAN §12 N4):
+// the plan's “~80% of num_ctx” is read as 80% on the meter's displayed scale
+// so the amber tier sits before (not beyond) today's red-100% tier.
+const amberCtxPct = 80
+
+// ctxTier classifies context usage for the meter's tier colors. Shared by the
+// composer header and the shell status row so the tiers cannot drift.
+type ctxTier int
+
+const (
+	ctxOK ctxTier = iota
+	ctxAmber
+	ctxRed
+)
+
+// ctxTierFor maps a meter percentage onto its tier: red at 100% (the budget
+// is full — sending past it truncates the model's reply), amber from
+// amberCtxPct, OK below.
+func ctxTierFor(pct int) ctxTier {
+	switch {
+	case pct >= 100:
+		return ctxRed
+	case pct >= amberCtxPct:
+		return ctxAmber
+	default:
+		return ctxOK
+	}
+}
+
 // ctxMeterPlain renders the plain (unstyled) live context meter, e.g.
 // "ctx ▓▓░░░ 38%", shown on the composer header's right side.
 func (v AgentView) ctxMeterPlain() string {
@@ -1504,6 +1549,26 @@ func (v AgentView) ctxMeterPlain() string {
 	}
 	bar := strings.Repeat("▓", filled) + strings.Repeat("░", 5-filled)
 	return "ctx " + bar + " " + fmt.Sprintf("%d%%", pct)
+}
+
+// ctxMeterSegment renders the status row's compact context meter (N4), with
+// its tier color: amber at the amber tier, red at 100%, the shell's plain
+// muted style below. Empty when there is nothing to meter (no num_ctx, or a
+// zero-token conversation) so a no-data frame stays byte-identical to the
+// pre-N4 status row.
+func (v AgentView) ctxMeterSegment() string {
+	plain := v.ctxMeterPlain()
+	if plain == "" || v.ctxTokens() == 0 {
+		return ""
+	}
+	switch ctxTierFor(v.ctxPct()) {
+	case ctxAmber:
+		return v.styles.warnText().Render(plain)
+	case ctxRed:
+		return v.styles.Error.Render(plain)
+	default:
+		return plain
+	}
 }
 
 // --- rendering ------------------------------------------------------------
@@ -1984,13 +2049,18 @@ func (v AgentView) composerHeader() string {
 	innerW := maxInt(v.w-2, 10)
 	left := v.assistantHeader(v.model)
 	right := ""
-	if pct := v.ctxPct(); pct >= 100 {
+	plain := v.ctxMeterPlain()
+	if usage := v.ctxUsage(); usage != "" {
+		plain += " · " + usage
+	}
+	// N4: tier colors via the shared ctxTierFor so the composer header and
+	// the shell status row cannot drift apart.
+	switch ctxTierFor(v.ctxPct()) {
+	case ctxRed:
 		right = v.styles.Error.Render("ctx full — /clear")
-	} else {
-		plain := v.ctxMeterPlain()
-		if usage := v.ctxUsage(); usage != "" {
-			plain += " · " + usage
-		}
+	case ctxAmber:
+		right = v.styles.warnText().Render(plain)
+	default:
 		right = v.styles.mutedText().Render(plain)
 	}
 	pad := innerW - lipgloss.Width(left) - lipgloss.Width(right)
@@ -2464,6 +2534,13 @@ func (v *AgentView) clampScroll() {
 	if v.scroll < 0 {
 		v.scroll = 0
 	}
+}
+
+// warnText returns the amber foreground style for the context meter's amber
+// tier (N4) — a “getting close” warning between the muted idle bar and the
+// red budget-full state.
+func (s Styles) warnText() lipgloss.Style {
+	return lipgloss.NewStyle().Foreground(s.warn)
 }
 
 // agentAccent returns the accent style applied to role headers.

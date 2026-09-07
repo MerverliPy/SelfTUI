@@ -5276,3 +5276,58 @@ owner-selected v0.2 set (V2a–V2d). DIRECT execution, zero agents.
 - Fresh session at `/home/calvin/SelfTUI`; next N-item per the §12
   sequencing sketch: N4 (status bar observability row), or N2 if owner
   reorders.
+
+## 2026-09-07 — N4 status bar as observability row (PLAN §12)
+
+**Work done**
+- N4 landed: shell status row (App `statusLeft`) now carries the N4 anatomy —
+  observability head `model · [pull pill] · ctx meter · tok/s`, identity tail
+  `⏻ host · tools · workspace` (+ remote-host warning). Fixed shed order under
+  width pressure: workspace → obs tail (tok/s → meter → pill → model chip) →
+  warning; host + tools floor never truncated (72-col phone discipline kept).
+- Amber ctx tier: shared `ctxTierFor`/`amberCtxPct=80` (≥80% on the meter's
+  existing displayed scale, i.e. the ¾-num_ctx input budget; red-100%
+  unchanged) applied identically to the composer header and the status-row
+  meter; new `Styles.warn` amber (dark #CC7A00-ish "214" / light "136") via
+  `warnText()`. Owner decision recorded in the code comment.
+- Background-job pills: generic pill shape, one real pill wired to the
+  models-view streaming pull (`ModelsView.pullPill`: `⇣ name NN%`, sanitized
+  name, degrades to `⇣ name…` when the server reports no totals). Queued-turn
+  pills deferred — no chat-turn queue exists today (sends block while
+  streaming); the pill API stays generic for when one lands.
+- `lastTokPerSec` (AgentView): mirrors N3 footer semantics — measured rate of
+  the last completed turn only, none on user stop, cleared on /clear, import,
+  resume. Meter/tok/s omit when absent → no-data rows render the pre-N4 shape.
+- Goldens: 23 fixtures regenerated **deliberately** (planned UI change); diff
+  audited — 11 wide frames gained `model · ctx` segments, 12 compact frames
+  shed `/tmp` under pressure; no assertion weakened; no testdata weakening.
+- Delegation note (channel health): single implementation lane
+  `developer-tooling-engineer`; session meta confirms it ran on
+  `opencode-go/glm-5.3-flash:high` (primary held; no fallback, no quota hits).
+
+**Commands + exit codes**
+- Parent verification (uncached): `gofmt -l .` → empty; `make check` → 0;
+  `go test -race -count=1 ./...` → 0 (agent 10.3s, ui 15.7s, all ok).
+- Child lane checks reported the same (gofmt clean, make check 0, race 0).
+- New tests: `internal/ui/status_row_test.go` (tier boundaries 79/80/100,
+  amber styling both meters, segment presence/absence incl. pre-N4 no-data
+  shape, pill render + width pressure, tok/s clear-on-wipe).
+
+**Decisions / lines to respect**
+- Amber threshold = ≥80% on the meter's displayed scale (¾ num_ctx budget),
+  NOT literally ~80% of num_ctx — read as "before today's red-100% tier" on
+  the same scale; documented in `ctxTierFor` comment. One-number change if
+  the owner disagrees.
+- Status-row anatomy is the roomy-shape target; the shed order (obs yields
+  before the privacy warning; host+tools floor never truncates) is the
+  binding 72-col behavior.
+- N1 windowing + N3 metrics plumbing untouched (rendering-layer only).
+
+**Blockers / open decisions (carry to next session)**
+- None. (Owner-optional GPG key upload remains with the owner.)
+- Queued-turn pills await a real queue feature (documented in code comment).
+
+**Next action**
+- Fresh session at `/home/calvin/SelfTUI`; next N-item per the §12
+  sequencing sketch: N2 (streaming repaint discipline), or N6/N5 if the
+  owner reorders.

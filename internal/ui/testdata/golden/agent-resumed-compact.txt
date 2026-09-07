@@ -27,4 +27,4 @@
 │❯ / for commands, or chat with the selected model…                    │
 ╰──────────────────────────────────────────────────────────────────────╯
 resumed 2 turns from chat-20260907-214503.123-4321.md                   
- ⏻ http://localhost:11434 · tools off · /tmp    Agent · 72x30 · compact 
+ ⏻ http://localhost:11434 · tools off           Agent · 72x30 · compact 

@@ -800,7 +800,7 @@ chunk in `internal/ollama`, surface per-turn `model · 3.4s · stop · 41 tok/s`
 existing M7-B turn footer, and upgrade the M7-C ctx meter with measured prompt
 tokens when a turn completes (ApproxTokens stays for live drafting).
 
-### N4 — Status bar as observability row (V)
+### N4 — Status bar as observability row (V) — **LANDED 2026-09-07**
 Extend the persistent bottom row to `model · ctx bar · tok/s · host` with an **amber
 tier** (~80% of num_ctx) before today's red-100% tier (meter is a correctness
 feature — over num_ctx silently truncates). Add background-job pills (pull progress,
