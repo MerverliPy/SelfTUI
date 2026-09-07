@@ -9,6 +9,21 @@ for tagged releases.
 
 ### Security
 
+- **Embedded tool JSON must be tool-framed.** Content-embedded tool calls are
+  honored only when the model explicitly wraps them in a `{"tool_calls":[...]}`
+  envelope (fenced or bare). Bare `{"name":...}` objects, `function` wrappers,
+  and top-level call arrays are now rendered as prose instead of executing.
+- **Removed the `-auth-token` flag.** A command-line secret appears in process
+  listings and shell history; the flag was already documented as
+  compatibility-only. Tokens remain supported via `SELFTUI_AUTH_TOKEN`, the
+  0600 config file, and the Settings → Connection form.
+
+### Changed
+
+- Runbook `SelfTUI-Pi-Audit-Remediation-Runbook-2026-09-04.md` closed: Tasks 17–22
+  checklist entries ticked and a completion addendum appended (all 22 findings
+  remediated, v0.1.1 gate green, release published 2026-09-07).
+
 - **v0.1.1 audit-remediation hardening** (2026-09-05/06 on
   `fix/v0.1.1-audit-remediation`; findings in
   `SelfTUI-External-Audit-2026-09-04.md`, task blocks in

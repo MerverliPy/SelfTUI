@@ -4535,3 +4535,52 @@ live Agent conversation at both canonical geometries.
   `systemd-run` / rootless containers against
   `docs/run-command-containment.md`; GO → V2c, NO-GO → decision recorded).
   Do not chain here.
+
+### 2026-09-07 — Small fix session: embedded-JSON cap + runbook closure + `-auth-token` dropped (DONE)
+**Milestone:** owner-assigned one-step session (no §10 row to tick; the V2b gate
+remains the next roadmap step). **Result:** done — three logical commits on branch
+`fix/embedded-json-cap`, `make check` + `go test -race -count=1 ./...` green.
+
+**Work done**
+- **Embedded-JSON fallback capped (red-green, commit `481522b`):** the runner's
+  content-embedded tool-call fallback now requires an explicitly tool-framed turn —
+  a `{"tool_calls":[...]}` envelope, optionally inside a ```json fence. Bare
+  `{"name":...}` objects, `function` wrappers, and top-level call arrays render as
+  prose and never execute. RED: the two new negative subtests failed pre-fix for the
+  expected reason (bare object/array executed → 2 requests). Positive controls pin
+  the envelope path (bare + fenced). `internal/agent/runner.go` (`parseEmbeddedToolCalls`
+  /`embeddedCalls`) + `runner_test.go`.
+- **Runbook closed (commit `b3d1822`):** Tasks 17–22 checklist checkboxes ticked
+  (LEDGER records them DONE; the list was stale) and a dated completion addendum
+  appended pointing at the Task 22 gate + v0.1.1 publication. Task blocks preserved
+  verbatim; append-only, no history rewrite.
+- **`-auth-token` flag dropped (commit `3cd5ca5`):** the compatibility-only argv
+  secret is gone (process listings / shell history exposure). Tokens remain via
+  `SELFTUI_AUTH_TOKEN`, the 0600 config file, and the Settings → Connection form.
+  README secrets paragraph updated ("deliberately no -auth-token flag"); no code or
+  test references the flag remain; `go build ./...` clean.
+
+**Commands + exit codes**
+- RED: `go test -count=1 ./internal/agent -run TestRunnerParsesContentEmbeddedToolJSON` → 1 (two negative subtests fail as expected)
+- GREEN (same test, focused): `0` · `go test -count=1 ./internal/agent` → `0`
+- `make check` → `0` · `go test -race -count=1 ./...` → `0`
+- `git diff --check` clean per commit · commits: `481522b`, `b3d1822`, `3cd5ca5`
+
+**Decisions / lines to respect**
+- The cap keeps `embeddedCall`'s item-shape leniency (name/tool/function.name,
+  arguments/args/parameters) inside the envelope — the envelope is the intent
+  signal, not the item shape.
+- Dropping `-auth-token` was the owner's "optional" item, taken: the flag
+  self-documented as compatibility-only and v0.2 is the time to shed argv secrets.
+  No absence-of-flag test added (registration lives inside `run()`; pinning an
+  absence would need a flag-set seam — not worth the refactor here).
+- README/PLAN/docs descriptions of "content-embedded tool calls" stay accurate
+  (dispatch exists; only the accepted shape narrowed) — no doc rewrites.
+
+**Blockers / open decisions (carry to next session)**
+- None. Owner-optional click unchanged: GPG pubkey upload (Verified badge).
+
+**Next action**
+- Fresh session: **V2b — sandbox spike GATE** (evaluate bubblewrap / `systemd-run`
+  / rootless containers against `docs/run-command-containment.md`; GO → V2c,
+  NO-GO → decision recorded). Do not chain here.
