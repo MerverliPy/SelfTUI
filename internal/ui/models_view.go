@@ -1364,6 +1364,13 @@ func (v ModelsView) applyTheme(dark bool, styles Styles) ModelsView {
 // that changed host or token; the stale list/detail are dropped and reloaded
 // from the new host via the returned non-blocking load cmd.
 func (v ModelsView) ApplyClient(c *ollama.Client) (ModelsView, tea.Cmd) {
+	// A client replacement also ends an in-flight pull: its goroutine would
+	// otherwise keep streaming the old host's progress into the new host's
+	// view and surface the old host's result on completion. CancelFunc is
+	// idempotent, so a later Esc double-cancel stays safe (D2).
+	if v.pullCancel != nil {
+		v.pullCancel()
+	}
 	v.client = c
 	// A client replacement invalidates every in-flight result of the old
 	// host: bump the generation and cancel the pending show so a stale

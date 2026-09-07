@@ -4799,3 +4799,47 @@ exists and was validated end-to-end on the release host; V2c may reinstate
 **Next action**
 - Fresh session: owner picks the next step — D2 hardening session is the queued
   follow-up (one-line fix + regression test). Do not chain here.
+
+---
+
+## 2026-09-07 — D2 landed: ApplyClient cancels in-flight pull (one-line hardening + regression test)
+
+**Work done**
+- Orchestrator triage: DIRECT (zero agents) — one-line fix + one test, existing
+  Esc-cancel test pattern mirrored; canonical checks owned by parent.
+- `internal/ui/models_view.go` ApplyClient: cancel the in-flight pull
+  (`v.pullCancel != nil` → `v.pullCancel()`) before the client swap, with a
+  comment noting CancelFunc idempotence (Esc double-cancel safe). Closes the
+  owner-approved D2 finding: without this, an old-host pull goroutine kept
+  streaming progress into the new host's view and would surface the old host's
+  result on completion.
+- `internal/ui/models_view_test.go`: new `TestModelsViewApplyClientCancelsPull`
+  — pull starts against a stalling host A, ApplyClient swaps to a tags host B;
+  asserts the pull goroutine terminates (stream closes, view leaves `pulling`),
+  `pullCancel` cleared, "context canceled" surfaced, and the new-host reload
+  (executed via the real command, so the gen-gate applies) clears the error.
+  First draft failed one assertion (hand-built `modelsLoadedMsg` gen=0 was
+  dropped by the M-03 gen-gate) — fixed by applying the command's real result.
+
+**Commands + exit codes**
+- `go build ./...` → 0.
+- `go test -count=1 ./internal/ui -run 'TestModelsViewApplyClient|TestModelsViewPull' -v`
+  → first run 1 FAIL (gen-gate), fixed; final run all PASS, exit 0.
+- `make check` (build + `go test -count=1 ./...` + vet) → 0, all packages ok.
+- `go test -race -count=1 ./internal/ui` → 0 (10.99s).
+
+**Decisions / lines to respect**
+- Minimal-scope hardening per owner decision 4df7146: cancel-only; the canceled
+  goroutine's done message performs the normal onPullDone cleanup, and the
+  surfaced "context canceled" error is cleared by the new-host reload (same UX
+  contract as the esc path).
+- Pull events themselves remain non-gen-gated — no scope expansion beyond the
+  approved one-line fix + test.
+
+**Blockers / open decisions (carry to next session)**
+- None.
+
+**Next action**
+- Fresh session: owner picks — D3 (looksLikeEmbeddedJSON doc comment + pinning
+  test, runner.go:514) is the queued follow-up; D4 (100× render benchmark +
+  0×0 boundedness test) can ride any session with slack. Do not chain here.
