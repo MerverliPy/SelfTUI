@@ -125,16 +125,13 @@ func seedUnicodeAgentTurn(t *testing.T, m App) App {
 			t.Fatalf("seed line %q is %d cells, inner pane %d", l, lw, inner)
 		}
 	}
-	m.agent.history = []ollama.ChatMessage{
-		{Role: ollama.RoleUser, Content: "render unicode"},
-		{Role: ollama.RoleAssistant, Content: strings.Join(raw, "\n")},
-	}
-	m.agent.turnModel = []string{"qwen3:8b", "qwen3:8b"}
-	m.agent.turnMeta = []string{"", "0.4s · stop"}
-	m.agent.render = []string{
-		m.agent.renderBlock(m.agent.userHeader(), "render unicode"),
-		m.agent.renderBlock(m.agent.assistantHeaderRow("qwen3:8b", "0.4s · stop"),
-			strings.Join(raw, "\n")),
+	m.agent.turns = []turn{
+		{msg: ollama.ChatMessage{Role: ollama.RoleUser, Content: "render unicode"},
+			render: m.agent.renderBlock(m.agent.userHeader(), "render unicode")},
+		{msg: ollama.ChatMessage{Role: ollama.RoleAssistant, Content: strings.Join(raw, "\n")},
+			model: "qwen3:8b", meta: "0.4s · stop",
+			render: m.agent.renderBlock(m.agent.assistantHeaderRow("qwen3:8b", "0.4s · stop"),
+				strings.Join(raw, "\n"))},
 	}
 	return m
 }

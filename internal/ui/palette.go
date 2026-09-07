@@ -102,7 +102,7 @@ func (a *App) runPaletteItem(it paletteItem) (App, tea.Cmd) {
 		a.agent, _ = a.agent.openSelector()
 	case "clear":
 		a.switchTab(1)
-		if len(a.agent.history) == 0 && a.agent.streamText == "" {
+		if len(a.agent.turns) == 0 && a.agent.streamText == "" {
 			a.agent.notice = "nothing to clear"
 		} else {
 			a.agent.clearConfirm = true

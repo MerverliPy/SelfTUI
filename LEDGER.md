@@ -4736,3 +4736,66 @@ exists and was validated end-to-end on the release host; V2c may reinstate
 **Next action**
 - Fresh session: execute D1 — agent_view.go full-scope code-motion cleanup, green
   make check, golden/routing/seam tests must stay green. Do not chain here.
+
+---
+
+## 2026-09-07 — D1 landed: agent_view.go full-scope code-motion cleanup
+
+**Work done**
+- Orchestrator triage: DIRECT (zero implementation agents) — scope already adjudicated
+  by conclave + owner; one concern, one file + bounded test migration; one targeted
+  read-only `reviewer` pass on the final diff (verdict: clean, no findings).
+- `internal/ui/agent_view.go`:
+  1. **Turn struct**: `history`/`turnModel`/`turnMeta`/`render` → one `turns []turn`
+     (msg/model/meta/render). Commit sites (sendInput, onChatDone), import
+     (applySessionLoaded), /clear, render cache rebuild, headerFor, chatLines,
+     payloadMessages, and startChat's request copy all migrated. The parallel-slice
+     desync guard in chatLines collapses to an empty-render fallback (kept sanitized).
+  2. **Handler extraction**: inline mutation-approval and slash-draft key switches
+     pulled out of handleKey into `confirmKey` / `slashDraftKey` (handled flag keeps
+     fall-through). selector/resume/clear handlers were already methods.
+  3. **Pure render**: `renderChatPane` no longer writes `v.scroll` — the effective
+     offset is computed locally (follow → tail anchor; else clamped). clampScroll
+     stays on the key paths; clampScroll comment updated.
+  4. **Recorder composition-root**: `WithSessionDir` constructs the concrete
+     `*session.Recorder` eagerly (closes a prior one first; Close idempotent);
+     `enqueueSessionTurn` no longer constructs on the update loop and is now a
+     pointer receiver so accepted-turn/first-failure state lands on the caller (the
+     old value receiver silently dropped those writes on discard-style callers —
+     latent bug the migration surfaced). New `recorded` flag preserves
+     "/export → nothing recorded yet" nil-command behavior.
+  5. **Legacy deletion**: `agentTokenMsg`/`agentDoneMsg` types + Update cases removed;
+     `onChatDone` now takes `agent.AgentDoneMsg` directly; ~6 legacy test call sites
+     migrated (sanitize/truncate/routing + agent_view_test).
+  6. **TabBar comment fix** (components.go): Render never wrapped and Width is unused
+     in rendering — comment now says so (no code change).
+- Callers migrated: palette.go (`len(a.agent.turns)`), 9 test files
+  (agent_view/routing/sanitize/truncate/m7/golden/small_terminal/cancellation/
+  resume_ui/session_ui). Test seeds build `[]turn` literals; injected-recorder tests
+  `Close()` the eager recorder before swapping in their fake (4 sites).
+
+**Commands + exit codes**
+- `go build ./...` → 0 (after each stage; intermediate errors fixed: 2 missed
+  history refs, pointer-receiver returns, truncate_test import).
+- `go vet ./...` → 0.
+- `make check` (build + `go test -count=1 ./...` + vet) → 0; all packages ok,
+  internal/ui 5.9s (one failure during migration: enqueueSessionTurn value-receiver
+  dropped `recorded` on the direct-call test — fixed by pointer receiver).
+- `go test -race -count=1 ./...` → 0 (all packages ok, internal/ui 11.2s).
+- Reviewer lane: verdict clean / merge OK, 0 findings (run meta did not surface the
+  executed model; lane completed without fallback error).
+
+**Decisions / lines to respect**
+- Behavior preserved by design: golden fixtures byte-identical (no -update run),
+  routing/seam tests green unchanged, /export notice + nil-command pre-empt kept via
+  `recorded`, render never mutates state.
+- D2 (pullCancel hardening), D3 (looksLikeEmbeddedJSON doc+pinning test),
+  D4 (100× benchmark + 0×0 boundedness test) remain separate follow-ups — do not
+  fold into any other session.
+
+**Blockers / open decisions (carry to next session)**
+- None.
+
+**Next action**
+- Fresh session: owner picks the next step — D2 hardening session is the queued
+  follow-up (one-line fix + regression test). Do not chain here.

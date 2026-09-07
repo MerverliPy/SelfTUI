@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"charm.land/lipgloss/v2"
+
+	"selftui/internal/agent"
 )
 
 // truncate helpers: cut text is visibly truncated ("…") and styled text is
@@ -84,7 +86,7 @@ func TestNoCaretDuringToolOnlyStreaming(t *testing.T) {
 	}
 
 	// Once real text arrives the caret rides it; gone again at rest.
-	v, _ = v.Update(agentTokenMsg{text: "#!/bin/sh"})
+	v, _ = v.Update(agent.TokenMsg{Text: "#!/bin/sh"})
 	if out := stripANSI(v.View()); !strings.Contains(out, "▍") || !strings.Contains(out, "#!/bin/sh") {
 		t.Errorf("caret missing while text streams:\n%s", out)
 	}

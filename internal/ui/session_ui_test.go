@@ -133,8 +133,8 @@ func TestAgentViewPersistsChatSession(t *testing.T) {
 		t.Errorf("user turn recorded after the assistant turn:\n%s", text)
 	}
 	// The in-memory transcript is untouched by persistence.
-	if len(v.history) != 2 {
-		t.Errorf("history = %d, want 2", len(v.history))
+	if len(v.turns) != 2 {
+		t.Errorf("turns = %d, want 2", len(v.turns))
 	}
 }
 
@@ -272,6 +272,7 @@ func TestAgentViewSessionWriteNeverBlocksUpdate(t *testing.T) {
 	v := testAgent(t, nil)
 	v, _ = v.Update(agentModelsLoadedMsg{models: sampleModels()})
 	v = v.WithSessionDir(dir, "")
+	v.recorder.Close() // stop the eager composition-root recorder; this test injects its own
 	v.recorder = session.NewRecorderWithOpener(dir, "", func(string, string) (session.Writer, error) {
 		return w, nil
 	})
@@ -322,8 +323,8 @@ func TestAgentViewSessionWriteNeverBlocksUpdate(t *testing.T) {
 		}
 		time.Sleep(2 * time.Millisecond)
 	}
-	if len(v.history) != 1 {
-		t.Errorf("history = %d, want 1 committed user turn", len(v.history))
+	if len(v.turns) != 1 {
+		t.Errorf("turns = %d, want 1 committed user turn", len(v.turns))
 	}
 }
 
@@ -349,6 +350,7 @@ func TestAgentViewSessionWriteNeverBlocksUpdateStalledOpen(t *testing.T) {
 	v := testAgent(t, nil)
 	v, _ = v.Update(agentModelsLoadedMsg{models: sampleModels()})
 	v = v.WithSessionDir(dir, "")
+	v.recorder.Close() // stop the eager composition-root recorder; this test injects its own
 	v.recorder = session.NewRecorderWithOpener(dir, "", func(string, string) (session.Writer, error) {
 		close(opened)
 		<-openRelease
@@ -402,6 +404,7 @@ func TestAgentViewExportWaitsForStalledEarlierTurn(t *testing.T) {
 	v := testAgent(t, nil)
 	v, _ = v.Update(agentModelsLoadedMsg{models: sampleModels()})
 	v = v.WithSessionDir(dir, "")
+	v.recorder.Close() // stop the eager composition-root recorder; this test injects its own
 	v.recorder = session.NewRecorderWithOpener(dir, "", func(string, string) (session.Writer, error) {
 		return w, nil
 	})
@@ -470,6 +473,7 @@ func TestAgentViewSessionFailureSurfacesOnce(t *testing.T) {
 	v := testAgent(t, nil)
 	v, _ = v.Update(agentModelsLoadedMsg{models: sampleModels()})
 	v = v.WithSessionDir(dir, "")
+	v.recorder.Close() // stop the eager composition-root recorder; this test injects its own
 	v.recorder = session.NewRecorderWithOpener(dir, "", func(string, string) (session.Writer, error) {
 		return fw, nil
 	})

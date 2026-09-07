@@ -88,14 +88,16 @@ const (
 )
 
 // TabBar renders the navigation tab row. Highlighting is purely presentational:
-// the root model owns the active index (single source of truth).
+// the root model owns the active index (single source of truth). The row is
+// one chip per tab and never wraps; Width is accepted from the shell but not
+// used in rendering.
 type TabBar struct {
 	Active int
 	Styles Styles
 	Width  int
 }
 
-// Render draws the tab row, wrapping the last tab to fit Width when needed.
+// Render draws the tab row (one chip per tab, active tab highlighted).
 func (t TabBar) Render() string {
 	var cells []string
 	for i, label := range tabLabels {

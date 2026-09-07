@@ -171,16 +171,14 @@ func buildAgent(t *testing.T, w, h int) App {
 // right-aligned meta header) so the transcript layout is pinned too.
 func buildAgentTurn(t *testing.T, w, h int) App {
 	m := buildAgent(t, w, h)
-	m.agent.history = append(m.agent.history,
-		ollama.ChatMessage{Role: ollama.RoleUser, Content: "explain this repo"},
-		ollama.ChatMessage{Role: ollama.RoleAssistant, Content: "It is a mobile-first terminal UI for Ollama, styled like the opencode.ai TUI."},
-	)
-	m.agent.turnModel = []string{"qwen3:8b", "qwen3:8b"}
-	m.agent.turnMeta = []string{"", "0.4s · stop"}
-	m.agent.render = []string{
-		m.agent.renderBlock(m.agent.userHeader(), "explain this repo"),
-		m.agent.renderBlock(m.agent.assistantHeaderRow("qwen3:8b", "0.4s · stop"),
-			"It is a mobile-first terminal UI for Ollama, styled like the opencode.ai TUI."),
+	m.agent.turns = []turn{
+		{msg: ollama.ChatMessage{Role: ollama.RoleUser, Content: "explain this repo"},
+			render: m.agent.renderBlock(m.agent.userHeader(), "explain this repo")},
+		{msg: ollama.ChatMessage{Role: ollama.RoleAssistant,
+			Content: "It is a mobile-first terminal UI for Ollama, styled like the opencode.ai TUI."},
+			model: "qwen3:8b", meta: "0.4s · stop",
+			render: m.agent.renderBlock(m.agent.assistantHeaderRow("qwen3:8b", "0.4s · stop"),
+				"It is a mobile-first terminal UI for Ollama, styled like the opencode.ai TUI.")},
 	}
 	return m
 }
@@ -212,12 +210,11 @@ func openHelp(t *testing.T, m App) App {
 
 func openClearConfirm(t *testing.T, m App) App {
 	// Seed a conversation so /clear has something to confirm, then type it.
-	m.agent.history = append(m.agent.history,
-		ollama.ChatMessage{Role: ollama.RoleUser, Content: "explain this repo"},
-		ollama.ChatMessage{Role: ollama.RoleAssistant, Content: "It is a terminal UI."},
-	)
-	m.agent.turnModel = []string{"qwen3:8b", "qwen3:8b"}
-	m.agent.turnMeta = []string{"", "0.4s · stop"}
+	m.agent.turns = []turn{
+		{msg: ollama.ChatMessage{Role: ollama.RoleUser, Content: "explain this repo"}},
+		{msg: ollama.ChatMessage{Role: ollama.RoleAssistant, Content: "It is a terminal UI."},
+			model: "qwen3:8b", meta: "0.4s · stop"},
+	}
 	for _, r := range "/clear" {
 		m = updateTab(t, m, tea.KeyPressMsg{Text: string(r)})
 	}

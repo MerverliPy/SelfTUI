@@ -14,6 +14,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"selftui/internal/agent"
 	"selftui/internal/config"
 	"selftui/internal/ollama"
 )
@@ -150,11 +151,11 @@ func TestAgentViewReadOnlyToolLoop(t *testing.T) {
 	typeText(t, &v, "read note")
 	v, _ = v.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	drainChat(t, &v)
-	if calls != 2 || len(v.history) != 2 {
-		t.Fatalf("chat calls=%d history=%d, want tool turn plus final", calls, len(v.history))
+	if calls != 2 || len(v.turns) != 2 {
+		t.Fatalf("chat calls=%d turns=%d, want tool turn plus final", calls, len(v.turns))
 	}
-	if !strings.Contains(v.history[1].Content, "read-only answer") {
-		t.Errorf("assistant history = %+v", v.history[1])
+	if !strings.Contains(v.turns[1].msg.Content, "read-only answer") {
+		t.Errorf("assistant turn = %+v", v.turns[1])
 	}
 	out := stripANSI(v.View())
 	if !strings.Contains(out, "read-only answer") {
@@ -205,8 +206,8 @@ func TestAgentViewDeclinesMutationConfirmation(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, "no.txt")); !os.IsNotExist(err) {
 		t.Fatalf("declined write created file: %v", err)
 	}
-	if calls != 2 || !strings.Contains(v.history[1].Content, "declined safely") {
-		t.Fatalf("calls=%d history=%+v", calls, v.history)
+	if calls != 2 || !strings.Contains(v.turns[1].msg.Content, "declined safely") {
+		t.Fatalf("calls=%d turns=%+v", calls, v.turns)
 	}
 }
 
@@ -277,13 +278,13 @@ func TestAgentViewSendStreamsAndCommits(t *testing.T) {
 	}
 	drainChat(t, &v)
 
-	if n := len(v.history); n != 2 {
+	if n := len(v.turns); n != 2 {
 		t.Fatalf("history len = %d, want 2 (user+assistant)", n)
 	}
-	if v.history[0].Role != ollama.RoleUser || v.history[0].Content != "hello" {
-		t.Errorf("history[0] = %+v, want user hello", v.history[0])
+	if v.turns[0].msg.Role != ollama.RoleUser || v.turns[0].msg.Content != "hello" {
+		t.Errorf("turns[0] = %+v, want user hello", v.turns[0])
 	}
-	assistant := v.history[1]
+	assistant := v.turns[1].msg
 	if assistant.Role != ollama.RoleAssistant || !strings.Contains(assistant.Content, "func main()") {
 		t.Errorf("history[1] = %+v, want committed assistant answer", assistant)
 	}
@@ -315,7 +316,7 @@ func TestAgentViewStreamingRendersLive(t *testing.T) {
 	// Feed partial tokens directly; the transcript must show them live.
 	for _, seq := range []string{"Hel", "lo ", "wor", "ld"} {
 		var cmd tea.Cmd
-		v, cmd = v.Update(agentTokenMsg{text: seq})
+		v, cmd = v.Update(agent.TokenMsg{Text: seq})
 		if cmd == nil {
 			t.Fatal("token: expected resubscribed command")
 		}
@@ -411,8 +412,8 @@ func TestAgentViewEnterWhileStreamingIgnored(t *testing.T) {
 	if v.notice != "stopped" {
 		t.Errorf("notice = %q, want stopped", v.notice)
 	}
-	if len(v.history) != 2 {
-		t.Errorf("history len = %d, want 2 (partial committed)", len(v.history))
+	if len(v.turns) != 2 {
+		t.Errorf("turns len = %d, want 2 (partial committed)", len(v.turns))
 	}
 }
 
@@ -464,7 +465,7 @@ func TestAgentViewEscCancelsStream(t *testing.T) {
 	if v.notice != "stopped" {
 		t.Errorf("notice = %q, want stopped", v.notice)
 	}
-	if got := v.history[len(v.history)-1].Content; !strings.Contains(got, "Answer") {
+	if got := v.turns[len(v.turns)-1].msg.Content; !strings.Contains(got, "Answer") {
 		t.Errorf("partial content not committed: %q", got)
 	}
 	if len(*chats) != 1 {
@@ -504,8 +505,8 @@ func TestAgentViewChatErrorSurfaced(t *testing.T) {
 		t.Errorf("error not surfaced inline:\n%s", out)
 	}
 	// The user message stays in history so enter retries it.
-	if n := len(v.history); n != 1 || v.history[0].Content != "ping" {
-		t.Errorf("history = %+v, want the user message kept for retry", v.history)
+	if n := len(v.turns); n != 1 || v.turns[0].msg.Content != "ping" {
+		t.Errorf("turns = %+v, want the user message kept for retry", v.turns)
 	}
 }
 
@@ -606,7 +607,7 @@ func TestAgentViewSwitchModelAppliesNextSend(t *testing.T) {
 	drainChat(t, &v)
 
 	// The committed assistant turn is attributed to gemma3:12b.
-	if got := v.turnModel[len(v.turnModel)-1]; got != "gemma3:12b" {
+	if got := v.turns[len(v.turns)-1].model; got != "gemma3:12b" {
 		t.Errorf("turn model = %q, want gemma3:12b", got)
 	}
 }
@@ -625,14 +626,11 @@ func TestAgentViewScrollAndResize(t *testing.T) {
 	body.WriteString("```\n")
 	answer := body.String()
 
-	v.history = append(v.history,
-		ollama.ChatMessage{Role: ollama.RoleUser, Content: "make a long answer"},
-		ollama.ChatMessage{Role: ollama.RoleAssistant, Content: answer},
-	)
-	v.turnModel = []string{"qwen3:8b", "qwen3:8b"}
-	v.render = []string{
-		v.renderBlock(v.userHeader(), "make a long answer"),
-		v.renderBlock(v.assistantHeader("qwen3:8b"), answer),
+	v.turns = []turn{
+		{msg: ollama.ChatMessage{Role: ollama.RoleUser, Content: "make a long answer"},
+			render: v.renderBlock(v.userHeader(), "make a long answer")},
+		{msg: ollama.ChatMessage{Role: ollama.RoleAssistant, Content: answer}, model: "qwen3:8b",
+			render: v.renderBlock(v.assistantHeader("qwen3:8b"), answer)},
 	}
 	v.follow = true
 
