@@ -4994,3 +4994,52 @@ exists and was validated end-to-end on the release host; V2c may reinstate
 **Next action**
 - Fresh session: owner picks — V2c (sandboxed run_command, gate already GO) or
   N1 (render windowing, D4 baseline pinned as the bar). Do not chain here.
+
+## 2026-09-07 — V2c landed: sandboxed `run_command` behind bubblewrap
+
+**Milestone:** V2c · **Result:** GO — implemented and verified.
+
+**Work done**
+- Orchestrator triage: DIRECT (zero agents) — one scoped V2c implementation;
+  canonical routing sources and the SelfTUI session ritual were read first.
+- Reinstated `run_command` as a sixth workspace tool. The runner validates a
+  fixed argv before approval, requires the existing per-call confirmation,
+  streams bounded `ToolOutputMsg` activity, and returns the bounded result.
+- Added `internal/agent/command.go`: bubblewrap 0.9.0 is the default and only
+  engine; fixed `go`/read-only `git` binaries, selective read-only mounts,
+  workspace-only writable mount, private tmpfs, no network, `--clearenv`,
+  scrubbed environment, 30s default/60s cap, 256 KiB per-stream output,
+  cancellation-aware single-flight serialization, and process-group teardown.
+  Bubblewrap absence fails closed. The trusted module-cache path is derived
+  from the toolchain/default Go cache rather than accepting an arbitrary
+  `GOMODCACHE` mount source.
+- Added real-bwrap tests for argv rejection, scrubbing, output caps,
+  single-flight cancellation, offline `go test`, read-only `git`, explicit
+  confirmation, timeout, and process-group cancellation. Routed command output
+  through the Agent UI and updated the tool-count/routing tests.
+- Replaced the stale deferred-design document with the V2c containment note;
+  added `docs/v2c-sandbox-evidence.md`; aligned README, SECURITY, CHANGELOG,
+  PLAN, and renamed the command policy test. The residual bwrap CPU/memory
+  risk and validated rootless-Docker alternative remain documented.
+
+**Commands + exit codes**
+- Focused pre-implementation test (`go test ./internal/agent -run 'TestRunCommand|TestCommandOutput' -count=1`) → 1 (expected RED: missing executor).
+- Focused V2c tests → 0; final focused verbose run (all 9 V2c tests) → 0.
+- `gofmt -l .` + `git diff --check` → 0.
+- `make check` initial implementation run → 0; a later combined `make check && go test -race` invocation returned no result and was not treated as green.
+- Follow-up `make check` after that interrupted build → 2 (generated `bin/selftui` was zero-filled); removed only that generated artifact and reran.
+- One subsequent full-package `make check` → 2 (existing timing-sensitive mutation/settings tests under load); isolated agent/UI tests → 0; final `make check` → 0.
+- Final `go test -race -count=1 ./...` → 0.
+- `bwrap --version` → 0 (`bubblewrap 0.9.0`).
+
+**Decisions / blockers**
+- Default engine is bwrap per V2b GO; no engine selector was added in this
+  focused step. Rootless Docker remains the stronger documented alternative,
+  not a second current binary path.
+- No unresolved blockers. The transient combined-gate/incomplete-build and
+  load-sensitive test failures were resolved by rerunning bounded canonical
+  checks; no source workaround or test weakening was introduced.
+
+**Next action**
+- Start a fresh pi session at `/home/calvin/SelfTUI` for V2d; decide its exact
+  agent-breadth cut at that session's start. Do not chain V2d here.

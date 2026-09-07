@@ -7,6 +7,16 @@ for tagged releases.
 
 ## [Unreleased]
 
+### Added
+
+- **V2c sandboxed `run_command`** (2026-09-07): workspace tools can now run
+  an explicitly approved, argv-allowlisted `go` or read-only `git` command
+  inside bubblewrap with no network, a scrubbed environment, bounded timeout
+  and output, serialized execution, and process-group cancellation. The
+  default engine fails closed when bubblewrap is unavailable; residual
+  bubblewrap memory/CPU risk is documented in
+  `docs/run-command-containment.md`.
+
 ### Security
 
 - **Embedded tool JSON must be tool-framed.** Content-embedded tool calls are

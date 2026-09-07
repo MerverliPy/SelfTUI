@@ -12,8 +12,8 @@ boundaries of that release:
 - workspace tools are **disabled by default** and require an explicitly
   configured project workspace root (`/` and the home directory are rejected
   as roots);
-- **command execution is not shipped** (no shell, no interpreters, no
-  subprocess tools);
+- v0.1.x has no command execution; v0.2 V2c adds only the sandboxed,
+  allowlisted `run_command` tool when workspace tools are explicitly enabled;
 - a bearer token for a **non-loopback host requires `https://`**;
 - native Windows and macOS are **not supported** in v0.1.x.
 
@@ -72,5 +72,14 @@ configuration, the input that triggered it, and any log excerpt from
   1 MiB, a run executes at most 64 tool calls across its iterations, and the
   model loop runs at most 12 iterations by default (raise the iteration cap
   with `-max-tool-iterations` / `SELFTUI_AGENT_MAX_TOOL_ITERATIONS`).
-- See `docs/run-command-containment.md` for the dated record of why command
-  execution was deferred rather than shipped.
+- V2c `run_command` uses bubblewrap by default: `/home` is not mounted,
+  networking is disabled, the workspace is the only writable host mount,
+  and the child receives a fixed scrubbed environment. Only `go` (test, vet,
+  build, list, env, version) and read-only `git` subcommands are accepted;
+  shell/interpreter argv, path escapes, and dangerous config/execution flags
+  are refused. Each call requires approval and is bounded to 30 seconds by
+  default / 60 seconds maximum, 256 KiB per output stream, one concurrent
+  command, and process-group termination on cancel/timeout. Bubblewrap has no
+  CPU or memory cap, so a hostile allowlisted Go workload can still create
+  host-wide OOM pressure until the timeout; see
+  `docs/run-command-containment.md` for the residual-risk analysis.

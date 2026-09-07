@@ -11,17 +11,17 @@ import (
 // ToolPolicy is the opt-in workspace tool trust policy (v0.1 hardening).
 //
 // A Runner built through NewRunnerWithPolicy carries a policy: it advertises
-// the five jailed v0.1 tools (Tools) and refuses to execute any of them on a
-// path AuthorizePath rejects. A Runner built through the compatibility
+// the six jailed V2c tools (Tools) and refuses to execute any path-based tool
+// on a path AuthorizePath rejects. A Runner built through the compatibility
 // constructor NewRunner carries no policy and is plain chat — no tool
 // definition ever reaches the model, so nothing the model says can turn into
 // a filesystem operation. The zero value is a fully armed policy; arming is
 // expressed by which constructor the caller uses.
 type ToolPolicy struct{}
 
-// Tools returns the five v0.1 tools (Phase 1 surface): read-only
-// read_file/list_dir/grep plus the confirmed write_file/edit_file. The set
-// is closed — no run_command, no shell, no interpreters.
+// Tools returns the six V2c tools: read-only read_file/list_dir/grep, the
+// confirmed write_file/edit_file, and the confirmed sandboxed run_command.
+// The set is closed — no shell or interpreter is directly exposed.
 func (ToolPolicy) Tools() []ollama.ToolDefinition {
 	return AgentTools()
 }

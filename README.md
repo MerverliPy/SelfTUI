@@ -81,12 +81,10 @@ toggles with enter) — see “Using SelfTUI from an iPhone (SSH)” below.
   (Settings → Agent → *Enable workspace tools*, `tools_enabled`, or
   `SELFTUI_TOOLS_ENABLED`) with a real project workspace root — never `/` or
   your home directory.
-- **Command execution is not shipped.** v0.1's whole tool surface is
-  read-only `read_file`/`list_dir`/`grep` plus confirmed `write_file`/
-  `edit_file` — no shell, no interpreters, no subprocesses. The pre-v0.1
-  `run_command` executor was removed; `docs/run-command-containment.md` is
-  the dated deferred-design record (cwd + argv filtering is not an OS
-  sandbox).
+- **Command execution is a v0.2 capability.** The v0.1 release has no command
+  execution. V2c adds `run_command` only when workspace tools are enabled,
+  behind the Linux/WSL bubblewrap sandbox and an explicit per-call approval;
+  see `docs/run-command-containment.md`.
 - **Non-loopback tokens require HTTPS.** A bearer token over plain `http://`
   is accepted only for loopback hosts; pointing a token at any other host
   requires `https://` (enforced by config validation).
@@ -293,18 +291,18 @@ turns recording off (chat then stays in-memory only).
 
 Tool-capable models may use jailed `read_file`, `list_dir`, `grep`,
 `write_file`, and `edit_file`; every mutation opens a `y`/`enter` approve or
-`n`/`esc` decline dialog. These tools exist only when **workspace tools are
-enabled** (Settings → *Enable workspace tools*, `tools_enabled`, or
-`SELFTUI_TOOLS_ENABLED`) with a project workspace root; otherwise the agent
-is plain chat and the Ollama request carries no tools. With tools enabled,
-requests to sensitive paths (`.ssh`, `.gnupg`, `.aws`, `.azure`, `.kube`,
-`.config/gcloud`, or credential files like `.env`, `.env.local`, `.env.production`,
-`credentials`, `credentials.json` — `.env.example` stays allowed) are refused
-before the tool runs, on top of the canonical workspace containment.
-**v0.1 has no command execution**: read-only
-`read_file`/`list_dir`/`grep` plus confirmed `write_file`/`edit_file` are the
-whole tool surface — no shell, no interpreters, no git or go subprocesses.
-Models that reject
+`n`/`esc` decline dialog. V2c also exposes `run_command`, which accepts only
+allowlisted `go` and read-only `git` argv and runs it inside bubblewrap with
+network disabled, a scrubbed environment, bounded timeout/output, and process
+-group cancellation; it uses the same explicit approval dialog. These tools
+exist only when **workspace tools are enabled** (Settings → *Enable workspace
+tools*, `tools_enabled`, or `SELFTUI_TOOLS_ENABLED`) with a project workspace
+root; otherwise the agent is plain chat and the Ollama request carries no
+tools. With tools enabled, requests to sensitive paths (`.ssh`, `.gnupg`, `.aws`,
+`.azure`, `.kube`, `.config/gcloud`, or credential files like `.env`, `.env.local`,
+`.env.production`, `credentials`, `credentials.json` — `.env.example` stays
+allowed) are refused before the tool runs, on top of canonical workspace
+containment. Models that reject
 tools or return no tool call show an explicit plain-chat fallback.
 
 **Command palette (M7)**: `ctrl+p` from any tab opens the command palette —

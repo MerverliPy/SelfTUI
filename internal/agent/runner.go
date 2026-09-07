@@ -13,9 +13,8 @@ import (
 
 const DefaultMaxIterations = 12
 
-// Approval-window bounds for the per-call mutation confirmation (write_file,
-// edit_file). The v0.1 executor removal left only these approval mechanics;
-// command execution itself no longer ships (see docs/run-command-containment.md).
+// Approval-window bounds for the per-call confirmation used by write_file,
+// edit_file, and the sandboxed run_command.
 const (
 	defaultConfirmTimeout = 30 * time.Second
 	maxConfirmTimeout     = 60 * time.Second
@@ -64,8 +63,16 @@ type ToolResultMsg struct {
 	Summary string
 }
 
-// ToolConfirmMsg pauses a mutation until the user explicitly responds. The
-// reply channel is deliberately private so only Respond can release it.
+// ToolOutputMsg streams bounded command output while the sandboxed command is
+// running. The final ToolResultMsg carries the complete bounded result.
+type ToolOutputMsg struct {
+	Name   string
+	Stream string
+	Text   string
+}
+
+// ToolConfirmMsg pauses a gated tool operation until the user explicitly
+// responds. The reply channel is deliberately private so only Respond can release it.
 type ToolConfirmMsg struct {
 	Name      string
 	Input     string
@@ -117,7 +124,7 @@ type Runner struct {
 
 	// policy is nil when tools are disabled (the NewRunner compatibility
 	// constructor): the runner then never sends tool definitions and behaves
-	// as plain chat. NewRunnerWithPolicy arms the five v0.1 tools and gates
+	// as plain chat. NewRunnerWithPolicy arms the six V2c tools and gates
 	// every requested path with the policy before a tool executes.
 	policy *ToolPolicy
 }
@@ -337,7 +344,7 @@ func (r *Runner) runPlainChat(ctx context.Context, req Request, messages []ollam
 	})
 }
 
-// tools returns the definitions to advertise: the policy's five v0.1 tools
+// tools returns the definitions to advertise: the policy's six V2c tools
 // when one is set, nothing otherwise.
 func (r *Runner) tools() []ollama.ToolDefinition {
 	if r == nil || r.policy == nil {
@@ -460,9 +467,32 @@ func (r *Runner) executeTool(ctx context.Context, call ollama.ToolCall, emit fun
 			return "", err
 		}
 		return "edited " + args.Path, nil
+	case "run_command":
+		var args struct {
+			Argv    []string `json:"argv"`
+			Timeout int      `json:"timeout"`
+		}
+		if err := decodeArgs(call.Function.Arguments, &args); err != nil {
+			return "", fmt.Errorf("run_command: %w", err)
+		}
+		if err := validateCommand(args.Argv); err != nil {
+			return "", err
+		}
+		if args.Timeout < 0 {
+			return "", errors.New("run_command: timeout must not be negative")
+		}
+		if args.Timeout > int(maxConfirmTimeout/time.Second) {
+			return "", fmt.Errorf("run_command: timeout exceeds %s", maxConfirmTimeout)
+		}
+		if err := r.confirm(ctx, call, args.Timeout, emit); err != nil {
+			return "", err
+		}
+		return RunCommand(ctx, root, args.Argv, args.Timeout, func(stream, text string) {
+			emit(ToolOutputMsg{Name: "run_command", Stream: stream, Text: text})
+		})
 	default:
-		// The boundary is a closed set: any other name — including the
-		// pre-v0.1 run_command executor, which does not ship — is rejected.
+		// The boundary is a closed set: an unknown model-generated name can
+		// never become an execution primitive.
 		return "", fmt.Errorf("tool %q is not allowed", call.Function.Name)
 	}
 }
