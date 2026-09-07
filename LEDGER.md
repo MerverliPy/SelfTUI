@@ -5222,3 +5222,57 @@ owner-selected v0.2 set (V2a–V2d). DIRECT execution, zero agents.
 - Fresh session at `/home/calvin/SelfTUI`; next N-item per the §12
   sequencing sketch: N3 (tok/s + exact token counts), or N2 if owner
   reorders.
+
+## 2026-09-07 — N3 tok/s + exact token counts (PLAN §12)
+
+**Work done**
+- N3 landed: `internal/ollama` now parses the final stream chunk's generation
+  metrics (`prompt_eval_count`, `prompt_eval_duration`, `eval_count`,
+  `eval_duration`) into a new `ChatMetrics` struct surfaced on `ChatEvent`
+  only when `done:true` (zero on earlier chunks / metric-absent hosts).
+- `internal/agent`: `AgentDoneMsg` gained `Metrics ollama.ChatMetrics`; the
+  turn's metrics come from the LAST final chunk (multi-iteration tool loops
+  report the stream that ended the turn); plain-chat fallback propagates the
+  same way. Error/stop paths keep today's zero-value shape.
+- `internal/ui` (M7-B): per-turn footer now renders `… · stop · 41 tok/s`
+  when the final chunk carried metrics (tok/s = round(eval_count/eval_duration));
+  footer is byte-identical to pre-N3 when metrics are absent, eval_duration==0,
+  or the user stopped (`… · stopped` unchanged).
+- `internal/ui` (M7-C): ctx meter shows the measured `prompt_eval_count`
+  after a completed turn until the draft is edited, a new turn starts, the
+  conversation is cleared, or a session is loaded/resumed (sentinel
+  `measuredDraft` covers every edit path); `ApproxTokens` stays authoritative
+  for live drafting; red-100% behavior unchanged.
+- Delegation note (channel health): the `worker` lane's primary
+  `deepseek/deepseek-v4-flash` failed at preflight with HTTP 402
+  "Insufficient Balance"; one bounded retry pinned to
+  `opencode-go/glm-5.3-flash:high` succeeded — run meta confirms
+  `model = opencode-go/glm-5.3-flash:high`, success, 47 turns. DeepSeek
+  balance needs topping up before that primary is trusted again.
+- 6 files changed, ~400 insertions; goldens untouched (0 testdata
+  modifications — footer/meter change only when live metrics exist and
+  fixtures carry none, as designed).
+
+**Commands + exit codes**
+- Child lane canonical checks: `gofmt -l .` clean; `make check` → 0;
+  `go test -race ./...` → 0 (child-reported).
+- Parent verification (uncached): `go test -race -count=1 ./...` → 0
+  (ui 21.7s, agent 16.2s, ollama 6.9s, all ok); `make check` → 0;
+  `gofmt -l .` → empty; `git status` → no testdata changes, no stray commits.
+
+**Decisions / lines to respect**
+- Metrics parsed only on `done:true`; non-final chunks and older hosts leave
+  everything zero — footer/meter fall back to the pre-N3 rendering exactly.
+- tok/s is measured (`eval_count`/`eval_duration`), never estimated; the
+  estimator (`ApproxTokens`, 4 chars/token) remains the live-draft path.
+- No struct/behavior changes beyond the added metrics plumbing; tool schema,
+  jail, session format, N1 windowing cache untouched.
+
+**Blockers / open decisions (carry to next session)**
+- DeepSeek account balance exhausted (worker lane primary); owner may top up.
+- Owner-optional GPG key upload (carried, unchanged).
+
+**Next action**
+- Fresh session at `/home/calvin/SelfTUI`; next N-item per the §12
+  sequencing sketch: N4 (status bar observability row), or N2 if owner
+  reorders.

@@ -680,3 +680,95 @@ func TestRunnerCancelsToolExecutionOnCanceledContext(t *testing.T) {
 		t.Fatalf("read_file reported OK after cancellation (summary %q): the tool executed despite a canceled context", summary)
 	}
 }
+
+func TestRunnerPropagatesFinalChunkMetrics(t *testing.T) {
+	// N3: the done event carries the final chunk's generation metrics so the
+	// UI can show measured tok/s and exact prompt tokens.
+	body := `{"message":{"role":"assistant","content":"hi"},"done":false}
+{"message":{"role":"assistant","content":""},"done":true,"done_reason":"stop","prompt_eval_count":1043,"prompt_eval_duration":22818421,"eval_count":337,"eval_duration":3412523782}
+`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		io.WriteString(w, body)
+	}))
+	t.Cleanup(srv.Close)
+	var done AgentDoneMsg
+	r := NewRunner(ollama.New(srv.URL, ""), t.TempDir(), "", 3)
+	if err := r.Run(context.Background(), Request{
+		Model: "qwen3:8b", Messages: []ollama.ChatMessage{{Role: ollama.RoleUser, Content: "hi"}},
+	}, func(msg Msg) {
+		if d, ok := msg.(AgentDoneMsg); ok {
+			done = d
+		}
+	}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if done.Reason != "stop" {
+		t.Errorf("Reason = %q, want stop", done.Reason)
+	}
+	want := ollama.ChatMetrics{PromptTokens: 1043, PromptNanos: 22818421, Tokens: 337, Nanos: 3412523782}
+	if done.Metrics != want {
+		t.Errorf("Metrics = %+v, want %+v", done.Metrics, want)
+	}
+}
+
+func TestRunnerMetricsAbsentStaysZero(t *testing.T) {
+	// A final chunk without metrics keeps AgentDoneMsg.Metrics zero (older
+	// hosts) — the done shape is unchanged (M7-B byte-compat).
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		io.WriteString(w, finalEvent("plain answer"))
+	}))
+	t.Cleanup(srv.Close)
+	var done AgentDoneMsg
+	r := NewRunner(ollama.New(srv.URL, ""), t.TempDir(), "", 3)
+	if err := r.Run(context.Background(), Request{
+		Model: "qwen3:8b", Messages: []ollama.ChatMessage{{Role: ollama.RoleUser, Content: "hi"}},
+	}, func(msg Msg) {
+		if d, ok := msg.(AgentDoneMsg); ok {
+			done = d
+		}
+	}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if done.Metrics != (ollama.ChatMetrics{}) {
+		t.Errorf("Metrics = %+v, want zero", done.Metrics)
+	}
+}
+
+func TestRunnerMetricsLastFinalChunkWins(t *testing.T) {
+	// A multi-iteration tool loop reports the metrics of the stream that
+	// ENDED the turn, not the intermediate tool-call stream.
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		if calls == 1 {
+			io.WriteString(w, `{"message":{"role":"assistant","tool_calls":[{"function":{"name":"list_dir","arguments":{"path":"."}}}]},"done":true,"done_reason":"tool_calls","eval_count":11,"eval_duration":11e9}`+"\n")
+			return
+		}
+		io.WriteString(w, `{"message":{"role":"assistant","content":"listed"},"done":true,"done_reason":"stop","prompt_eval_count":2222,"eval_count":33,"eval_duration":3.3e9}`+"\n")
+	}))
+	t.Cleanup(srv.Close)
+	var done AgentDoneMsg
+	r := NewRunnerWithPolicy(ollama.New(srv.URL, ""), t.TempDir(), "", 3, &ToolPolicy{})
+	if err := r.Run(context.Background(), Request{
+		Model: "qwen3:8b", Messages: []ollama.ChatMessage{{Role: ollama.RoleUser, Content: "list"}},
+	}, func(msg Msg) {
+		if d, ok := msg.(AgentDoneMsg); ok {
+			done = d
+		}
+	}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("calls = %d, want 2 (tool call + final answer)", calls)
+	}
+	if done.Reason != "stop" {
+		t.Errorf("Reason = %q, want stop", done.Reason)
+	}
+	want := ollama.ChatMetrics{PromptTokens: 2222, Tokens: 33, Nanos: 3.3e9}
+	if done.Metrics != want {
+		t.Errorf("Metrics = %+v, want the final stream's %+v", done.Metrics, want)
+	}
+}

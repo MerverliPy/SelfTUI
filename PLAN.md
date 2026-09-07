@@ -789,7 +789,11 @@ thinking/content sections separately so stream deltas don't invalidate rendered
 neighbors (Crush pattern); batch deltas to a repaint tick instead of per-token
 frames. Keep the "▍" caret + follow behavior intact (M7-B pins the UX).
 
-### N3 — tok/s + exact token counts (V+U, cheap, high value)
+### N3 — tok/s + exact token counts (V+U, cheap, high value) — **LANDED 2026-09-07**
+Landed: final-chunk metrics parsed into `ollama.ChatMetrics` (done-events only),
+`AgentDoneMsg.Metrics` (last final chunk of the turn), footer `… · stop · 41 tok/s`,
+ctx meter shows measured `prompt_eval_count` until the draft/turn changes;
+byte-identical rendering without metrics; goldens untouched. See LEDGER 2026-09-07.
 ✅v `eval_count` / `prompt_eval_duration` from Ollama's final stream chunk are **not
 parsed today**; the ctx meter runs on `agent.ApproxTokens`. Plan: parse the final
 chunk in `internal/ollama`, surface per-turn `model · 3.4s · stop · 41 tok/s` in the

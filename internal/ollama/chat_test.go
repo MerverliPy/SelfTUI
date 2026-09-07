@@ -344,3 +344,49 @@ func TestChatOptionsOmittedWhenZero(t *testing.T) {
 		t.Errorf("zero options should be omitted from the request, got: %s", raw)
 	}
 }
+
+func TestChatStreamFinalChunkMetrics(t *testing.T) {
+	// N3: the final chunk's generation metrics (prompt_eval_count,
+	// prompt_eval_duration, eval_count, eval_duration) surface on the
+	// terminal event; earlier chunks leave Metrics zero.
+	body := `{"model":"qwen3:8b","message":{"role":"assistant","content":"hi"},"done":false,"prompt_eval_count":9999}
+{"model":"qwen3:8b","message":{"role":"assistant","content":""},"done":true,"done_reason":"stop","prompt_eval_count":1043,"prompt_eval_duration":22818421,"eval_count":337,"eval_duration":3412523782}
+`
+	c, _ := fakeChatServer(t, body)
+	var evs []ChatEvent
+	err := c.ChatStream(context.Background(), ChatRequest{
+		Model: "qwen3:8b", Messages: []ChatMessage{{Role: RoleUser, Content: "hi"}},
+	}, func(ev ChatEvent) { evs = append(evs, ev) })
+	if err != nil {
+		t.Fatalf("ChatStream: %v", err)
+	}
+	if len(evs) != 2 {
+		t.Fatalf("events = %d, want 2", len(evs))
+	}
+	if (evs[0].Metrics != ChatMetrics{}) {
+		t.Errorf("non-final chunk metrics = %+v, want zero", evs[0].Metrics)
+	}
+	want := ChatMetrics{PromptTokens: 1043, PromptNanos: 22818421, Tokens: 337, Nanos: 3412523782}
+	if evs[1].Metrics != want {
+		t.Errorf("final chunk metrics = %+v, want %+v", evs[1].Metrics, want)
+	}
+}
+
+func TestChatStreamMetricsAbsentZeroTolerant(t *testing.T) {
+	// A final chunk without the metrics block (older hosts) must not change
+	// behavior: Metrics stays zero and the stream still terminates normally.
+	c, _ := fakeChatServer(t, chatStream)
+	var got ChatEvent
+	err := c.ChatStream(context.Background(), ChatRequest{
+		Model: "qwen3:8b", Messages: []ChatMessage{{Role: RoleUser, Content: "hello"}},
+	}, func(ev ChatEvent) { got = ev })
+	if err != nil {
+		t.Fatalf("ChatStream: %v", err)
+	}
+	if !got.Done || got.DoneReason != "stop" {
+		t.Errorf("event = %+v, want terminal stop event", got)
+	}
+	if (got.Metrics != ChatMetrics{}) {
+		t.Errorf("metrics = %+v, want zero when the host omits them", got.Metrics)
+	}
+}
