@@ -137,6 +137,23 @@ type AgentView struct {
 	selIdx       int
 	selFilter    string
 
+	// Resume picker (V2a): overlays the saved per-process transcripts under
+	// sessionDir. The list is loaded by a command (no transcript filesystem
+	// work on the update loop, same M-04 discipline as recording) and the
+	// chosen file is parsed by another command; importing into the live
+	// conversation with a non-empty history asks first via resumeConfirm
+	// (resumePick holds the chosen path while the dialog is up).
+	// resumePending spans the parse window: sends are refused while a load
+	// is in flight, so a message typed between pick and import can never be
+	// silently destroyed by the import replacing the conversation.
+	resumeOpen    bool
+	resumeLoading bool
+	resumeIdx     int
+	resumeList    []session.Saved
+	resumeConfirm bool
+	resumePick    string
+	resumePending bool
+
 	// glamour renderer, rebuilt when width changes (wrap is width-bound).
 	tr      *glamour.TermRenderer
 	renderW int
@@ -237,6 +254,22 @@ type sessionAppendMsg struct{ err error }
 type sessionExportMsg struct {
 	path string
 	err  error
+}
+
+// sessionListMsg reports the /resume picker listing: the saved transcripts
+// under sessionDir (newest first), or the listing failure.
+type sessionListMsg struct {
+	list []session.Saved
+	err  error
+}
+
+// sessionLoadedMsg reports the parsed turns of one chosen transcript, or the
+// parse/load failure. Import happens on the update loop only after this
+// arrives — the file read itself never blocks a frame.
+type sessionLoadedMsg struct {
+	path  string
+	turns []session.Turn
+	err   error
 }
 
 // agentEventMsg is the single envelope the root App accepts for every
@@ -363,7 +396,8 @@ func (v AgentView) waitChatCmd() tea.Cmd {
 // uses it so the 1/2/3 tab-jump keys cannot steal from an approval dialog, a
 // confirmation, or the help overlay.
 func (v AgentView) ModalOpen() bool {
-	return v.selectorOpen || v.confirmation != nil || v.helpOpen || v.clearConfirm
+	return v.selectorOpen || v.confirmation != nil || v.helpOpen || v.clearConfirm ||
+		v.resumeOpen || v.resumeConfirm
 }
 
 // --- update ---------------------------------------------------------------
@@ -392,6 +426,12 @@ func (v AgentView) Update(msg tea.Msg) (AgentView, tea.Cmd) {
 
 	case sessionExportMsg:
 		return v.applySessionExport(msg), nil
+
+	case sessionListMsg:
+		return v.applySessionList(msg), nil
+
+	case sessionLoadedMsg:
+		return v.applySessionLoaded(msg), nil
 
 	case tea.WindowSizeMsg:
 		v.w, v.h = msg.Width, msg.Height
@@ -599,6 +639,12 @@ func (v AgentView) handleKey(msg tea.KeyMsg) (AgentView, tea.Cmd) {
 	if v.clearConfirm {
 		return v.clearConfirmKey(k)
 	}
+	if v.resumeConfirm {
+		return v.resumeConfirmKey(k)
+	}
+	if v.resumeOpen {
+		return v.resumeKey(k)
+	}
 	if v.helpOpen {
 		if k.Code == tea.KeyEsc || k.Code == tea.KeyEnter || k.Text == "x" {
 			v.helpOpen = false
@@ -792,6 +838,13 @@ func (v AgentView) sendInput() (AgentView, tea.Cmd) {
 	if text == "" {
 		return v, nil
 	}
+	if v.resumePending {
+		// A transcript load is in flight and will replace the conversation:
+		// refuse the send (the draft stays in the input) instead of letting
+		// the import destroy it on landing.
+		v.notice = "resume in progress — the transcript is still loading"
+		return v, nil
+	}
 	if v.model == "" {
 		v.notice = "no model selected — press m or pull one in the Models tab"
 		return v, nil
@@ -921,6 +974,186 @@ func (v AgentView) applySessionExport(m sessionExportMsg) AgentView {
 	return v
 }
 
+// --- resume (V2a: reload a saved transcript into the live conversation) ---
+
+// openResume starts the /resume flow: the picker lists the saved transcripts
+// under sessionDir. Listing runs in a command (M-04 discipline: no
+// transcript filesystem work on the update loop); the notice cases below
+// mirror /export's (recording off, nothing saved yet).
+func (v AgentView) openResume() (AgentView, tea.Cmd) {
+	switch {
+	case v.sessionDir == "":
+		v.notice = "session recording is off — nothing to resume"
+		return v, nil
+	case v.streaming:
+		return v, nil // one turn at a time; /resume while running is a no-op
+	}
+	v.resumeOpen = true
+	v.resumeLoading = true
+	v.resumeList = nil
+	v.resumeIdx = 0
+	return v, v.listSessionsCmd()
+}
+
+// listSessionsCmd reads the saved-transcript listing off the update loop.
+func (v AgentView) listSessionsCmd() tea.Cmd {
+	dir := v.sessionDir
+	return func() tea.Msg {
+		list, err := session.ListSessions(dir)
+		return agentEventMsg{msg: sessionListMsg{list: list, err: err}}
+	}
+}
+
+// applySessionList lands the picker listing. A listing failure closes the
+// picker and surfaces one notice — the same once-and-continue posture as
+// the recorder (the chat never blocks on the disk).
+func (v AgentView) applySessionList(m sessionListMsg) AgentView {
+	v.resumeLoading = false
+	if m.err != nil {
+		v.resumeOpen = false
+		v.notice = "resume: " + m.err.Error()
+		return v
+	}
+	v.resumeList = m.list
+	v.resumeIdx = 0
+	if len(m.list) == 0 {
+		v.resumeOpen = false
+		v.notice = "no saved sessions"
+	}
+	return v
+}
+
+// resumeKey owns the picker's keys (same shape as the model selector: esc
+// close, enter pick, j/k or arrows move). Picking with a live conversation
+// asks first — resuming replaces the in-memory history.
+func (v AgentView) resumeKey(k tea.Key) (AgentView, tea.Cmd) {
+	switch {
+	case k.Code == tea.KeyEsc:
+		v.resumeOpen = false
+		v.resumeList = nil
+		v.resumeIdx = 0
+	case k.Code == tea.KeyEnter:
+		if len(v.resumeList) > 0 && v.resumeIdx >= 0 && v.resumeIdx < len(v.resumeList) {
+			path := v.resumeList[v.resumeIdx].Path
+			if len(v.history) > 0 || v.streamText != "" {
+				v.resumePick = path
+				v.resumeConfirm = true
+				return v, nil
+			}
+			return v.importSession(path)
+		}
+	case k.Text == "j" || k.Code == tea.KeyDown:
+		if v.resumeIdx < len(v.resumeList)-1 {
+			v.resumeIdx++
+		}
+	case k.Text == "k" || k.Code == tea.KeyUp:
+		if v.resumeIdx > 0 {
+			v.resumeIdx--
+		}
+	}
+	return v, nil
+}
+
+// resumeConfirmKey handles y/enter (proceed) vs n/esc (cancel) in the
+// overwrite dialog, mirroring the /clear confirmation.
+func (v AgentView) resumeConfirmKey(k tea.Key) (AgentView, tea.Cmd) {
+	switch {
+	case k.Text == "y" || k.Code == tea.KeyEnter:
+		v.resumeConfirm = false
+		path := v.resumePick
+		v.resumePick = ""
+		return v.importSession(path)
+	case k.Text == "n" || k.Code == tea.KeyEsc:
+		// Cancel backs out of the whole flow — dialog and picker — so the
+		// next keypress reaches the composer instead of a hidden list.
+		v.resumeConfirm = false
+		v.resumeOpen = false
+		v.resumeList = nil
+		v.resumeIdx = 0
+		v.resumePick = ""
+		v.notice = "resume cancelled"
+	}
+	return v, nil
+}
+
+// importSession starts the parse of one chosen transcript. Parsing runs in
+// a command; applySessionLoaded performs the actual import once the turns
+// arrive. resumePending blocks sends for the whole window, so the import
+// can never race a turn the user sends mid-load into oblivion.
+func (v AgentView) importSession(path string) (AgentView, tea.Cmd) {
+	v.resumeOpen = false
+	v.resumeList = nil
+	v.resumeIdx = 0
+	v.resumePending = true
+	return v, func() tea.Msg {
+		turns, err := session.Load(path)
+		return agentEventMsg{msg: sessionLoadedMsg{path: path, turns: turns, err: err}}
+	}
+}
+
+// applySessionLoaded imports parsed turns into the live conversation.
+//
+// Safe-import semantics (V2a): transcripts only ever record committed
+// user/assistant turns — tool-call activity lives on the statusline and is
+// never written — so an import can never fabricate tool state. The imported
+// turns enter as plain history for the next runner request. The truncation
+// flag recomputes here over system prompt + imported history (mirroring a
+// normal commit), so an over-budget transcript shows the truncation marker
+// immediately instead of only after the next send. Imported model/meta
+// strings and the notice's file name are file-derived display text and are
+// sanitized like any other remote-derived string before they enter state.
+// The next send keeps the currently configured/selected model — the
+// picker's rows show historical names only and never switch the active
+// model. The import replaces the in-memory conversation only; the new
+// run's transcript file stays append-only and records just the turns sent
+// after the resume.
+func (v AgentView) applySessionLoaded(m sessionLoadedMsg) AgentView {
+	// The load window is over in every outcome: unblock sends whether the
+	// import succeeded, failed, or was superseded.
+	v.resumePending = false
+	if m.err != nil {
+		v.notice = "resume failed: " + m.err.Error()
+		return v
+	}
+	v.history = v.history[:0]
+	v.turnModel = v.turnModel[:0]
+	v.turnMeta = v.turnMeta[:0]
+	v.render = v.render[:0]
+	for _, t := range m.turns {
+		role := ollama.RoleUser
+		if t.Role == "assistant" {
+			role = ollama.RoleAssistant
+		}
+		// Imported metadata is file-derived text: sanitize it before it
+		// enters state or the render cache (same boundary as streamed
+		// tokens and model names).
+		model := sanitizeTerminalText(t.Model)
+		meta := sanitizeTerminalText(t.Meta)
+		v.history = append(v.history, ollama.ChatMessage{Role: role, Content: t.Content})
+		v.turnModel = append(v.turnModel, model)
+		v.turnMeta = append(v.turnMeta, meta)
+		header := v.userHeader()
+		if role == ollama.RoleAssistant {
+			header = v.assistantHeaderRow(model, meta)
+		}
+		v.render = append(v.render, v.renderBlock(header, t.Content))
+	}
+	// Budget recompute on import (mirrors a normal commit's
+	// checkContextBudget): an over-budget transcript must surface the
+	// truncation marker now, not only after the next send.
+	v.truncated = false
+	v.checkContextBudget()
+	v.scroll = 0
+	v.follow = true
+	name := m.path
+	if i := strings.LastIndexByte(name, '/'); i >= 0 {
+		name = name[i+1:]
+	}
+	name = sanitizeTerminalText(name)
+	v.notice = fmt.Sprintf("resumed %d turns from %s", len(m.turns), name)
+	return v
+}
+
 // --- slash commands (M7-A) ------------------------------------------------
 
 // slashCommand is one entry of the "/" command menu.
@@ -933,6 +1166,7 @@ func slashCommandList() []slashCommand {
 	return []slashCommand{
 		{"clear", "clear the conversation (asks first)"},
 		{"model", "pick a model (m)"},
+		{"resume", "resume a saved chat transcript"},
 		{"theme", "toggle dark/light for this session"},
 		{"export", "flush + reveal the transcript file path"},
 		{"help", "list slash commands and keys"},
@@ -995,6 +1229,8 @@ func (v AgentView) runSlashCommand() (AgentView, tea.Cmd) {
 		}
 		v.clearConfirm = true
 		return v, nil
+	case "resume":
+		return v.openResume()
 	case "model":
 		return v.openSelector()
 	case "theme":
@@ -1424,6 +1660,12 @@ func (v AgentView) View() string {
 	if v.selectorOpen {
 		return v.renderSelectorOverlay(bodyH)
 	}
+	if v.resumeOpen {
+		return v.renderResumeOverlay(bodyH)
+	}
+	if v.resumeConfirm {
+		return v.renderResumeConfirmOverlay(bodyH)
+	}
 	if v.helpOpen {
 		return v.renderHelpOverlay(bodyH)
 	}
@@ -1731,9 +1973,12 @@ func (v AgentView) renderConfirmationOverlay(bodyH int) string {
 	return v.renderOverlayTitle(bodyH, "Confirm mutation", lines)
 }
 
-// slashMenuMaxRows fits the whole command set (six commands as of the
-// /export rename) so the menu never needs its own scroll.
-const slashMenuMaxRows = 6
+// slashMenuMaxRows fits the whole command set (seven commands as of the
+// /resume addition) so the menu never needs its own scroll. Raised from 6
+// for /resume: every command must stay reachable through the menu, and a
+// seventh row still keeps the chat pane roomy at the measured phone
+// geometry (the pane shrinks by exactly one row).
+const slashMenuMaxRows = 7
 
 // renderSelectorOverlay centers the model picker over the body. The picker
 // filters as you type (any printable key extends the filter across name,
@@ -1796,6 +2041,7 @@ func (v AgentView) renderHelpOverlay(bodyH int) string {
 		"slash commands",
 		" /clear    clear the conversation (asks first)",
 		" /model    pick a model",
+		" /resume   resume a saved chat transcript",
 		" /theme    toggle dark/light for this session",
 		" /export   flush + reveal the transcript file path",
 		" /help     show this reference",
@@ -1830,6 +2076,82 @@ func (v AgentView) renderClearConfirmOverlay(bodyH int) string {
 		"y / enter clear · n / esc cancel",
 	}
 	return v.renderOverlayTitle(bodyH, "Clear conversation", lines)
+}
+
+// renderResumeOverlay is the /resume picker: one windowed row per saved
+// transcript (newest first) with a humanized mtime + size summary, styled
+// after the model picker and height-capped by the shared overlay helper.
+func (v AgentView) renderResumeOverlay(bodyH int) string {
+	list := v.resumeList
+	maxRows := maxInt(bodyH-12, 3)
+
+	lines := []string{"saved chats — enter to resume"}
+	switch {
+	case v.resumeLoading && len(list) == 0:
+		lines = append(lines, v.styles.Placeholder.Render("loading…"))
+	case len(list) == 0:
+		lines = append(lines, v.styles.Placeholder.Render("no saved sessions"))
+	default:
+		start := clampInt(v.resumeIdx-maxRows/2, 0, maxInt(0, len(list)-maxRows))
+		end := start + maxRows
+		if end > len(list) {
+			end = len(list)
+		}
+		if start > 0 {
+			lines = append(lines, fmt.Sprintf("… %d earlier", start))
+		}
+		for i := start; i < end; i++ {
+			s := list[i]
+			marker := "  "
+			if i == v.resumeIdx {
+				marker = "❯ "
+			}
+			// UTC on purpose: the picker row must render identically on any
+			// machine (golden fixtures pin it byte-for-byte).
+			summary := s.ModTime.UTC().Format("2006-01-02 15:04") + " · " + humanSize(s.Size)
+			row := marker + summary
+			if i == v.resumeIdx {
+				row = marker + lipgloss.NewStyle().Bold(true).Foreground(v.styles.accent).Render(summary)
+			}
+			lines = append(lines, row)
+		}
+		if end < len(list) {
+			lines = append(lines, fmt.Sprintf("… %d more", len(list)-end))
+		}
+	}
+	lines = append(lines, "↑/↓ or j/k move · enter resume · esc close")
+
+	return v.renderOverlayTitle(bodyH, "Resume", lines)
+}
+
+// humanSize renders a file size the way picker rows show it ("312 B",
+// "4.2 kB", "1.3 MB") — one decimal only above the byte range.
+func humanSize(n int64) string {
+	switch {
+	case n < 1024:
+		return fmt.Sprintf("%d B", n)
+	case n < 1024*1024:
+		return fmt.Sprintf("%.1f kB", float64(n)/1024)
+	default:
+		return fmt.Sprintf("%.1f MB", float64(n)/(1024*1024))
+	}
+}
+
+// renderResumeConfirmOverlay asks before a resume replaces the live
+// conversation (same guard rails as /clear: y/enter confirms, esc backs
+// out; nothing is replaced on a stray key).
+func (v AgentView) renderResumeConfirmOverlay(bodyH int) string {
+	name := v.resumePick
+	if i := strings.LastIndexByte(name, '/'); i >= 0 {
+		name = name[i+1:]
+	}
+	lines := []string{
+		"Resume over the current conversation?",
+		name,
+		"",
+		"y / enter resume · n / esc cancel",
+	}
+	return v.renderOverlayTitle(bodyH, "Resume conversation", lines)
 }
 
 // slashMenuHeight is the bordered menu's row budget while a slash draft is

@@ -5,6 +5,7 @@
   │slash commands                                                    │  
   │ /clear    clear the conversation (asks first)                    │  
   │ /model    pick a model                                           │  
+  │ /resume   resume a saved chat transcript                         │  
   │ /theme    toggle dark/light for this session                     │  
   │ /export   flush + reveal the transcript file path                │  
   │ /help     show this reference                                    │  
@@ -26,5 +27,4 @@
   │                                                                  │  
   │y / enter approve · n / esc decline                               │  
   ╰──────────────────────────────────────────────────────────────────╯  
-                                                                        
  ⏻ http://localhost:11434 · tools off · /tmp    Agent · 72x30 · compact 

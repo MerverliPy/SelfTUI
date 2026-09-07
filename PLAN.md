@@ -521,7 +521,7 @@ green. *Still next: v0.1 (tag + release notes).*
 Sequential ship gates, one per session per the binding session rule; the v0.2
 tag cuts when the owner-selected set lands (owner may cut earlier).
 
-**V2a — Chat session resume.** Reload a saved per-process transcript
+**V2a — Chat session resume.** ✅ *done 2026-09-07 — see LEDGER:* Reload a saved per-process transcript
 (`internal/session` markdown under `$XDG_STATE_HOME/selftui/sessions/`) into a
 live Agent conversation: picker over saved sessions, safe import (tool-armed
 runner state, context budgeting re-applied on load), meta/model handling,

@@ -85,6 +85,26 @@ for tagged releases.
 
 ### Added
 
+- **Chat session resume (v0.2 V2a, 2026-09-07).** The `/resume` slash command
+  opens a picker over the saved per-process transcripts under
+  `$XDG_STATE_HOME/selftui/sessions/` (newest first, humanized mtime + size)
+  and reloads the chosen one into the live Agent conversation: committed
+  user/assistant turns re-enter as plain history with their historical model
+  chips and `elapsed · reason` meta, the render cache and context meter
+  rebuild, and auto-follow re-engages. Safe import: transcripts record only
+  committed turns (never tool-call state), the truncation flag recomputes at
+  import time (an over-budget transcript shows its truncation marker
+  immediately), sends are refused while a transcript load is in flight (a
+  mid-load message can never be wiped by the import), and the next send
+  keeps the currently selected model (picker rows never switch it). The
+  parser matches header lines under the writer's exact grammar (body
+  headings like `## user story` stay content), preserves leading blank
+  lines of recorded content verbatim, and list ordering is deterministic
+  even when two files share an mtime; imported model/meta strings and the
+  resume notice are sanitized like any other display text. Resuming over a
+  live conversation asks first (y/esc, same guard as `/clear`); listing and
+  parse failures surface one notice and never destroy the conversation; the
+  new run's transcript stays append-only for post-resume turns.
 - `LICENSE` (Apache-2.0), `SECURITY.md` (private vulnerability reporting via
   GitHub's Security tab), `CONTRIBUTING.md`, and this changelog with an
   Unreleased section.
