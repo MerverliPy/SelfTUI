@@ -4584,3 +4584,70 @@ remains the next roadmap step). **Result:** done — three logical commits on br
 - Fresh session: **V2b — sandbox spike GATE** (evaluate bubblewrap / `systemd-run`
   / rootless containers against `docs/run-command-containment.md`; GO → V2c,
   NO-GO → decision recorded). Do not chain here.
+
+### 2026-09-07 — V2b: sandbox spike GATE (DONE — verdict GO)
+**Milestone:** V2b (PLAN §10) · **Result:** **GO** — a real OS/container sandbox
+exists and was validated end-to-end on the release host; V2c may reinstate
+`run_command` behind it. Evidence: `docs/v2b-sandbox-gate-evidence.md`.
+
+**Work done**
+- Session ritual: router/map/orchestrator contracts read; triaged DIRECT (empirical
+  host spike — a child would run the same probes on the same host; parent-local +
+  one targeted read-only review layer).
+- Host inventory: WSL2 (6.18.33.2-microsoft-standard-WSL2, Ubuntu 24.04.4, userns
+  enabled, systemd 255 user manager + linger); bwrap 0.9.0 present; Docker 29.6.0
+  **rootless** (context `rootless`); podman absent.
+- bwrap probes: selective binds hide `/home`, `~/.ssh`, `/etc/shadow` (verified from
+  inside); `--unshare-net` kills DNS+HTTP; `--clearenv` leaves 4 vars; writes
+  outside the workspace fail (an `/etc/...` escape wrote only sandbox-internal
+  tmpfs — host verified clean); group SIGTERM kills bwrap + inner process
+  (`--die-with-parent --new-session`); read-only `git log` runs inside.
+- Real workload offline inside bwrap: `go test -count=1 ./internal/session` → ok
+  (~5 s; tmpfs `GOCACHE`; extracted GOTOOLCHAIN toolchain bound ro — go.mod needs
+  ≥1.25.8, distro go is 1.22).
+- Rootless docker probes: `--network none` → "Network is unreachable" (control
+  resolves); `--read-only --cap-drop ALL --security-opt no-new-privileges` runs;
+  `--memory 64m` OOM-kills a 128 MB hog (exit 137), no-limit control survives;
+  real workload `go test ./internal/session` → ok (4.5 s; `golang:1.27-alpine`;
+  `--tmpfs /tmp:exec` needed — default tmpfs is noexec; container-root maps to
+  host calvin, `--user 1000:1000` maps to subuid and cannot write host dirs).
+- systemd-run probes (negative, load-bearing): `IPAddressDeny=any` is silently
+  unenforced (DNS resolved + full HTTPS fetch inside scope) and `MemoryMax=64M`
+  is unenforced in user scope (audit re-verified) and system scope (gate
+  session's privileged run); `memory.max` unreadable in the delegated cgroup —
+  WSL2 cgroup-delegation quirk. systemd-run is not a containment layer here.
+- Evidence doc written; independent reality-checker audit (read-only,
+  toolBudget soft10/hard18, 10 min) reproduced **4/4** load-bearing probes + the
+  docker OOM-kill → **ENDORSE GO** with 4 conditions carried into V2c
+  (mitigation stack shipped+tested; residual RSS risk documented with docker as
+  opt-in engine; verbatim outputs; group-kill + offline-workload as V2c tests).
+- PLAN §10 V2b ticked; this entry appended.
+
+**Commands + exit codes**
+- Probes: bwrap run `0`; net probes rc=2/exit 6 (blocked, good); escape-write
+  host check "No such file"; group-kill both-dead; bwrap `go test ./internal/session`
+  `0`; docker `--network none` nslookup "Network is unreachable"; docker
+  `--memory 64m` hog `137`; docker real workload `0`; systemd IPAddressDeny
+  DNS `0` + wget `0` (NOT blocked — the finding); MemoryMax survivor `0`.
+- Audit: reality-checker run completed, ENDORSE GO, 4/4 probes reproduced.
+- `make check` → see below (run before commit).
+
+**Decisions / lines to respect**
+- Verdict GO is **conditional**: sandbox ≠ replacement for the deferred
+  containment design; V2c must ship timeout/output-caps/serialization/group-kill
+  + argv allowlist + per-call confirm, tested.
+- bwrap = recommended default engine (≈10 ms overhead, fits interactive TUI);
+  rootless docker = documented opt-in engine (strongest isolation incl. memory
+  caps; 2–5 s per `docker run`, amortizable via `docker exec`).
+- Host quirks recorded: docker `--tmpfs` defaults noexec; rootless uid mapping
+  (container-root ≡ host user); go.mod ≥1.25.8 vs distro go 1.22 (bind the
+  GOTOOLCHAIN toolchain or use golang:1.27-alpine; `GOTOOLCHAIN=local` +
+  `GOPROXY=off`).
+
+**Blockers / open decisions (carry to next session)**
+- None. Owner-optional click unchanged: GPG pubkey upload (Verified badge).
+
+**Next action**
+- Fresh session: **V2c — sandboxed run_command** (only on V2b GO — GO recorded;
+  bwrap default engine + full mitigation stack per the conditions above). Do not
+  chain here.

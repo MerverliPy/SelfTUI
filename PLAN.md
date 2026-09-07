@@ -527,12 +527,19 @@ live Agent conversation: picker over saved sessions, safe import (tool-armed
 runner state, context budgeting re-applied on load), meta/model handling,
 tests. ✅ *Exit: a saved chat resumes live at both canonical geometries.*
 
-**V2b — GATE: sandbox spike.** Evaluate a real OS/container sandbox for
-command execution on the release host (candidates: bubblewrap, `systemd-run`
-slices, rootless containers) against the threat model in
-`docs/run-command-containment.md`; go/no-go before any `run_command` return.
-✅ *Exit: evidence doc + verdict GO (→ V2c) or NO-GO (sandboxed execution
-stays out of v0.2, decision recorded).*
+**V2b — GATE: sandbox spike.** ✅ *done 2026-09-07 — verdict **GO**, evidence in
+`docs/v2b-sandbox-gate-evidence.md` + LEDGER (independent reality-checker audit
+reproduced 4/4 load-bearing probes, ENDORSE GO).* Evaluated bubblewrap 0.9.0,
+`systemd-run` slices, and rootless containers (Docker 29.6.0 **is** rootless on
+the release host) against `docs/run-command-containment.md`. bwrap and rootless
+Docker both pass the full threat-model matrix and the real offline `go test`
+workload; `systemd-run` **fails** as a containment layer on this WSL2 host
+(`IPAddressDeny` and `MemoryMax` silently unenforced — recorded host quirk).
+GO is conditional on V2c shipping/testing the full mitigation stack (timeout,
+output caps, serialization, process-group kill, argv allowlist, per-call
+confirm); rootless Docker stays the documented opt-in engine (`--memory`
+enforced; bwrap has no CPU/memory caps). ✅ *Exit: evidence doc + verdict GO →
+V2c.*
 
 **V2c — Sandboxed run_command (only on V2b GO).** Reinstate command execution
 behind the V2b sandbox + the deferred containment design (argv allowlist, no
