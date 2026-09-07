@@ -4411,3 +4411,21 @@ cross-build` PASSED (1m11s). `main` now at `ba6e098`, v0.1.1 tag
 
 **Next action**
 - Fresh session: public-visibility flip or v0.2 scoping per owner priority. Do not chain here.
+
+### 2026-09-07 — Owner clicks executed: About/topics + public flip (DONE)
+**Milestone:** owner-assigned (explicit authorization in chat) · **Result:** done — description + 8 topics set via `gh repo edit`; visibility flipped PRIVATE → PUBLIC (verified via `gh repo view`). Social preview image skipped (no screenshot yet — owner optional).
+
+**Commands + exit codes**
+- `gh repo edit --description + 8× --add-topic` `0` (verified: description + topics listed)
+- `gh repo edit --visibility public` `0` · `gh repo view --json visibility` → `PUBLIC`
+
+**Decisions / lines to respect**
+- Topics: go, tui, ollama, bubbletea, ai-agent, ssh, terminal, llm.
+- Badges (CI/release/Go/license) now resolve publicly on their own.
+- GPG pubkey upload (Verified badge) remains an owner browser click at github.com/settings/keys.
+
+**Blockers / open decisions (carry to next session)**
+- v0.2 scope definition.
+
+**Next action**
+- Fresh session: v0.2 scoping. Do not chain here.
