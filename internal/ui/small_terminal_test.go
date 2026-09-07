@@ -136,6 +136,84 @@ func seedUnicodeAgentTurn(t *testing.T, m App) App {
 	return m
 }
 
+// seedZeroSizeTranscript loads a committed transcript (pairs of user and
+// assistant turns, render cache filled exactly as the commit path leaves it)
+// into the agent tab. Used by the 0×0 boundedness test to prove a large
+// history cannot leak into a zero-size frame.
+func seedZeroSizeTranscript(t *testing.T, v *AgentView, turnPairs int) {
+	t.Helper()
+	for i := 0; i < turnPairs; i++ {
+		body := fmt.Sprintf("assistant line one\nassistant line two (%d)", i)
+		v.turns = append(v.turns,
+			turn{msg: ollama.ChatMessage{Role: ollama.RoleUser, Content: "user turn"},
+				render: v.renderBlock(v.userHeader(), "user turn")},
+			turn{msg: ollama.ChatMessage{Role: ollama.RoleAssistant, Content: body},
+				model:  "qwen3:8b",
+				render: v.renderBlock(v.assistantHeaderRow("qwen3:8b", ""), body)},
+		)
+	}
+}
+
+// TestZeroSizeAgentFrameStaysBounded pins the conclave finding that 0×0
+// renders chrome by design: with a substantial transcript and a live stream
+// armed, the zero-size frame must stay a small, deterministic chrome shape —
+// the chat pane contributes nothing (renderChatPane refuses h<2) and the
+// transcript content cannot leak into the frame regardless of history size.
+func TestZeroSizeAgentFrameStaysBounded(t *testing.T) {
+	frame := func(t *testing.T, turnPairs int, streaming bool) string {
+		t.Helper()
+		m := newTestApp(t)
+		m = updateTab(t, m, tea.WindowSizeMsg{Width: 0, Height: 0})
+		m = updateTab(t, m, tea.KeyPressMsg{Text: "2"}) // Agent tab
+		m = updateTab(t, m, agentEventMsg{msg: agentModelsLoadedMsg{models: sampleModels()}})
+		seedZeroSizeTranscript(t, &m.agent, turnPairs)
+		if streaming {
+			m.agent.streamText = "streaming now"
+			m.agent.streaming = true
+		}
+		return stripANSI(m.View().Content)
+	}
+
+	got := frame(t, 200, true) // 400 turns + live stream at 0×0
+	rows := strings.Split(strings.TrimSuffix(got, "\n"), "\n")
+	if len(rows) > 10 {
+		t.Errorf("0×0 agent frame is %d rows — transcript broke frame boundedness:\n%s", len(rows), got)
+	}
+	for i, r := range rows {
+		if w := lipgloss.Width(r); w > 40 {
+			t.Errorf("0×0 agent frame row %d is %d columns wide (chrome budget 40): %q", i+1, w, r)
+		}
+	}
+	// Model chip strings (e.g. "qwen3:8b") legitimately appear in the
+	// composer chrome, so only transcript content is asserted absent here.
+	for _, leak := range []string{"user turn", "assistant line", "streaming now", "❯ you"} {
+		if strings.Contains(got, leak) {
+			t.Errorf("0×0 agent frame leaked transcript content %q:\n%s", leak, got)
+		}
+	}
+
+	// History size must not affect the frame: same state, empty transcript.
+	if empty := frame(t, 0, true); empty != got {
+		t.Errorf("0×0 frame differs between empty and 400-turn transcript (history leaked into layout):\nempty:\n%s\nseeded:\n%s", empty, got)
+	}
+
+	// The pane guard itself: renderChatPane refuses sub-2-row heights, while
+	// the underlying chatLines computation stays safe for the full history.
+	m := newTestApp(t)
+	m = updateTab(t, m, tea.WindowSizeMsg{Width: 0, Height: 0})
+	m = updateTab(t, m, tea.KeyPressMsg{Text: "2"})
+	m = updateTab(t, m, agentEventMsg{msg: agentModelsLoadedMsg{models: sampleModels()}})
+	seedZeroSizeTranscript(t, &m.agent, 200)
+	for _, h := range []int{0, 1} {
+		if out := m.agent.renderChatPane(h); out != "" {
+			t.Errorf("renderChatPane(%d) = %d bytes, want \"\" (h<2 guard)", h, len(out))
+		}
+	}
+	if lines := m.agent.chatLines(); len(lines) == 0 {
+		t.Error("chatLines returned no lines for a 400-turn transcript (computation must stay safe even when the pane hides it)")
+	}
+}
+
 // TestSmallTerminalUnicodeContent renders the populated Agent tab with wide
 // Unicode content at the boundary geometries. Above the minimum the shell
 // must render the content inside the frame (no row overflow); below it the

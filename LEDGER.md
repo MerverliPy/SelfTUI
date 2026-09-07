@@ -4886,3 +4886,60 @@ exists and was validated end-to-end on the release host; V2c may reinstate
 - Fresh session: owner picks — D4 (100× transcript benchmark on
   renderChatPane/chatLines + 0×0 boundedness test) is the last queued
   follow-up. Do not chain here.
+
+## 2026-09-07 — D4 landed: 100× transcript benchmark + 0×0 boundedness test
+
+**Work done**
+- Orchestrator triage: DIRECT (zero agents) — benchmark + test only, no
+  production code changes; exact scope fixed by the 2026-09-07 owner decision
+  (D4: go test -bench on renderChatPane/chatLines at ~100× transcript size +
+  0×0 boundedness test).
+- `internal/ui/agent_view_bench_test.go` (new): 100× transcript baseline
+  defined as 2,000 turns (100 × a 20-turn session) at the 88×40 test
+  geometry; setup pre-renders a small set of distinct markdown bodies once
+  and copies the cached strings, mirroring the commit path's per-turn render
+  cache. Benchmarks: `BenchmarkChatPane100x/{tail,scrolled-up,streaming}` and
+  `BenchmarkChatLines100x` (isolates the O(total cached lines) rebuild named
+  in the owner decision). chatH computed the same way View() does.
+- `internal/ui/small_terminal_test.go`: `TestZeroSizeAgentFrameStaysBounded`
+  pins the conclave finding that 0×0 renders chrome by design — with 400
+  turns + a live stream armed, the frame stays ≤10 rows and ≤40 columns of
+  chrome, leaks no transcript content ("user turn"/"assistant line"/
+  "streaming now"/"❯ you"; model chip strings excluded as legit composer
+  chrome), and is byte-identical with an empty transcript (history cannot
+  affect layout). Also pins renderChatPane's h<2 guard (returns "" for h=0/1)
+  and that chatLines still computes the full 400-turn history safely.
+
+**Measured baseline (i7-9700K, go1.x, -benchtime default)**
+- ChatPane100x/tail 1.52 ms/op · scrolled-up 1.48 ms/op · streaming 1.65 ms/op
+  (~1.7 MB, ~14k allocs/op — lipgloss styling of ~30 visible rows dominates).
+- ChatLines100x 0.87 ms/op (1.39 MB, 2,018 allocs/op).
+- tail ≈ scrolled-up cost confirms the O(total) chatLines rebuild dominates
+  per-frame cost independent of window position — the baseline any future
+  windowing/caching work must beat.
+
+**Commands + exit codes**
+- `gofmt -l .` → empty; `go vet ./...` → 0.
+- `go test ./internal/ui -run TestZeroSizeAgentFrameStaysBounded -v -count=1`
+  → PASS, exit 0.
+- `go test ./internal/ui -bench Benchmark -run '^$' -count=1` → all 4 PASS,
+  exit 0 (numbers above).
+- `make check` (build + `go test -count=1 ./...` + vet) → 0, all packages ok.
+- `go test -race -count=1 ./internal/ui` → 0 (11.3s).
+
+**Decisions / lines to respect**
+- Benchmark seeding reuses cached render strings across turns — per-frame
+  cost depends on line counts, not body uniqueness (glamour output is cached
+  per turn in production); document this in the file header.
+- 0×0 assertions pin observed-by-design behavior probed before writing the
+  test (8-row chrome, 38-col pane, transcript never reaches the frame).
+- No production code touched; windowing work remains future scope with this
+  benchmark as its baseline.
+
+**Blockers / open decisions (carry to next session)**
+- None.
+
+**Next action**
+- Fresh session: owner picks. All four owner decisions (D1–D4) are now
+  landed; conclave tests-for-verifications list is exhausted. Do not chain
+  here.
