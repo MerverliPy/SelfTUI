@@ -620,18 +620,14 @@ and a fresh `[Unreleased]` now carries the v0.1.1 audit-remediation work —
 and `SECURITY.md`/`README.md` state the exact sensitive-path policy, stream
 limits, and the v0.1.0-published/v0.1.1-hardening state (see the LEDGER
 Task-19 entry).
-**Current next action (2026-09-06):** continue the audit-remediation runbook
-(`SelfTUI-Pi-Audit-Remediation-Runbook-2026-09-04.md`) on
-`fix/v0.1.1-audit-remediation`: **Task 20 (L-01, shared light-theme golden
-scenario builders)**, then Task 21 (L-02 cleanup), then **Task 22, the final
-release-candidate gate** (`VERSION=v0.1.1 make release-check`, govulncheck
-v1.7.0 pinned on PATH), after which the owner tags and publishes **v0.1.1**.
+**Task 22 — final release-candidate gate ✅ (2026-09-06):** `VERSION=v0.1.1 make release-check` PASSED (go mod verify, gofmt, vet, test, race, govulncheck v1.7.0, both Linux builds, version-stamp, deterministic archives, SHA256SUMS); `scripts/release-check-test.sh` 52/52 PASS; `scripts/create-audit-pack-test.sh` 42/42 PASS; `make audit-pack` produced manifest-complete `dist/selftui-audit-pack-9c5039f.zip` (107 tracked, 107 members, MANIFEST_MATCH=PASS); `scripts/create-audit-pack.sh verify` PASS. Full finding matrix at `dist/v0.1.1-finding-matrix.md`. All 22 external-audit findings (C-01 through L-02) remediated. **v0.1.1 is now ready for the owner to tag and publish.**
+
 **Queued, not started** — none of this has landed yet: **gitleaks-in-CI**
 (recommended; see LEDGER step-6 entry), **actionlint in the local gate**, and
-the **signed-tag decision**. The workflows already pin Node-20 majors
+**the signed-tag decision**. The workflows already pin Node-20 majors
 (`actions/checkout@v4`, `actions/setup-go@v5`), so no Node action bump
 remains. **The public-visibility decision stays the owner's call** — the repo
-remains private until then.
+remains private until then. **Next: the owner tags `v0.1.1` and publishes.**
 
 ---
 

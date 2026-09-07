@@ -4040,3 +4040,83 @@ v0.1.0 material; the 29 code commits after the tag are the v0.1.1 work recorded 
 
 **Blockers / open decisions**
 - None. Next: **Task 22 (final release-candidate gate)**.
+
+### 2026-09-06 — Runbook Task 22: final release-candidate gate ✅ (DONE)
+**Milestone:** `SelfTUI-Pi-Audit-Remediation-Runbook-2026-09-04.md` Task 22 — the final
+release-candidate gate (owner-assigned). No §10 row to tick (runbook-owned step).
+**Result:** done — **GATE PASSED** for v0.1.1. `VERSION=v0.1.1 make release-check` exited
+0; govulncheck v1.7.0 reports 0 reachable vulnerabilities; audit-pack manifest-complete;
+full finding matrix generated. **v0.1.1 is ready for the owner to tag and publish.**
+
+**Work done**
+- **Toolchain verification:** enforced go 1.27.1 (`go version`), same-distribution gofmt
+  (`$GOROOT/bin/gofmt`, identity-pinned), govulncheck v1.7.0 (`govulncheck -version`) on
+  PATH. Release-check.sh fails fast (exit 2) before any slow gate if versions drift.
+- **`VERSION=v0.1.1 make release-check` → PASSED (0):**
+  - `go mod verify` — all modules verified
+  - `gofmt -l .` — empty (clean)
+  - `go vet ./...` — clean
+  - `go test -count=1 ./...` — all packages ok (cmd/self-tui, internal/agent,
+    internal/config, internal/ollama, internal/session, internal/ui)
+  - `go test -race -count=1 ./...` — full suite under race detector green
+  - `govulncheck ./...` — 0 vulnerabilities affecting code (7 non-reachable in imported
+    packages, 3 in required modules, all in `golang.org/x/net@v0.39.0` not called)
+  - `make build-linux-amd64 build-linux-arm64` — both CGO-disabled static binaries stamped
+    `selftui v0.1.1` via `-X main.Version=v0.1.1`
+  - version-stamp check — both binaries report `selftui v0.1.1` (exec + embedded strings)
+  - deterministic archives — `tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner
+    -gzip -n` produces byte-identical SHA256SUMS across umasks 0002 and 0022
+  - `sha256sum -c dist/SHA256SUMS` — both archives OK
+- **`scripts/release-check-test.sh` → 52/52 PASS.** Regression suite over the release gate
+  itself: wrong/missing toolchain versions fail fast (exit 2) before any slow gate; archive
+  member modes fixed (0755 binary, 0644 docs); SHA256SUMS flat names; umask reproducibility
+  proven.
+- **`make audit-pack` → `dist/selftui-audit-pack-9c5039f.zip`.** 107 tracked files
+  (git ls-files), `MANIFEST_MATCH=PASS`, sha256 `0a8540805f2821b4154d70ee7f315da714267fcd19d68ef46ba3f71f0aeef47e`.
+- **`scripts/create-audit-pack.sh verify dist/selftui-audit-pack-9c5039f.zip` → PASS.**
+  Bidirectional manifest comparison (tracked == archived, both directions), safe relative
+  paths, no tracked symlinks.
+- **`scripts/create-audit-pack-test.sh` → 42/42 PASS.** Includes reproduction of the
+  historical H-06 defect (naive pack misses dotfiles) and the verifier failing on it.
+- **Full finding matrix written** to `dist/v0.1.1-finding-matrix.md`: gate results table,
+  all 22 external-audit findings (C-01 through L-02) with runbook-task cross-reference and
+  remediation summary, govulncheck v1.7.0 detailed results, the 5-lane read-only audit's
+  additional P1 correctness findings (#1–#7, #12, #13) and P0 supply-chain items queued
+  for post-v0.1.1 follow-up, and artifact summary.
+- Artifacts confirmed under `dist/`: both Linux binaries, both `.tar.gz` archives,
+  `SHA256SUMS`, audit pack ZIP.
+
+**Commands + exit codes**
+- `go version` → go1.27.1 `0` · `gofmt -V` → (no -V flag, identity pin) `0`
+  · `govulncheck -version` → `v1.7.0` `0` · `git status --porcelain` → empty `0`.
+- `VERSION=v0.1.1 make release-check` → **0** (full gate PASSED).
+- `make audit-pack` → `0` (107 tracked, MANIFEST_MATCH=PASS).
+- `scripts/release-check-test.sh` → `0` (52 checks, 0 failures).
+- `scripts/create-audit-pack-test.sh` → `0` (42 checks, 0 failures).
+- `scripts/create-audit-pack.sh verify dist/selftui-audit-pack-9c5039f.zip` → `0` (PASS).
+- `sha256sum -c dist/SHA256SUMS` → both OK `0`.
+- `govulncheck ./...` → `0` (0 affecting).
+
+**Decisions / lines to respect**
+- The release gate is the binding pre-tag check. v0.1.1 passed it clean on the
+  `fix/v0.1.1-audit-remediation` tip (`9c5039f`). The owner now tags and publishes.
+- govulncheck v1.7.0 reports 0 affecting under go1.27.1. Running under go1.25.8 reports
+  13 stdlib advisories — a toolchain artifact, not a repo defect (CI pins go1.27.1).
+- The 5-lane read-only audit found 8 additional P1 correctness findings (#1–#7, #12, #13)
+  and P0 supply-chain items. These are **not** on the runbook queue and are excluded from
+  the v0.1.1 gate scope per the owner's decision. They are recorded in the finding matrix
+  for post-v0.1.1 follow-up.
+- The audit-pack is deterministic per commit (fixed member order, commit-time timestamps).
+  The same script re-run on the v0.1.1 tag commit will produce the same zip for that commit.
+- No tag was created or pushed in this task — tagging is the owner's separate step.
+
+**Blockers / open decisions**
+- None (gate is green). The owner's next steps are: (1) tag `v0.1.1`, (2) let
+  `release.yml` re-run the gate at the tag and publish, (3) optionally add gitleaks-in-CI
+  and actionlint to the local gate, (4) decide on signed tags.
+- The P1 correctness findings (#1–#7, #12, #13) from the 5-lane read-only audit are
+  queued as the owner's next code task after v0.1.1 publishes.
+
+**Next action**
+- Owner: tag `v0.1.1` and publish. No further runbook tasks remain on the audit-remediation
+  branch; all 22 findings are remediated and the gate is green.
