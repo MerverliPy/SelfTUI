@@ -1,5 +1,9 @@
 # SelfTUI
 
+[![ci](https://github.com/MerverliPy/SelfTUI/actions/workflows/ci.yml/badge.svg)](https://github.com/MerverliPy/SelfTUI/actions/workflows/ci.yml) [![release](https://img.shields.io/github/v/release/MerverliPy/SelfTUI)](https://github.com/MerverliPy/SelfTUI/releases) [![go](https://img.shields.io/github/go-mod/go-version/MerverliPy/SelfTUI)](go.mod) [![license](https://img.shields.io/github/license/MerverliPy/SelfTUI)](LICENSE)
+
+> One binary. PC + phone. Manage Ollama models and chat with an embedded AI coding agent — natively on Linux or over SSH from your iPhone.
+
 A visually appealing, responsive terminal UI for managing a local or remote
 Ollama host and chatting with its models through an embedded AI coding agent.
 **v0.1 is a single-process Linux/WSL TUI for Ollama**: it runs in a native
@@ -7,9 +11,8 @@ terminal on Linux (or Windows Subsystem for Linux), or over SSH from a phone
 (Moshi, Blink, Termius, …) into that host, and the layout adapts to narrow
 windows. Native Windows and native macOS are **not supported** in v0.1.
 
-**Status: v0.1.0 released 2026-09-04; v0.1.1 hardening in progress** (audit
-remediation on the `fix/v0.1.1-audit-remediation` branch; see
-`CHANGELOG.md`). The Models tab lists live
+**Status: v0.1.1 released 2026-09-07** (signed-tag policy enforced for future
+`v*` releases; see `CHANGELOG.md`). The Models tab lists live
 models from the Ollama host (`/api/tags`) with selection + an inspect pane
 (`/api/show`): key facts, parameters, template, modelfile, model info,
 license — scrollable, side-by-side on wide screens and stacked
@@ -19,6 +22,48 @@ pulls reload the list automatically. The Agent tab supports native or
 content-embedded tool calls, explicit plain-chat fallback, and jailed
 project-aware tools. The Settings tab (huh forms) edits the whole config
 surface with in-session live apply.
+
+## Features
+
+- **Models** — list, inspect, pull (streamed progress), and delete Ollama models live.
+- **Agent** — chat with streaming markdown + an embedded coding agent (jailed read/write/grep tools, explicit plain-chat fallback).
+- **Settings** — huh forms over the whole config surface with live apply and esc-to-discard.
+- **PC + phone** — one binary; the layout adapts from wide PC (120×40) down to a 72×30 phone over SSH (tmux reattach survives drops).
+
+## Preview
+
+Renders pinned by golden tests (`internal/ui/testdata/golden/`) — Models list + inspect side-by-side on wide PC:
+
+```text
+  Models    Agent    Settings
+╭────────────────────────╮╭────────────────────────────────────────────────╮
+│   Models               ││qwen3:8b                                        │
+│                        ││size 4.8 GB · modified 2026-09-03 08:00         │
+│  2 models              ││caps tools, vision                              │
+│                        ││                                                │
+││ qwen3:8b              ││── PARAMETERS                                   │
+││ qwen3 · 8.2B · Q4_K_M ││num_ctx 4096                                    │
+│  gemma3:12b            ││temperature 0.6                                 │
+│  gemma3 · 12B · Q4_K_M ││── TEMPLATE                                     │
+╰────────────────────────╯╰────────────────────────────────────────────────╯
+```
+
+Agent chat turn with per-turn meta on the assistant header:
+
+```text
+╭────────────────────────────────────────────────────────────────────────────────╮
+│❯ you                                                                           │
+│                                                                                │
+│  explain this repo                                                             │
+│                                                                                │
+│◈ qwen3:8b                                                           0.4s · stop│
+│                                                                                │
+│  It is a mobile-first terminal UI for Ollama, styled like the opencode.ai TUI. │
+╰────────────────────────────────────────────────────────────────────────────────╯
+```
+
+On a 72×30 phone the same tabs stack compactly (list fills the width, detail
+toggles with enter) — see “Using SelfTUI from an iPhone (SSH)” below.
 
 ## v0.1 product contract
 
