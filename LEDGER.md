@@ -4694,3 +4694,45 @@ exists and was validated end-to-end on the release host; V2c may reinstate
 **Next action**
 - Fresh session: owner picks up the four owner decisions; recommended next step is the
   single agent_view.go code-motion cleanup session. Do not chain here.
+
+---
+
+## 2026-09-07 — Owner decisions collected (post-conclave, all 4 approved)
+
+**Work done**
+- DIRECT-path expertise report on the four open owner decisions, evidence-checked
+  against code (agent_view.go:1590-1723, models_view.go:370/676/699-702,
+  runner.go:225/514-517, chatLines O(total) per frame). Owner approved all four
+  recommended options via structured questionnaire:
+  1. **D1 — agent_view.go cleanup: APPROVED, full scope.** Turn struct (collapse 4
+     parallel slices), selector/slash/resume handler extraction, scroll mutation
+     moved out of View(), Recorder as concrete composition-root dep, delete
+     legacy agentTokenMsg/agentDoneMsg + test migration (~6 call sites in
+     sanitize_test/truncate_test/routing_regression_test), TabBar comment fix.
+  2. **D2 — pullCancel() hardening: APPROVED, one-line fix + regression test.**
+     Cancel in-flight pull in ApplyClient before client swap (~15 lines incl. test;
+     context.CancelFunc is idempotent, Esc double-cancel safe).
+  3. **D3 — looksLikeEmbeddedJSON: APPROVED, doc comment + pinning test.** Pin:
+     JSON-prefix held back, fenced prose held back (whole-turn holdback tradeoff),
+     plain prose streams (runner.go:514).
+  4. **D4 — 100× transcript measurement: APPROVED as go test -bench benchmark**
+     on renderChatPane/chatLines at ~100× transcript size + 0×0 boundedness test
+     (chatLines iterates all history per frame, agent_view.go:1590-1608; windowing
+     is O(visible) but line rebuild is O(total cached lines)).
+
+**Commands + exit codes**
+- Evidence recon: fd/rg/sed reads only, no repo mutations beyond this append.
+- No build/test run (no code changed).
+
+**Decisions / lines to respect**
+- Next session executes D1 full scope as THE step (conclave's recommended next step).
+- D2+D3 are small (~45 lines combined) — schedule as a follow-up hardening session;
+  do NOT fold into D1 (review separation: code motion vs concurrency fix vs doc/test).
+- D4 benchmark can ride any session with slack, or its own; never chain.
+
+**Blockers / open decisions (carry to next session)**
+- None. All four owner decisions are closed.
+
+**Next action**
+- Fresh session: execute D1 — agent_view.go full-scope code-motion cleanup, green
+  make check, golden/routing/seam tests must stay green. Do not chain here.
