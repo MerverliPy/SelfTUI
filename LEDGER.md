@@ -4308,3 +4308,65 @@ cross-build` PASSED (1m11s). `main` now at `ba6e098`, v0.1.1 tag
 
 **Next action**
 - Fresh session: GPG signed-tag implementation (or public-visibility / v0.2 scoping per owner priority). Do not chain here.
+
+### 2026-09-07 — GPG signed-tag implementation (DONE)
+**Milestone:** signed-tag owner decision (2026-09-07) · **Result:** done — key generated,
+  repo-local signing configured, public key committed, `release.yml` enforces
+  signatures, practice documented. Branch `signed-tags`, merged to `main` via PR #9
+  (`gh pr merge 9 --merge`; CI required check PASSED 1m29s, run `34074931051`,
+  Node-20 deprecation annotation only).
+
+**Work done**
+- **Key setup:** generated Ed25519 signing key on this host, no passphrase per
+  owner choice (`MerverliPy <calvinbrady8@gmail.com>`, keyid `5F74A36F7B5C1670`,
+  fingerprint `8D3A52AB6583DD5C207FE81B5F74A36F7B5C1670`, expires 2028-09-06).
+  Private key lives in this host's GPG home only; revocation cert at
+  `~/.gnupg/openpgp-revocs.d/`. Owner backups per CONTRIBUTING note.
+- **Local signing practice:** `git config --local tag.gpgsign true` +
+  `user.signingkey 5F74A36F7B5C1670` (machine-local, does not transfer with a
+  clone — documented as such).
+- **Public key committed:** `docs/release-signing-key.asc` (public block only —
+  verified: no PRIVATE block, fingerprint matches; gitleaks clean).
+- **CI enforcement:** `release.yml` gains "Verify the release tag carries a
+  valid GPG signature" (`gpg --import docs/release-signing-key.asc` +
+  `git verify-tag "$VERSION"`) before any build/publish step.
+- **Regression found + fixed:** the P0 supply-chain commit `a05e89f` dropped the
+  entire top-level `env:` block from `release.yml` (overcorrection of the
+  job-name env-context fix) — `VERSION`/`GO_VERSION`/`GOVULNCHECK_VERSION` were
+  empty, so the next `v*` push would have failed at "Tag must match". Block
+  restored verbatim with a comment recording why.
+- **Gate efficacy proven locally:** signed throwaway tag `v9.9.9-test`
+  `git verify-tag` → Good signature; existing unsigned `v0.1.1` → `no signature
+  found` (rc=1), i.e. exactly what CI now enforces. Throwaway tag deleted,
+  never pushed.
+- **Docs:** CONTRIBUTING "Signed release tags" practice note (`git tag -s`,
+  verify-before-push, backup, github.com/settings/keys owner step for the
+  Verified badge); README release-engineering + CI paragraphs mention
+  signed-tag verification.
+
+**Commands + exit codes**
+- `gpg --batch --pinentry-mode loopback --passphrase '' --quick-generate-key
+  "MerverliPy <calvinbrady8@gmail.com>" ed25519 sign 2y` → 0
+- `git tag -s v9.9.9-test` → 0 · `git verify-tag v9.9.9-test` → Good signature
+- `git verify-tag v0.1.1` → rc=1 (`no signature found`, pre-policy tag)
+- `git tag -d v9.9.9-test` → 0
+- `make actionlint` → 0 · `make secret-scan` → 0 leaks · `make check` → 0
+  (actionlint/gitleaks/govulncheck resolved from `~/go/bin`, off default PATH)
+- gitleaks targeted scan of `docs/release-signing-key.asc` → 0 leaks
+
+**Decisions / lines to respect**
+- No-passphrase key was the owner's explicit choice (asked, 2026-09-07).
+- Pre-policy tags `v0.1.0`/`v0.1.1` stay unsigned (history, not rewritten).
+- Next `v*` tag must be `git tag -s`; CI fails the release otherwise.
+- `env:`-context is banned only in job `name:` — never delete a top-level
+  `env:` block for that reason again.
+
+**Blockers / open decisions (carry to next session)**
+- Owner optional: upload public key at github.com/settings/keys for the
+  green Verified badge (CI verification works without it).
+- Public-visibility call.
+- v0.2 scope definition.
+
+**Next action**
+- Fresh session: public-visibility flip or v0.2 scoping per owner priority.
+  Do not chain here.

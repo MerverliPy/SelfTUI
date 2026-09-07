@@ -673,10 +673,22 @@ archives + SHA256SUMS); independently downloaded and verified (`sha256sum -c` OK
 `main` now at `ba6e098`; v0.1.1 tag (`eacb522`) is reachable from `main`. Branch
 `fix/v0.1.1-audit-remediation` kept (auditable history, same as `hardening/v0.1`).
 
-**Queued, not started** — none of this has landed yet: **gitleaks-in-CI**
-(recommended; see LEDGER step-6 entry), **actionlint in the local gate**, and
-**the signed-tag decision**. The workflows already pin Node-20 majors
-(`actions/checkout@v4`, `actions/setup-go@v5`), so no Node action bump
-remains. **The public-visibility decision stays the owner's call** — the repo
-may now go public at the owner's discretion. **Remaining: P0 supply-chain items
-and P1 correctness findings from the 5-lane read-only audit.**
+**GPG signed-tag implementation landed 2026-09-07** (branch `signed-tags`,
+merged to `main` via PR): Ed25519 no-passphrase key generated on the release
+host (owner choice; keyid `5F74A36F7B5C1670`, expires 2028-09-06), repo-local
+`tag.gpgsign` + `user.signingkey` configured, public key committed at
+`docs/release-signing-key.asc`, and `release.yml` now fails the release on
+an unsigned tag (`git verify-tag`) before building anything. Same session
+fixed a P0 regression: commit `a05e89f` had dropped the whole top-level
+`env:` block from `release.yml`, which would have failed the next release
+(`VERSION` empty) — block restored. Practice documented in CONTRIBUTING
+("Signed release tags") + README. Pre-policy tags `v0.1.0`/`v0.1.1` stay
+unsigned. `make actionlint` + `make secret-scan` (0 leaks) + `make check`
+green. Remaining owner-optional: upload the public key at
+github.com/settings/keys for the green Verified badge.
+
+**Resolved — was queued, now landed:** ~~gitleaks-in-CI, actionlint in the
+local gate, the signed-tag decision~~ (all on `main` as of 2026-09-07; the
+workflows pin action SHAs, not `@v` majors). **The public-visibility decision
+stays the owner's call** — the repo may now go public at the owner's
+discretion. **Remaining: v0.2 scope definition.**
