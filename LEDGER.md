@@ -4312,8 +4312,9 @@ cross-build` PASSED (1m11s). `main` now at `ba6e098`, v0.1.1 tag
 ### 2026-09-07 — GPG signed-tag implementation (DONE)
 **Milestone:** signed-tag owner decision (2026-09-07) · **Result:** done — key generated,
   repo-local signing configured, public key committed, `release.yml` enforces
-  signatures, practice documented. Branch `signed-tags`, merged to `main` via PR
-  (number recorded at merge time).
+  signatures, practice documented. Branch `signed-tags`, merged to `main` via PR #9
+  (`gh pr merge 9 --merge`; CI required check PASSED 1m29s, run `34074931051`,
+  Node-20 deprecation annotation only).
 
 **Work done**
 - **Key setup:** generated Ed25519 signing key on this host, no passphrase per
