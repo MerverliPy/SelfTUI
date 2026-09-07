@@ -1,0 +1,30 @@
+  Models    Agent    Settings                                           
+                                                                        
+                                                                        
+                                                                        
+                                                                        
+                                                                        
+                                                                        
+                                                                        
+                                                                        
+                                                                        
+                                                                        
+  ╭──────────────────────────────────────────────────────────────────╮  
+  │Resume                                                            │  
+  │                                                                  │  
+  │saved chats — enter to resume                                     │  
+  │❯ 2026-09-07 21:45 · 106 B                                        │  
+  │↑/↓ or j/k move · enter resume · esc close                        │  
+  ╰──────────────────────────────────────────────────────────────────╯  
+                                                                        
+                                                                        
+                                                                        
+                                                                        
+                                                                        
+                                                                        
+                                                                        
+                                                                        
+                                                                        
+                                                                        
+                                                                        
+ ⏻ http://localhost:11434 · tools off · /tmp    Agent · 72x30 · compact 

@@ -4479,3 +4479,59 @@ along).
 **Next action**
 - Fresh session: **V2a — chat session resume** (reload a saved transcript into
   a live Agent conversation). Do not chain here.
+
+### 2026-09-07 — V2a: chat session resume (DONE)
+**Milestone:** V2a (PLAN §10) · **Result:** done — a saved chat now resumes
+live. `/resume` opens a picker over saved transcripts (newest-first, mtime
+with filename tie-break); selecting one imports the parsed turns into the
+live Agent conversation at both canonical geometries.
+
+**Work done**
+- New `internal/session/reader.go` (+ tests): `ListSessions` (newest-first,
+  deterministic filename tie-break) and `Parse`/`Load` back into ordered
+  turns (role, model, clock time, meta, verbatim content). Exact writer-
+  grammar header matching, so markdown headings inside content (`## user
+  story`, a body `## assistant`) stay content; malformed non-transcript
+  files are ignored; leading newlines round-trip faithfully.
+- `internal/ui/agent_view.go`: `/resume` slash command (menu cap raised 6→7
+  so every command stays menu-reachable; help/slash goldens regen'd),
+  windowed picker overlay (fitContent-capped), y/esc overwrite confirm when
+  a conversation already exists, and `applySessionLoaded` safe import:
+  plain user/assistant history only (no tool state fabricated), imported
+  model/meta/notice-filename sanitized, truncation flag recomputed at import
+  (over-budget transcripts show the marker immediately), active model never
+  switched, sends blocked for the whole async load window (review blocker:
+  select→send race), resumed turns are not re-recorded (new transcript
+  stays append-only).
+- Goldens: +4 frames (picker open + resumed conversation at 72×30 and
+  120×40); 23 frames total, all pass. CHANGELOG `[Unreleased]` updated.
+
+**Commands + exit codes**
+- Worker lanes: implement `exit 0` · targeted reviewer pass (verdict
+  request-changes, 4 blockers + 2 suggestions) · fix lane `exit 0`
+- `make check` `0` (parent, after fix lane) · `go test -race -count=1 ./...`
+  `0` (parent, after fix lane)
+- Branch/PR: `git checkout -b v2a-chat-resume` `0` · commit + push `0` ·
+  `gh pr create` `0` · `gh run watch --exit-status` `0` ·
+  `gh pr merge --merge` `0` · `git pull --ff-only` `0`
+
+**Decisions / lines to respect**
+- Channel health: the worker cost-router primary
+  (`deepseek/deepseek-v4-flash:high`) was DEAD (402 Insufficient Balance,
+  0 tokens). Preflight ping on `opencode-go/glm-5.3-flash:low` → healthy;
+  both worker lanes ran on **`opencode-go/glm-5.3-flash:high`** (69 + fix
+  lane tool calls). Reviewer ran on its own router default.
+- Safe import semantics: transcripts contain only committed user/assistant
+  turns, so imports enter as plain history; budgeting re-applies via the
+  existing send path + truncation recompute at load.
+- Resumed turns are NOT re-recorded into the new run's transcript.
+
+**Blockers / open decisions (carry to next session)**
+- None. Owner-optional click: GPG pubkey upload at
+  github.com/settings/keys (Verified badge).
+
+**Next action**
+- Fresh session: **V2b — sandbox spike GATE** (evaluate bubblewrap /
+  `systemd-run` / rootless containers against
+  `docs/run-command-containment.md`; GO → V2c, NO-GO → decision recorded).
+  Do not chain here.

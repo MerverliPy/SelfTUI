@@ -39,6 +39,7 @@ import (
 
 	"selftui/internal/config"
 	"selftui/internal/ollama"
+	"selftui/internal/session"
 )
 
 var updateGolden = flag.Bool("update", false, "regenerate golden render fixtures")
@@ -130,6 +131,10 @@ func buildLightFrame(t *testing.T, name string, w, h int) App {
 		return buildAgentModal(t, w, h, openHelp)
 	case "agent-clear-confirm-compact", "agent-clear-confirm-wide":
 		return buildAgentModal(t, w, h, openClearConfirm)
+	case "agent-resume-picker-compact", "agent-resume-picker-wide":
+		return buildAgentResumePicker(t, w, h)
+	case "agent-resumed-compact", "agent-resumed-wide":
+		return buildAgentResumed(t, w, h)
 	case "palette-compact", "palette-wide":
 		return buildAgentModal(t, w, h, openPalette)
 	case "settings-compact", "settings-wide":
@@ -223,6 +228,55 @@ func openPalette(t *testing.T, m App) App {
 	return updateTab(t, m, tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
 }
 
+// buildAgentResumePicker (V2a) opens the /resume picker over a seeded
+// transcript directory. The transcript's mtime is pinned so the picker's
+// "date · size" rows are byte-stable across machines.
+func buildAgentResumePicker(t *testing.T, w, h int) App {
+	m := buildAgent(t, w, h)
+	dir := t.TempDir()
+	l, err := session.Open(dir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := l.Append("user", "qwen3:8b", "explain this repo", "", time.Date(2026, 9, 7, 21, 31, 2, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	path := l.Path()
+	if err := l.Close(); err != nil {
+		t.Fatal(err)
+	}
+	fixed := time.Date(2026, 9, 7, 21, 45, 3, 0, time.UTC)
+	if err := os.Chtimes(path, fixed, fixed); err != nil {
+		t.Fatal(err)
+	}
+	list, err := session.ListSessions(dir)
+	if err != nil || len(list) != 1 {
+		t.Fatalf("ListSessions = (%v, %v)", list, err)
+	}
+	m.agent.sessionDir = dir
+	m.agent.resumeOpen = true
+	m.agent.resumeList = list
+	m.agent.resumeIdx = 0
+	return m
+}
+
+// buildAgentResumed (V2a) imports a saved transcript into the live Agent
+// conversation: the transcript renders with its historical model chips and
+// meta, and the statusline carries the resume notice.
+func buildAgentResumed(t *testing.T, w, h int) App {
+	m := buildAgent(t, w, h)
+	m.agent.numCtx = 2048
+	m.agent = m.agent.applySessionLoaded(sessionLoadedMsg{
+		path: "/state/selftui/sessions/chat-20260907-214503.123-4321.md",
+		turns: []session.Turn{
+			{Role: "user", Model: "qwen3:8b", Content: "explain this repo"},
+			{Role: "assistant", Model: "qwen3:8b", Meta: "0.4s · stop",
+				Content: "It is a mobile-first terminal UI for Ollama, styled like the opencode.ai TUI."},
+		},
+	})
+	return m
+}
+
 func buildSettingsEditing(t *testing.T, w, h int) App {
 	m := bootApp(t, w, h)
 	return updateTab(t, m, tea.KeyPressMsg{Text: "3"})
@@ -235,6 +289,8 @@ var goldenFrames = []goldenFrame{
 	{"agent-compact", 72, 30, buildAgent},
 	{"agent-turn-compact", 72, 30, buildAgentTurn},
 	{"agent-picker-compact", 72, 30, func(t *testing.T, w, h int) App { return buildAgentModal(t, w, h, openModelPicker) }},
+	{"agent-resume-picker-compact", 72, 30, buildAgentResumePicker},
+	{"agent-resumed-compact", 72, 30, buildAgentResumed},
 	{"agent-slash-compact", 72, 30, func(t *testing.T, w, h int) App { return buildAgentModal(t, w, h, openSlashMenu) }},
 	{"agent-help-compact", 72, 30, func(t *testing.T, w, h int) App { return buildAgentModal(t, w, h, openHelp) }},
 	{"agent-clear-confirm-compact", 72, 30, func(t *testing.T, w, h int) App { return buildAgentModal(t, w, h, openClearConfirm) }},
@@ -245,6 +301,8 @@ var goldenFrames = []goldenFrame{
 	{"agent-wide", 120, 40, buildAgent},
 	{"agent-turn-wide", 120, 40, buildAgentTurn},
 	{"agent-picker-wide", 120, 40, func(t *testing.T, w, h int) App { return buildAgentModal(t, w, h, openModelPicker) }},
+	{"agent-resume-picker-wide", 120, 40, buildAgentResumePicker},
+	{"agent-resumed-wide", 120, 40, buildAgentResumed},
 	{"agent-slash-wide", 120, 40, func(t *testing.T, w, h int) App { return buildAgentModal(t, w, h, openSlashMenu) }},
 	{"agent-help-wide", 120, 40, func(t *testing.T, w, h int) App { return buildAgentModal(t, w, h, openHelp) }},
 	{"agent-clear-confirm-wide", 120, 40, func(t *testing.T, w, h int) App { return buildAgentModal(t, w, h, openClearConfirm) }},
@@ -547,6 +605,14 @@ func TestLightThemeRendersEveryTab(t *testing.T) {
 		case "agent-clear-confirm-compact", "agent-clear-confirm-wide":
 			if !strings.Contains(stripped, "clear") {
 				t.Errorf("light %s: confirm modal missing confirm action", f.name)
+			}
+		case "agent-resume-picker-compact", "agent-resume-picker-wide":
+			if !strings.Contains(stripped, "saved chats") {
+				t.Errorf("light %s: resume picker missing the picker title", f.name)
+			}
+		case "agent-resumed-compact", "agent-resumed-wide":
+			if !strings.Contains(stripped, "It is a mobile-first") {
+				t.Errorf("light %s: resumed transcript content missing", f.name)
 			}
 		case "palette-compact", "palette-wide":
 			if !strings.Contains(stripped, "command") && !strings.Contains(stripped, "palette") {

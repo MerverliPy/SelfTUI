@@ -1,5 +1,14 @@
   Models    Agent    Settings                                                                                           
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│❯ you                                                                                                                 │
+│                                                                                                                      │
+│  explain this repo                                                                                                   │
+│                                                                                                                      │
+│                                                                                                                      │
+│◈ qwen3:8b                                                                                                 0.4s · stop│
+│                                                                                                                      │
+│  It is a mobile-first terminal UI for Ollama, styled like the opencode.ai TUI.                                       │
+│                                                                                                                      │
 │                                                                                                                      │
 │                                                                                                                      │
 │                                                                                                                      │
@@ -24,17 +33,8 @@
 │                                                                                                                      │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
-│❯ /clear  clear the conversation (asks first)                                                                         │
-│  /model  pick a model (m)                                                                                            │
-│  /resume  resume a saved chat transcript                                                                             │
-│  /theme  toggle dark/light for this session                                                                          │
-│  /export  flush + reveal the transcript file path                                                                    │
-│  /help  list slash commands and keys                                                                                 │
-│  /refresh  reload the model list (r)                                                                                 │
+│◈ qwen3:8b                                                                                    ctx ░░░░░ 3% · 0.0k/1.5k│
+│❯ / for commands, or chat with the selected model…                                                                    │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
-╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
-│◈ qwen3:8b                                                                                    ctx ░░░░░ 0% · 0.0k/3.1k│
-│❯ /                                                                                                                   │
-╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
-enter send · shift+enter newline · esc clear draft                                                                      
+resumed 2 turns from chat-20260907-214503.123-4321.md                                                                   
  ⏻ http://localhost:11434 · tools off · /tmp                                                      Agent · 120x40 · wide 
