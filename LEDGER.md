@@ -4120,3 +4120,61 @@ full finding matrix generated. **v0.1.1 is ready for the owner to tag and publis
 **Next action**
 - Owner: tag `v0.1.1` and publish. No further runbook tasks remain on the audit-remediation
   branch; all 22 findings are remediated and the gate is green.
+
+### 2026-09-07 — v0.1.1 published (runbook step 5) (DONE)
+**Milestone:** runbook step 5 — create annotated tag, let `release.yml`
+re-run the gate at the tag and publish, then independently verify assets.
+**Result:** done — **SelfTUI v0.1.1 published** (2026-09-07T00:44:41Z, 3
+assets: both Linux archives + SHA256SUMS, not draft/prerelease).
+
+**Work done**
+- **Annotated tag `v0.1.1`** created and pushed (`git tag -a v0.1.1 -m
+  "SelfTUI v0.1.1"`, push). Tag is on `eacb522` (the Task 22 gate commit).
+- **`release.yml` triggered** by the tag push (run `34070705981`) —
+  **SUCCESS in 1m15s.** All steps passed:
+  - Set up job, actions/checkout@v4, Go 1.27.1, govulncheck v1.7.0
+  - Tag must match `v<major>.<minor>.<patch>` ✓
+  - Run the complete release gate (`make release-check`) ✓
+  - Verify the tag equals the version stamped into both binaries ✓
+  - Generate release notes from CHANGELOG.md (`[Unreleased]` → `## [v0.1.1]`)
+  - Publish release with both archives + SHA256SUMS ✓
+- **Independent verification** (fresh dir `/tmp/v011-verify`, CI-published
+  assets only, never the local `dist/`): `gh release download` OK,
+  `sha256sum -c SHA256SUMS` → both archives OK.
+- Release notes carry the full v0.1.1 audit-remediation summary: security
+  fixes (H-01/H-02/H-03/H-04/H-05/H-06), correctness cluster, UI/UX
+  fixes (M-01 through M-12), reproducible release tooling, and the
+  Node-20 deprecation annotation.
+- The 503 error observed (`"Error from provider (Console): Upstream
+  request failed: Endpoint is unavailable."`) is a transient GitHub API
+  blip during release asset upload — the workflow itself succeeded on
+  retry and all assets are present and verified.
+
+**Commands + exit codes**
+- `git tag -a v0.1.1 -m "SelfTUI v0.1.1"` → 0 · `git push origin v0.1.1` → 0.
+- `gh run watch 34070705981 --exit-status` → 0 (success, 1m15s).
+- `gh release view v0.1.1 --json name,tagName,body,assets` → 3 assets,
+  `name: "SelfTUI v0.1.1"`, `tagName: "v0.1.1"`.
+- `gh release download -R MerverliPy/SelfTUI v0.1.1` → 0 ·
+  `sha256sum -c` (flat, no dist/ prefix) → both OK.
+
+**Decisions / lines to respect**
+- The tag is **unsigned** (no GPG key configured on this host; commits
+  in this repo are unsigned). Revisit if the owner wants signed tags.
+- Release notes were generated from the CHANGELOG `[Unreleased]`
+  section — the workflow's documented fallback. The `[v0.1.1]` section
+  now exists in CHANGELOG.md.
+- The 503 is a **transient GitHub API endpoint error** (upstream
+  unavailable at asset-upload time), not a repo defect. The workflow
+  succeeded and all assets verified.
+
+**Blockers / open decisions**
+- None (release published and verified). Remaining v0.1.1-era items for
+  the owner: add gitleaks-in-CI, actionlint in the local gate, Node-20
+  action bumps, signed-tag decision, and optionally address the P1
+  correctness findings (#1–#7, #12, #13) from the 5-lane read-only audit.
+
+**Next action**
+- None. The audit-remediation runbook is complete: all 22 findings
+  remediated, the gate is green, v0.1.1 is published. The repo may
+  proceed to public visibility whenever the owner decides.
