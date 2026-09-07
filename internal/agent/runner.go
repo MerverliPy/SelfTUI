@@ -594,33 +594,28 @@ func parseEmbeddedToolCalls(text string) []ollama.ToolCall {
 	return embeddedCalls(raw)
 }
 
+// embeddedCalls accepts only a tool-framed turn: an explicit
+// {"tool_calls":[...]} envelope, the same shape the wire protocol uses for
+// native calls. Ordinary JSON output — a bare {"name":...} object, a
+// "function" wrapper, or a top-level array of calls — is prose: rendering it
+// as text must never let it execute (the envelope is what distinguishes a
+// model that intends an execution from one that is merely emitting JSON).
 func embeddedCalls(raw any) []ollama.ToolCall {
-	if list, ok := raw.([]any); ok {
-		var calls []ollama.ToolCall
-		for _, item := range list {
-			if call := embeddedCall(item); call.Function.Name != "" {
-				calls = append(calls, call)
-			}
-		}
-		return calls
-	}
 	obj, ok := raw.(map[string]any)
 	if !ok {
 		return nil
 	}
-	if list, ok := obj["tool_calls"].([]any); ok {
-		var calls []ollama.ToolCall
-		for _, item := range list {
-			if call := embeddedCall(item); call.Function.Name != "" {
-				calls = append(calls, call)
-			}
+	list, ok := obj["tool_calls"].([]any)
+	if !ok {
+		return nil
+	}
+	var calls []ollama.ToolCall
+	for _, item := range list {
+		if call := embeddedCall(item); call.Function.Name != "" {
+			calls = append(calls, call)
 		}
-		return calls
 	}
-	if call := embeddedCall(obj); call.Function.Name != "" {
-		return []ollama.ToolCall{call}
-	}
-	return nil
+	return calls
 }
 
 func embeddedCall(raw any) ollama.ToolCall {

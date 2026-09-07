@@ -379,34 +379,69 @@ func TestMergeToolCallsAdversarial(t *testing.T) {
 	})
 }
 
+// Content-embedded tool JSON is only honored when the model explicitly frames
+// the turn as a tool-call batch — an {"tool_calls":[...]} envelope, optionally
+// inside a ```json fence. Ordinary JSON output (a bare {"name":...} object, a
+// top-level array) is prose: it must render as text, never execute.
 func TestRunnerParsesContentEmbeddedToolJSON(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "x.txt"), []byte("needle\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	calls := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls++
-		w.Header().Set("Content-Type", "application/x-ndjson")
-		if calls == 1 {
-			io.WriteString(w, finalEvent(`{"name":"grep","arguments":{"pattern":"needle","path":"x.txt"}}`))
-			return
+
+	// runToolCase drives one Run over a scripted two-turn endpoint.
+	runToolCase := func(t *testing.T, firstContent string) (calls int, got string) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls++
+			w.Header().Set("Content-Type", "application/x-ndjson")
+			if calls == 1 {
+				io.WriteString(w, finalEvent(firstContent))
+				return
+			}
+			io.WriteString(w, finalEvent("found it"))
+		}))
+		t.Cleanup(srv.Close)
+		r := NewRunnerWithPolicy(ollama.New(srv.URL, ""), root, "", 3, &ToolPolicy{})
+		err := r.Run(context.Background(), Request{Model: "coder", Messages: []ollama.ChatMessage{{Role: ollama.RoleUser, Content: "find needle"}}}, func(msg Msg) {
+			if token, ok := msg.(TokenMsg); ok {
+				got += token.Text
+			}
+		})
+		if err != nil {
+			t.Fatalf("Run: %v", err)
 		}
-		io.WriteString(w, finalEvent("found it"))
-	}))
-	t.Cleanup(srv.Close)
-	var got string
-	r := NewRunnerWithPolicy(ollama.New(srv.URL, ""), root, "", 3, &ToolPolicy{})
-	if err := r.Run(context.Background(), Request{Model: "coder", Messages: []ollama.ChatMessage{{Role: ollama.RoleUser, Content: "find needle"}}}, func(msg Msg) {
-		if token, ok := msg.(TokenMsg); ok {
-			got += token.Text
+		return calls, got
+	}
+
+	t.Run("tool_calls envelope executes", func(t *testing.T) {
+		calls, got := runToolCase(t, `{"tool_calls":[{"name":"grep","arguments":{"pattern":"needle","path":"x.txt"}}]}`)
+		if calls != 2 || got != "found it" {
+			t.Errorf("calls=%d final=%q, want 2 and found it", calls, got)
 		}
-	}); err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	if calls != 2 || got != "found it" {
-		t.Errorf("calls=%d final=%q, want 2 and found it", calls, got)
-	}
+	})
+
+	t.Run("fenced tool_calls envelope executes", func(t *testing.T) {
+		calls, got := runToolCase(t, "```json\n{\"tool_calls\":[{\"name\":\"grep\",\"arguments\":{\"pattern\":\"needle\",\"path\":\"x.txt\"}}]}\n```")
+		if calls != 2 || got != "found it" {
+			t.Errorf("calls=%d final=%q, want 2 and found it", calls, got)
+		}
+	})
+
+	t.Run("bare name/arguments object is prose, not a tool call", func(t *testing.T) {
+		bare := `{"name":"grep","arguments":{"pattern":"needle","path":"x.txt"}}`
+		calls, got := runToolCase(t, bare)
+		if calls != 1 || got != bare {
+			t.Errorf("calls=%d final=%q, want the bare object rendered as text and no second request", calls, got)
+		}
+	})
+
+	t.Run("top-level call array is prose, not a tool call", func(t *testing.T) {
+		array := `[{"name":"grep","arguments":{"pattern":"needle","path":"x.txt"}}]`
+		calls, got := runToolCase(t, array)
+		if calls != 1 || got != array {
+			t.Errorf("calls=%d final=%q, want the array rendered as text and no second request", calls, got)
+		}
+	})
 }
 
 func TestRunnerExplicitPlainChatFallbackOnToolRejection(t *testing.T) {

@@ -70,12 +70,12 @@
 - [x] Task 14 — M-07 delete overlay
 - [x] Task 15 — M-08 redirect policy
 - [x] Task 16 — M-09 spinner lifecycle
-- [ ] Task 17 — M-10 release reproducibility
-- [ ] Task 18 — M-11 private smoke captures
-- [ ] Task 19 — M-12 documentation alignment
-- [ ] Task 20 — L-01 golden coverage
-- [ ] Task 21 — L-02 cleanup/hygiene
-- [ ] Task 22 — final release-candidate gate
+- [x] Task 17 — M-10 release reproducibility
+- [x] Task 18 — M-11 private smoke captures
+- [x] Task 19 — M-12 documentation alignment
+- [x] Task 20 — L-01 golden coverage
+- [x] Task 21 — L-02 cleanup/hygiene
+- [x] Task 22 — final release-candidate gate
 
 ---
 
@@ -757,3 +757,31 @@ Final response must include: branch/HEAD, all finding statuses, all commits, ful
 A finding is complete only when its regression failed before the patch for the expected reason, passed after the patch, the requested broader gates passed freshly, the diff was reviewed, and the result was recorded in `LEDGER.md`. For a runtime-dependent finding, `NOT_REPRODUCED` with a deterministic test and exact evidence is an acceptable disposition; an untested assumption is not.
 
 Do not collapse tasks merely because they touch the same file. The numbered commits are intentional review and rollback boundaries.
+
+---
+
+## Completion addendum — 2026-09-07 (all 22 tasks DONE)
+
+**Status: COMPLETE.** Every task above (00–22) was executed one task per fresh Pi
+session, on branch `fix/v0.1.1-audit-remediation`, with red-green evidence per the
+completion policy. Per-task evidence lives in `LEDGER.md` (the chronological source
+of truth); this addendum is a status-level summary appended after the fact — the
+task blocks above are preserved verbatim and are not a work queue anymore.
+
+- **Findings C-01 through L-02:** all 22 remediated (committed fixes or recorded
+  `NOT_REPRODUCED` dispositions per the completion policy).
+- **Final gate (Task 22, 2026-09-06):** `VERSION=v0.1.1 make release-check` → exit 0
+  (go1.27.1, govulncheck v1.7.0: 0 affecting vulnerabilities; deterministic archives
+  verified across umasks; `scripts/release-check-test.sh` 52/52). Finding matrix:
+  `dist/v0.1.1-finding-matrix.md`.
+- **Release:** SelfTUI v0.1.1 tagged and published 2026-09-07 (annotated tag;
+  `release.yml` gate re-ran green at the tag; 3 assets: both Linux archives +
+  `SHA256SUMS`).
+- **Post-release:** the 5-lane read-only audit's P1 correctness cluster (#1–#7,
+  #12, #13) was implemented separately on the same branch (see LEDGER 2026-09-06),
+  ahead of the v0.2 roadmap (PLAN §10: V2a → V2b → V2c → V2d).
+- **Checklist note:** Tasks 17–22 checkboxes above were unticked until 2026-09-07
+  despite recorded completion; they are ticked now with this addendum. No task text
+  was altered.
+
+The runbook is closed. Do not execute the task blocks above again.
