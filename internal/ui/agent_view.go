@@ -275,8 +275,8 @@ type sessionLoadedMsg struct {
 // (agentModelsLoadedMsg/agentModelsErrMsg), the recorder outcomes
 // (sessionAppendMsg/sessionExportMsg), and every event the chat activity
 // channel delivers (agent.TokenMsg, agent.ToolStartMsg, agent.ToolResultMsg,
-// agent.ToolConfirmMsg, agent.FallbackMsg, agent.AgentDoneMsg). App.Update
-// has exactly one routing case
+// agent.ToolConfirmMsg, agent.ToolOutputMsg, agent.FallbackMsg,
+// agent.AgentDoneMsg). App.Update has exactly one routing case
 // per child and unwraps before delegating, so any payload that is produced is
 // routed by construction — a newly added async result can no longer be
 // dropped at the shell (the 2026-09-06 ToolConfirmMsg routing bug).
@@ -486,6 +486,15 @@ func (v AgentView) Update(msg tea.Msg) (AgentView, tea.Cmd) {
 			// Summary can carry bytes read from the workspace at a hostile
 			// model's request; sanitize the composed status row as one value.
 			v.toolStatus = sanitizeTerminalText(prefix + msg.Name + ": " + firstLine(msg.Summary))
+		}
+		return v, v.waitChatCmd()
+
+	case agent.ToolOutputMsg:
+		if v.streaming {
+			// Command output is remote/model-requested process output; only a
+			// sanitized first line reaches the statusline. The complete bounded
+			// result is sent back to the model through ToolResultMsg.
+			v.toolStatus = sanitizeTerminalText("… " + msg.Name + " " + msg.Stream + ": " + firstLine(msg.Text))
 		}
 		return v, v.waitChatCmd()
 
@@ -1981,6 +1990,10 @@ func (v AgentView) renderConfirmationOverlay(bodyH int) string {
 	if c == nil {
 		return ""
 	}
+	title := "Confirm mutation"
+	if c.Name == "run_command" {
+		title = "Confirm sandboxed command"
+	}
 	lines := []string{
 		"Allow " + c.Name + "?",
 		"workspace: " + c.Workspace,
@@ -1989,7 +2002,7 @@ func (v AgentView) renderConfirmationOverlay(bodyH int) string {
 		"",
 		"y / enter approve · n / esc decline",
 	}
-	return v.renderOverlayTitle(bodyH, "Confirm mutation", lines)
+	return v.renderOverlayTitle(bodyH, title, lines)
 }
 
 // slashMenuMaxRows fits the whole command set (seven commands as of the

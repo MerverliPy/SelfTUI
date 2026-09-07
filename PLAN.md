@@ -247,7 +247,7 @@ start
 | `edit_file` | path, old, new | exact-match replace, verify applied; policy-gated before confirmation |
 | `list_dir` | path | shallow dir listing; policy-gated |
 | `grep` | pattern, path | rg-backed over project; policy-gated |
-| ~~`run_command`~~ | ~~argv, timeout~~ | **Deferred — not shipped in v0.1 (2026-09-03).** The executor, its schema, and its dispatch case were removed from the public release; no command execution ships. See `docs/run-command-containment.md`. A future release would need a real OS/container sandbox, since cwd + argv filtering is not one. |
+| `run_command` | argv, timeout | **V2c (v0.2):** bwrap-sandboxed allowlisted `go`/read-only `git`; no shell/interpreter; scrubbed env; timeout/output caps; process-group kill; single-flight; per-call confirmation. See `docs/run-command-containment.md`. v0.1 did not ship this tool. |
 
 ### Safety rules
 - **Workspace tools are opt-in (Phase 4).** `NewRunner` (the compatibility
@@ -270,13 +270,14 @@ start
   status bar and Agent statusline; tools enabled against a non-loopback
   host shows a persistent warning that workspace content may be sent to
   that host. No onboarding wizard in v0.1.
-- **These are guardrails, not a sandbox.** A workspace cwd + timeout + denylist do *not* stop a
-  command from reading credentials, hitting the network, writing absolute paths, spawning
-  children, or escaping via interpreters. Per council audit (finding A): v1 `run_command` is
-  an **argv allowlist with no shell/interpreter**, scrubbed env, resource + output limits,
-  process-group kill, cancellation, and per-call confirmation. **Resolved for v0.1
-  (2026-09-03): `run_command` is dropped — no command execution ships**, since cwd + argv
-  filtering is not an OS sandbox; the design is deferred in `docs/run-command-containment.md`.
+- **V2c command safety:** `run_command` adds a bubblewrap OS boundary to the
+  existing guardrails: selective read-only system/toolchain/module-cache
+  mounts, workspace-only host write access, private `/tmp`, no network,
+  scrubbed environment, and parent/descendant teardown. Bubblewrap has no
+  CPU/memory cap, so the residual WSL2 host-OOM risk remains documented in
+  `docs/run-command-containment.md`; timeout (30s default/60s cap), output
+  caps, serialization, process-group kill, argv allowlist, and confirmation
+  are mandatory and tested. v0.1 intentionally omitted command execution.
 - The safety controls for each tool ship **inline with that tool** in its milestone (not
   deferred to a final hardening milestone).
 - Max tool iterations and max tokens bound each run.
@@ -541,15 +542,28 @@ confirm); rootless Docker stays the documented opt-in engine (`--memory`
 enforced; bwrap has no CPU/memory caps). ✅ *Exit: evidence doc + verdict GO →
 V2c.*
 
-**V2c — Sandboxed run_command (only on V2b GO).** Reinstate command execution
-behind the V2b sandbox + the deferred containment design (argv allowlist, no
-shell/interpreter, scrubbed env, limits, process-group kill, per-call
-confirm). ✅ *Exit: agent runs allowed commands inside the sandbox, all
+**V2c — Sandboxed run_command (only on V2b GO).** ✅ *done 2026-09-07:* command
+execution reinstated behind bubblewrap (default engine) plus the containment
+design: argv allowlist, no shell/interpreter, scrubbed environment, private
+filesystem/network boundary, timeout/output limits, single-flight
+serialization, process-group kill, and per-call confirmation. Tests cover the
+full mitigation stack and an offline `go test` workload inside bwrap. See
+`docs/run-command-containment.md` and `docs/v2c-sandbox-evidence.md` plus the
+V2c ledger entry. ✅ *Exit: agent runs allowed commands inside the sandbox, all
 gated + tested.*
 
 **V2d — Agent breadth.** Git-awareness / multi-file edits / project indexing
 (risk #3); the exact cut is decided at that session's start after V2a–V2c.
-✅ *Exit: per its own scoped exit criteria.*
+✅ *done 2026-09-07 — cut owner-selected in-session: git-awareness + project
+indexing (multi-file edits and mutation undo/redo stay out of this cut).*
+Every armed agent turn now starts with a bounded workspace-context system
+message (`internal/agent/workspace.go`): git branch/porcelain status/last 3
+commits (fixed read-only host-side `git` argv, 3s timeout, omitted outside a
+repo) plus a depth-4/entry-300 project index with `.git` pruned. Plain chat
+never receives it; the closed tool schema is unchanged. ✅ *Exit: per its own
+scoped exit criteria — context injected + bounded + tested (unit, git-repo,
+boundedness, depth-cap, cancellation, wire-shape tests), `make check` and
+`go test -race` green.*
 
 ---
 
@@ -590,6 +604,12 @@ tests, settings save-error + retry test, context-truncation edge fixes
 args counted), digit-tab-jump bug fix + regression test, `-version` flag,
 release docs (`docs/reconnect.md`, README). `make check` and `go test -race`
 green.
+**V2c — sandboxed `run_command` landed 2026-09-07:** bwrap is the default
+and fail-closed engine for the allowlisted, confirmed `go`/read-only `git`
+command tool; the workspace is the only writable host mount, network is
+unshared, environment is scrubbed, and timeout/output/serialization/group-kill
+mitigations are tested. Residual bwrap memory/CPU risk and the validated
+rootless-Docker alternative are documented in `docs/run-command-containment.md`.
 **M7 — UX polish landed 2026-09-06** (opencode.ai TUI as the feel reference):
 slash-command menu + `ctrl+p` palette (A), transcript feel — caret, turn
 footers with elapsed + stop reason — later moved onto the assistant header's
@@ -728,10 +748,95 @@ stays the owner's call** — the repo may now go public at the owner's
 discretion.
 
 **v0.2 scope (2026-09-07, owner-selected via chat):** **chat session resume**,
-**sandboxed command execution** (requires the V2b sandbox spike gate first),
-and **agent breadth** — sequenced as V2a→V2b→V2c→V2d (§10) as a **small
-focused release** (one gate per session; v0.2 tags when the set lands).
+**sandboxed command execution**, and **agent breadth** — sequenced as
+V2a→V2b→V2c→V2d (§10) as a **small focused release** (one gate per session;
+V2a, V2b, and V2c are landed; v0.2 tags when the set lands).
 **Excluded from v0.2 (not owner-selected):** mobile residuals (landscape/
 rotation geometry measurement, post-reconnect probe block `m6-live-1b`).
-Remaining owner click: upload the GPG public key at github.com/settings/keys
-for the green Verified badge.
+**v0.2.0 tagged 2026-09-07** (signed annotated tag after the V2d session
+landed the set; see LEDGER). Remaining owner click: upload the GPG public
+key at github.com/settings/keys for the green Verified badge.
+
+## 12. Next-level TUI plan — performance · usability · visibility (PROPOSAL, planning-only, 2026-09-07)
+
+Status: **proposal, not committed scope.** Owner-selected v0.2 (V2a–V2d) stays
+first in line (V2a–V2c are landed; V2d cut is decided at that session's start). This §12
+is the planning phase the owner requested 2026-09-07 ("take the TUI to the next
+level in performance, usability, visibility") — an N-series cut for the owner to
+sequence as v0.3 (or interleave) after v0.2 leftovers. Evidence base: web research
+brief (state of the art 2025–2026, Bubble Tea v2 / Crush / opencode / Claude Code
+statusline; artifact: subagent research.md d7577a9c) + repo recon against the D4
+benchmarks. Claims below were verified against the pinned tree where marked ✅v.
+
+### N1 — Render windowing (P, highest value, baseline pinned)
+The known hotspot: `chatLines` rebuilds the **O(total cached lines)** join every
+frame (D4: ChatPane100x ≈1.5 ms/op · 14k allocs; ChatLines100x ≈0.87 ms/op).
+Plan: render only the visible window — slice from the cached per-turn blocks and
+join O(visible) lines; finalized turns stay frozen (Crush pattern: per-width render
+cache + versioned invalidation + `Finished()` freeze; SelfTUI already has the
+per-width cache, so the delta is the window slice). Gate: new bench must beat the
+pinned ChatLines100x baseline; golden frames unchanged (72×30 + 120×40 still
+byte-identical). ✅v baseline verified in `internal/ui/agent_view_bench_test.go`.
+
+### N2 — Streaming repaint discipline (P)
+During a live stream, re-render only the active block, not the whole pane; cache
+thinking/content sections separately so stream deltas don't invalidate rendered
+neighbors (Crush pattern); batch deltas to a repaint tick instead of per-token
+frames. Keep the "▍" caret + follow behavior intact (M7-B pins the UX).
+
+### N3 — tok/s + exact token counts (V+U, cheap, high value)
+✅v `eval_count` / `prompt_eval_duration` from Ollama's final stream chunk are **not
+parsed today**; the ctx meter runs on `agent.ApproxTokens`. Plan: parse the final
+chunk in `internal/ollama`, surface per-turn `model · 3.4s · stop · 41 tok/s` in the
+existing M7-B turn footer, and upgrade the M7-C ctx meter with measured prompt
+tokens when a turn completes (ApproxTokens stays for live drafting).
+
+### N4 — Status bar as observability row (V)
+Extend the persistent bottom row to `model · ctx bar · tok/s · host` with an **amber
+tier** (~80% of num_ctx) before today's red-100% tier (meter is a correctness
+feature — over num_ctx silently truncates). Add background-job pills (pull progress,
+queued turns) in Crush style. All content lives in the already-cached status row, so
+frame cost ≈ 0.
+
+### N5 — Debug/log drawer (V)
+Keybind-toggled drawer over `charmbracelet/log`: ollama request/response traces,
+reconnect events, agent loop decisions (tool calls, budget, truncation markers).
+k9s-style pattern; ships with a `selftui --log-file` flag so drawer + file share one
+sink. Read-only; no secrets (redact bearer tokens).
+
+### N6 — Chat composer upgrades (U)
+- `@`-file fuzzy reference in the agent input (opencode pattern): pick a workspace
+  file, inline it into the draft/agent context (SelfTUI's jailed read_file already
+  defines the path safety rules).
+- `/details` + `/thinking` toggles to gate tool-output and reasoning blocks
+  (qwen3 thinking is suppressed in the loop; this surfaces it on demand).
+- Amber/red ctx-tier already in N4; palette (`ctrl+p`) remains the discoverable
+  path — a leader key is deliberately **not** adopted (72×30 phone: discoverable >
+  muscle-memory chords).
+
+### N7 — Upstream tracking (P, no code now)
+✅v Pinned `bubbletea v2.0.9` does **NOT** have `WithScrollOptimization` (research
+flagged release status unconfirmed; verified absent). When Charm ships the
+scroll-optimized flush (#1725/#1761) + event-driven rendering (#1776) in a release,
+pin it and re-run the D4 bench + a 72×30 scroll-frame bench. Track glamour
+width-bucketing (round width to 5 cols so resize jitter doesn't rebuild the
+renderer) as a micro-item under N1.
+
+### N8 — Spike (device test, owner-run): native scrollback via tea.Println
+Charm's chat-history pattern (discussion #1482): print *finalized* turns to the
+terminal's native scrollback (`tea.Println`) so old turns cost zero bytes over SSH;
+TUI owns only input + streaming area. Biggest open trade-off: iPhone SSH clients
+(Blink/Termius) may capture gestures / behave oddly with native scrollback —
+**on-device spike before any commitment**. Cheap alternative if N1 windowing lands:
+stay in altscreen; N8 is optional.
+
+### Explicitly rejected / deferred
+- Leader-key two-stroke chords (discoverability at 72×30; palette wins).
+- Mouse capture (keep off; preserve native selection/scroll).
+- Undo/redo of agent mutations (touches the V2c jail; revisit with V2d, owner
+  decision — aider/opencode precedent noted but out of this cut).
+
+### Sequencing sketch (owner to confirm)
+N1 → N3 → N4 → N2 → N6 → N5 → N7(continuous) → N8(spike). Each N-item = one
+session per the binding session rule; N1 first (benchmark baseline exists and any
+windowing work "must beat" it per the D4 ledger entry).

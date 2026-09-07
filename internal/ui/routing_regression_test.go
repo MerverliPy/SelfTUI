@@ -252,6 +252,13 @@ func TestAppEnvelopeRoutingTable(t *testing.T) {
 					}
 					return nil
 				}},
+			{"agent.ToolOutputMsg", envAgent, agent.ToolOutputMsg{Name: "run_command", Stream: "stdout", Text: "go version go1.27\n"}, streaming,
+				func(m App) error {
+					if m.agent.toolStatus != "… run_command stdout: go version go1.27" {
+						return errf("toolStatus = %q, want command-output activity", m.agent.toolStatus)
+					}
+					return nil
+				}},
 			{"agent.ToolConfirmMsg (approval)", envAgent, agent.ToolConfirmMsg{Name: "write_file", Input: `{"path":"x"}`, Workspace: "/tmp/ws", Timeout: 30 * time.Second}, nil,
 				func(m App) error {
 					if m.agent.confirmation == nil || m.agent.confirmation.Name != "write_file" || !m.agent.ModalOpen() {

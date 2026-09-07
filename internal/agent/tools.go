@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"selftui/internal/ollama"
 )
@@ -61,6 +62,16 @@ func AgentTools() []ollama.ToolDefinition {
 			Parameters: map[string]any{
 				"type": "object", "properties": map[string]any{"path": map[string]any{"type": "string"}, "old": map[string]any{"type": "string"}, "new": map[string]any{"type": "string"}},
 				"required": []string{"path", "old", "new"},
+			},
+		}},
+		{Type: "function", Function: ollama.ToolFunction{
+			Name: "run_command", Description: "Run an approved command inside the bubblewrap sandbox. Requires user approval.",
+			Parameters: map[string]any{
+				"type": "object", "properties": map[string]any{
+					"argv":    map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+					"timeout": map[string]any{"type": "integer", "minimum": 1, "maximum": int(maxCommandTimeout / time.Second)},
+				},
+				"required": []string{"argv"},
 			},
 		}},
 	}

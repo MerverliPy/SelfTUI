@@ -5,7 +5,25 @@ All notable changes to SelfTUI are recorded here. Format follows
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 for tagged releases.
 
-## [Unreleased]
+## [0.2.0] - 2026-09-07
+
+### Added
+
+- **V2d agent breadth — workspace context** (2026-09-07): with workspace tools
+  enabled, every agent turn starts with a bounded (`8 KiB`) context system
+  message: git branch, porcelain status, and the last 3 commits (fixed
+  read-only `git` argv, host-side, `3s` timeout, gracefully omitted outside a
+  git repo) plus a depth-capped (`4`) and entry-capped (`300`) project index
+  with `.git` pruned. Plain chat never receives the block; the tool schema is
+  unchanged.
+
+- **V2c sandboxed `run_command`** (2026-09-07): workspace tools can now run
+  an explicitly approved, argv-allowlisted `go` or read-only `git` command
+  inside bubblewrap with no network, a scrubbed environment, bounded timeout
+  and output, serialized execution, and process-group cancellation. The
+  default engine fails closed when bubblewrap is unavailable; residual
+  bubblewrap memory/CPU risk is documented in
+  `docs/run-command-containment.md`.
 
 ### Security
 

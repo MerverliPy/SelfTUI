@@ -19,26 +19,21 @@ import (
 // Phase 4 (workspace tool trust): ToolPolicy is the opt-in policy. A nil
 // policy (NewRunner, the compatibility constructor) means tools disabled —
 // the runner behaves as plain chat and never puts a tools field on the wire.
-// NewRunnerWithPolicy arms the five v0.1 tools and AuthorizePath gates every
-// one of them before it executes, on top of the canonical containment.
+// NewRunnerWithPolicy arms the six V2c tools and AuthorizePath gates every
+// path-based tool before it executes, on top of the canonical containment.
 
-func TestToolPolicyToolsAreTheFiveV01Tools(t *testing.T) {
+func TestToolPolicyToolsAreTheSixV2cTools(t *testing.T) {
 	var names []string
 	for _, d := range (ToolPolicy{}).Tools() {
 		names = append(names, d.Function.Name)
 	}
-	want := []string{"read_file", "list_dir", "grep", "write_file", "edit_file"}
+	want := []string{"read_file", "list_dir", "grep", "write_file", "edit_file", "run_command"}
 	if len(names) != len(want) {
 		t.Fatalf("Tools() = %v, want exactly %v", names, want)
 	}
 	for i := range want {
 		if names[i] != want[i] {
 			t.Fatalf("Tools() = %v, want exactly %v (order matters)", names, want)
-		}
-	}
-	for _, name := range names {
-		if name == "run_command" {
-			t.Fatal("Tools() must not expose run_command in v0.1")
 		}
 	}
 }
@@ -116,7 +111,7 @@ func TestDisabledRunnerSendsNoToolsField(t *testing.T) {
 	}
 }
 
-// TestPolicyRunnerSendsToolDefinitions: arming the policy puts the five v0.1
+// TestPolicyRunnerSendsToolDefinitions: arming the policy puts the six V2c
 // tools on the wire, restoring the tool loop.
 func TestPolicyRunnerSendsToolDefinitions(t *testing.T) {
 	calls := 0
@@ -126,8 +121,8 @@ func TestPolicyRunnerSendsToolDefinitions(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Fatalf("decode request: %v", err)
 		}
-		if len(req.Tools) != 5 {
-			t.Errorf("tools = %d, want the five v0.1 tools", len(req.Tools))
+		if len(req.Tools) != 6 {
+			t.Errorf("tools = %d, want the six V2c tools", len(req.Tools))
 		}
 		w.Header().Set("Content-Type", "application/x-ndjson")
 		io.WriteString(w, finalEvent("done"))

@@ -4943,3 +4943,155 @@ exists and was validated end-to-end on the release host; V2c may reinstate
 - Fresh session: owner picks. All four owner decisions (D1–D4) are now
   landed; conclave tests-for-verifications list is exhausted. Do not chain
   here.
+
+## 2026-09-07 — Next-level TUI plan drafted: PLAN.md §12 (N-series proposal, planning-only)
+
+**Work done**
+- Orchestrator triage: WORKFLOW (2 read-only lanes: web research + repo recon).
+  Channel health: default chain (deepseek/v4-flash) 402'd "Insufficient Balance"
+  on all 3 child attempts (researcher fg, scout ×2, researcher bg) — degraded per
+  ladder; ping `opencode-go/glm-5.3-flash:low` → PING-OK; research lane reran on
+  `opencode-go/glm-5.3-flash:medium` (run meta confirmed; primary never held).
+  Recon lane degraded to parent-local after scout 402 ×2.
+- Web research brief delivered (research.md, d7577a9c): Bubble Tea v2 Cursed
+  Renderer + SSH bandwidth; scroll-optimization PRs #1725/#1761 + event-driven
+  #1776; Crush memoization architecture (per-width cache, versioned invalidation,
+  Finished() freeze); glamour pool/width-bucket/gate patterns; opencode command
+  grammar; Claude Code statusline / token-meter category; Bast.sh mobile layout.
+- Parent-local recon + verification of consequential claims against the pinned
+  tree: `WithScrollOptimization` NOT in pinned bubbletea v2.0.9 (N7 = track
+  upstream); `eval_count`/`prompt_eval_duration` NOT parsed today (N3 additive);
+  one glamour TermRenderer already reused on width change (width-bucketing gap).
+- Deliverable: **PLAN.md §12** appended — N-series proposal (N1 render windowing,
+  N2 streaming repaint discipline, N3 tok/s + exact tokens, N4 status bar,
+  N5 debug drawer, N6 composer (@-refs, /details, /thinking), N7 upstream
+  tracking, N8 tea.Println scrollback spike) + explicit rejections
+  (leader chords, mouse capture, mutation undo) + sequencing sketch
+  N1→N3→N4→N2→N6→N5→N7→N8. Explicitly marked PROPOSAL; owner-selected v0.2
+  (V2c pending, V2d undecided) untouched and first in line.
+
+**Commands + exit codes**
+- `make check` (build + `go test -count=1 ./...` + vet) → 0, all packages ok.
+- `go doc charm.land/bubbletea/v2 WithScrollOptimization` → "no symbol" (confirms
+  absence in v2.0.9).
+- `rg eval_count internal/ollama` (non-test) → no hits (confirms gap).
+- PLAN.md §12 append via heredoc → exit 0; LEDGER append → exit 0.
+
+**Decisions / lines to respect**
+- Planning-only session: no production code touched; §12 is proposal status, not
+  committed scope. v0.2 scope decision (2026-09-07) not modified.
+- Leader-key chords and mouse capture deliberately rejected for the 72×30 phone
+  target; mutation undo/redo deferred to the V2d cut (touches V2c jail).
+- N8 (tea.Println native scrollback) is spike-first, owner-run on device; no
+  commitment until Blink/Termius gesture behavior is measured.
+
+**Blockers / open decisions (carry to next session)**
+- DeepSeek channel balance is empty (402 on every child attempt) — owner should
+  top up or the cost-router chains will keep landing there and failing.
+- Owner decisions pending: (a) sequence N-series as v0.3 vs interleave with
+  V2c/V2d; (b) N8 device-spike scheduling; (c) amber-tier threshold (~80% assumed).
+
+**Next action**
+- Fresh session: owner picks — V2c (sandboxed run_command, gate already GO) or
+  N1 (render windowing, D4 baseline pinned as the bar). Do not chain here.
+
+## 2026-09-07 — V2c landed: sandboxed `run_command` behind bubblewrap
+
+**Milestone:** V2c · **Result:** GO — implemented and verified.
+
+**Work done**
+- Orchestrator triage: DIRECT (zero agents) — one scoped V2c implementation;
+  canonical routing sources and the SelfTUI session ritual were read first.
+- Reinstated `run_command` as a sixth workspace tool. The runner validates a
+  fixed argv before approval, requires the existing per-call confirmation,
+  streams bounded `ToolOutputMsg` activity, and returns the bounded result.
+- Added `internal/agent/command.go`: bubblewrap 0.9.0 is the default and only
+  engine; fixed `go`/read-only `git` binaries, selective read-only mounts,
+  workspace-only writable mount, private tmpfs, no network, `--clearenv`,
+  scrubbed environment, 30s default/60s cap, 256 KiB per-stream output,
+  cancellation-aware single-flight serialization, and process-group teardown.
+  Bubblewrap absence fails closed. The trusted module-cache path is derived
+  from the toolchain/default Go cache rather than accepting an arbitrary
+  `GOMODCACHE` mount source.
+- Added real-bwrap tests for argv rejection, scrubbing, output caps,
+  single-flight cancellation, offline `go test`, read-only `git`, explicit
+  confirmation, timeout, and process-group cancellation. Routed command output
+  through the Agent UI and updated the tool-count/routing tests.
+- Replaced the stale deferred-design document with the V2c containment note;
+  added `docs/v2c-sandbox-evidence.md`; aligned README, SECURITY, CHANGELOG,
+  PLAN, and renamed the command policy test. The residual bwrap CPU/memory
+  risk and validated rootless-Docker alternative remain documented.
+
+**Commands + exit codes**
+- Focused pre-implementation test (`go test ./internal/agent -run 'TestRunCommand|TestCommandOutput' -count=1`) → 1 (expected RED: missing executor).
+- Focused V2c tests → 0; final focused verbose run (all 9 V2c tests) → 0.
+- `gofmt -l .` + `git diff --check` → 0.
+- `make check` initial implementation run → 0; a later combined `make check && go test -race` invocation returned no result and was not treated as green.
+- Follow-up `make check` after that interrupted build → 2 (generated `bin/selftui` was zero-filled); removed only that generated artifact and reran.
+- One subsequent full-package `make check` → 2 (existing timing-sensitive mutation/settings tests under load); isolated agent/UI tests → 0; final `make check` → 0.
+- Final `go test -race -count=1 ./...` → 0.
+- `bwrap --version` → 0 (`bubblewrap 0.9.0`).
+
+**Decisions / blockers**
+- Default engine is bwrap per V2b GO; no engine selector was added in this
+  focused step. Rootless Docker remains the stronger documented alternative,
+  not a second current binary path.
+- No unresolved blockers. The transient combined-gate/incomplete-build and
+  load-sensitive test failures were resolved by rerunning bounded canonical
+  checks; no source workaround or test weakening was introduced.
+
+**Next action**
+- Start a fresh pi session at `/home/calvin/SelfTUI` for V2d; decide its exact
+  agent-breadth cut at that session's start. Do not chain V2d here.
+
+## 2026-09-07 — V2d landed: agent breadth (git-awareness + project indexing)
+
+**Milestone:** V2d · **Result:** GO — implemented and verified. v0.2 set (V2a–V2d) complete.
+
+**Work done**
+- Orchestrator triage: DIRECT (zero agents) — one scoped implementation;
+  canonical routing sources + SelfTUI session ritual read first. The V2d cut
+  itself was owner-selected in-session via structured question:
+  **git-awareness + project indexing** (multi-file edits and mutation
+  undo/redo explicitly stayed out of this cut).
+- Added `internal/agent/workspace.go`: `WorkspaceContext(ctx, root)` builds a
+  bounded (8 KiB) context block — Git section (branch via `rev-parse`
+  probe, `status --porcelain -b` capped at 40 lines, `log --oneline -n 3`;
+  fixed read-only host-side argv, 3s timeout, section omitted gracefully
+  outside a git repo or without git) + Project index (WalkDir tree, depth
+  ≤ 4, ≤ 300 entries, `.git` pruned, `[index truncated]` markers).
+- Runner wiring: armed runners (`NewRunnerWithPolicy`) append the block as a
+  second pinned system message every turn (BudgetMessages pins the whole
+  leading system prefix); plain chat (`NewRunner`, no policy) never receives
+  it. The closed six-tool schema is untouched — no new execution primitive.
+- Tests (`internal/agent/workspace_test.go`): non-git dir, real git repo
+  fixture (branch/porcelain/log/index assertions), 8 KiB bound + truncation
+  marker, depth cap, canceled context → empty, armed-runner wire shape
+  (system + workspace context + user), plain-chat wire shape (exactly
+  system + user, no tools field).
+- Docs: README (workspace-context paragraph), CHANGELOG (Unreleased/Added),
+  PLAN §10 V2d exit tick.
+
+**Commands + exit codes**
+- `gofmt -l .` → empty; `go vet ./...` → 0.
+- `go test ./internal/agent -run 'TestWorkspace|TestArmedRunner|TestPlainChatRunner' -count=1` → ok (after one RED→GREEN fix: section newline + porcelain assertion).
+- `make check` → 0 (build + tests + vet, all packages ok).
+- `go test -race -count=1 ./...` → 0 (all packages ok).
+
+**Decisions / lines to respect**
+- Git probes run host-side with fixed argv (the app is trusted; the V2c
+  sandbox is for model-requested commands only) — no shell, no model input
+  in argv. Non-git workspaces are a supported shape (tree-only block).
+- Injection is scoped to the armed agent runner: plain chat must not gain
+  workspace awareness. Per-turn rebuild (not cached) — cheap and always fresh.
+- Multi-file edits and mutation undo/redo remain out of scope (owner
+  decision recorded in-session); undo/redo still touches the V2c jail if
+  ever picked up.
+
+**Blockers / open decisions (carry to next session)**
+- None.
+
+**Next action**
+- v0.2 set (V2a–V2d) is complete: owner may tag the v0.2 release. Next
+  development work (e.g. PLAN §12 N-series) starts in a fresh session at
+  `/home/calvin/SelfTUI`. Do not chain here.
