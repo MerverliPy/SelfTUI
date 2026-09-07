@@ -4178,3 +4178,55 @@ assets: both Linux archives + SHA256SUMS, not draft/prerelease).
 - None. The audit-remediation runbook is complete: all 22 findings
   remediated, the gate is green, v0.1.1 is published. The repo may
   proceed to public visibility whenever the owner decides.
+
+### 2026-09-07 — fix/v0.1.1-audit-remediation merged to main via PR #6 (DONE)
+**Milestone:** merge the audited fix branch into the default branch.
+**Result:** done — PR #6 (`ba6e098`) merged via `--merge` (not squash —
+the 55-commit remediation history is the auditable record). Branch
+protection enforced: required check `Go fmt · vet · test · race · vuln ·
+cross-build` PASSED (1m11s). `main` now at `ba6e098`, v0.1.1 tag
+(`eacb522`) is reachable from main.
+
+**Work done**
+- **Pushed `fix/v0.1.1-audit-remediation`** to origin (the branch already
+  existed locally).
+- **Created PR #6** — `gh pr create --base main --head
+  fix/v0.1.1-audit-remediation`.
+- **CI passed** — `Go fmt · vet · test · race · vuln · cross-build`
+  passed in 1m11s (run `34072502881`).
+- **Merged PR #6** — `gh pr merge 6 --merge`. Merge commit `ba6e098`.
+  Branch `fix/v0.1.1-audit-remediation` kept (auditable history, same
+  pattern as `hardening/v0.1`).
+- **Local main synced** — `git reset --hard origin/main` → `ba6e098`.
+  v0.1.1 tag (`eacb522`) is reachable from main.
+
+**Commands + exit codes**
+- `git push origin fix/v0.1.1-audit-remediation` → 0
+- `gh pr create …` → PR #6 (`https://github.com/MerverliPy/SelfTUI/pull/6`)
+- `gh pr checks 6 --watch --fail-fast` → `pass` in 1m11s
+- `gh pr merge 6 --merge` → 0 (merge commit `ba6e098`)
+- `git reset --hard origin/main` → `ba6e098`
+- `git merge-base --is-ancestor v0.1.1 main` → YES
+
+**Decisions / lines to respect**
+- Merge via `--merge` (not squash) — the 55-commit remediation history
+  is the auditable record, same precedent as the hardening/v0.1 merge.
+- Branch kept (`fix/v0.1.1-audit-remediation`) — same pattern as
+  `hardening/v0.1` (kept for diff-review after the v0.1.0 merge).
+- The v0.1.1 tag (`eacb522`) is on the fix branch tip, which is now
+  merged into main. The tag is reachable from main.
+- Branch protection (`enforce_admins: true`, required check `Go fmt · vet ·
+  test · race · vuln · cross-build`) enforced — direct push to main
+  rejected, PR flow required.
+
+**Blockers / open decisions**
+- None. main now carries all v0.1.1 audit-remediation code.
+- Remaining items (owner): gitleaks-in-CI, actionlint in the local
+  gate, Node-20 action bumps, signed-tag decision, public-visibility
+  decision, P1 correctness findings (#1–#7, #12, #13) from the 5-lane
+  read-only audit.
+
+**Next action**
+- Owner: address remaining P0 supply-chain and P1 correctness items
+  at their discretion. The audit-remediation work is fully on main and
+  the release is published.
