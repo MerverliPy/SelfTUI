@@ -632,8 +632,7 @@ both workflows),
 **`.env*` in `.gitignore`**,
 **`.gitleaks.toml`** and **`.actionlintrc`** config files.
 
-**Queued, not started** — one P0 item remains:
-**the signed-tag decision** (whether release tags `v*` should be GPG-signed).
+**Owner decision (2026-09-07):** future release tags `v*` will be GPG-signed. Implementation (key setup + signing practice + doc note) is deferred to a follow-up step — this session only ships the P0 code + records the decision.
 **The public-visibility decision stays the owner's call** — the repo
 may now go public at the owner's discretion.
 
