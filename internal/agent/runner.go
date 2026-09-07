@@ -511,6 +511,22 @@ func (r *Runner) confirm(ctx context.Context, call ollama.ToolCall, seconds int,
 	}
 }
 
+// looksLikeEmbeddedJSON reports whether accumulated stream content should be
+// held back from the transcript because it may be a tool-call transport
+// rather than prose. Only the prefix (after trimming whitespace) matters:
+// "{" and "[" may open a tool_calls envelope — native-shaped or not — and
+// "```" may open a fenced envelope. Plain prose is never held back and
+// streams token by token as it arrives.
+//
+// The accepted tradeoff is whole-turn holdback: any turn that merely opens
+// with a JSON value or a fence — ordinary fenced code with no tool call
+// inside, a bare {"name":...} object, a top-level call array — is withheld
+// from streaming for the entire turn and flushed only once the runner proves
+// the turn carries no tool calls (the caller's no-calls flush). That cost is
+// deliberate: flashing a tool-call envelope into the transcript is worse than
+// delaying the first token of JSON- or fence-shaped prose. Mid-turn JSON —
+// "here is the JSON: {...}" — is outside this predicate entirely and always
+// streams; an envelope only works as a transport when it leads the turn.
 func looksLikeEmbeddedJSON(text string) bool {
 	trimmed := strings.TrimSpace(text)
 	return strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[") || strings.HasPrefix(trimmed, "```")

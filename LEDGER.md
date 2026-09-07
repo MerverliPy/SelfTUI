@@ -4843,3 +4843,46 @@ exists and was validated end-to-end on the release host; V2c may reinstate
 - Fresh session: owner picks — D3 (looksLikeEmbeddedJSON doc comment + pinning
   test, runner.go:514) is the queued follow-up; D4 (100× render benchmark +
   0×0 boundedness test) can ride any session with slack. Do not chain here.
+
+---
+
+## 2026-09-07 — D3 landed: looksLikeEmbeddedJSON doc comment + pinning test
+
+**Work done**
+- Orchestrator triage: DIRECT (zero agents) — doc comment on one pure predicate
+  + one pinning test; owner decision from 4df7146 fixed the exact contract.
+- `internal/agent/runner.go` (looksLikeEmbeddedJSON): full doc comment stating
+  the predicate contract (prefix-only after trim: `{`, `[`, ` ``` `), the
+  accepted **whole-turn holdback tradeoff** (ordinary fenced code / bare
+  JSON-object / top-level call-array prose is withheld for the entire turn and
+  flushed only on the no-calls flush), why that cost is deliberate (flashing a
+  tool envelope into the transcript is worse than delaying fence/JSON-shaped
+  prose), and that mid-turn JSON (`here is the JSON: {...}`) is outside the
+  predicate and always streams.
+- `internal/agent/runner_test.go`: new `TestLooksLikeEmbeddedJSONPinned` —
+  12-case table pinning: plain prose streams (incl. after blank lines), JSON
+  object/array prefix held back, fenced envelope held back, ordinary fenced
+  code held back (the tradeoff, explicitly named in the case), whitespace-
+  prefixed JSON/fence held back, mid-text JSON and post-word brace are prose,
+  bare fence alone held back. Header comment warns that changing the
+  predicate changes mid-stream UX and must be a conscious tradeoff.
+
+**Commands + exit codes**
+- `gofmt -l .` → empty; `go build ./...` → 0.
+- `go test -count=1 ./internal/agent -run TestLooksLikeEmbeddedJSONPinned -v`
+  → 12/12 PASS, exit 0.
+- `make check` (build + `go test -count=1 ./...` + vet) → 0, all packages ok.
+- `go test -race -count=1 ./internal/agent` → 0 (1.29s).
+
+**Decisions / lines to respect**
+- Doc+test only; the predicate itself is unchanged (owner decision 4df7146:
+  doc + pin, no behavior change). D4 (100× render benchmark + 0×0 boundedness
+  test) remains a separate follow-up — do not fold into any other session.
+
+**Blockers / open decisions (carry to next session)**
+- None.
+
+**Next action**
+- Fresh session: owner picks — D4 (100× transcript benchmark on
+  renderChatPane/chatLines + 0×0 boundedness test) is the last queued
+  follow-up. Do not chain here.

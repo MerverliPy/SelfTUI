@@ -444,6 +444,41 @@ func TestRunnerParsesContentEmbeddedToolJSON(t *testing.T) {
 	})
 }
 
+// TestLooksLikeEmbeddedJSONPinned pins the streaming-holdback predicate
+// (runner.go looksLikeEmbeddedJSON): content that may be a tool-call
+// transport — a JSON object/array prefix or a fence — is held back for the
+// whole turn (the accepted tradeoff, even for ordinary fenced code), while
+// plain prose — and any turn that merely contains JSON mid-text — streams.
+// Changing this predicate changes what users see mid-stream; a change here
+// must be a conscious tradeoff, not a refactor accident.
+func TestLooksLikeEmbeddedJSONPinned(t *testing.T) {
+	cases := []struct {
+		name string
+		text string
+		want bool
+	}{
+		{"empty", "", false},
+		{"plain prose streams", "Let me look for that file.", false},
+		{"prose after leading blank lines", "\n\nSure thing.", false},
+		{"json object prefix held back", `{"tool_calls":[{"name":"grep"}]}`, true},
+		{"json array prefix held back", `["candidate transport"]`, true},
+		{"fenced envelope held back", "```json\n{\"tool_calls\":[]}\n```", true},
+		{"ordinary fenced code held back (whole-turn tradeoff)", "```go\nfmt.Println(\"hi\")\n```", true},
+		{"whitespace then json held back", "\n  {\"a\":1}", true},
+		{"whitespace then fence held back", "\n\t```", true},
+		{"mid-text json is prose, streams", `Here is the JSON: {"a":1}`, false},
+		{"brace after words is prose", "weird { start", false},
+		{"bare fence alone held back", "```\n}", true}, // still opens a fence: transport-shaped
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := looksLikeEmbeddedJSON(tc.text); got != tc.want {
+				t.Errorf("looksLikeEmbeddedJSON(%q) = %v, want %v", tc.text, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestRunnerExplicitPlainChatFallbackOnToolRejection(t *testing.T) {
 	calls := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
