@@ -554,7 +554,16 @@ gated + tested.*
 
 **V2d — Agent breadth.** Git-awareness / multi-file edits / project indexing
 (risk #3); the exact cut is decided at that session's start after V2a–V2c.
-✅ *Exit: per its own scoped exit criteria.*
+✅ *done 2026-09-07 — cut owner-selected in-session: git-awareness + project
+indexing (multi-file edits and mutation undo/redo stay out of this cut).*
+Every armed agent turn now starts with a bounded workspace-context system
+message (`internal/agent/workspace.go`): git branch/porcelain status/last 3
+commits (fixed read-only host-side `git` argv, 3s timeout, omitted outside a
+repo) plus a depth-4/entry-300 project index with `.git` pruned. Plain chat
+never receives it; the closed tool schema is unchanged. ✅ *Exit: per its own
+scoped exit criteria — context injected + bounded + tested (unit, git-repo,
+boundedness, depth-cap, cancellation, wire-shape tests), `make check` and
+`go test -race` green.*
 
 ---
 

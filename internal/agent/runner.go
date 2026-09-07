@@ -194,6 +194,15 @@ func (r *Runner) run(ctx context.Context, req Request, emit func(Msg), reasonOut
 	if prompt != "" {
 		messages = append(messages, ollama.ChatMessage{Role: ollama.RoleSystem, Content: prompt})
 	}
+	// V2d agent breadth: armed runners start every turn with the bounded
+	// git/project context block as a second pinned system message (the
+	// plain-chat constructor never injects it — plain chat is not an agent
+	// turn and must not gain workspace awareness).
+	if r.policy != nil {
+		if wsCtx := WorkspaceContext(ctx, r.workspaceRoot); wsCtx != "" {
+			messages = append(messages, ollama.ChatMessage{Role: ollama.RoleSystem, Content: wsCtx})
+		}
+	}
 	messages = append(messages, req.Messages...)
 	options := &ollama.ChatOptions{Temperature: req.Temperature, TopP: req.TopP, NumCtx: req.NumCtx}
 

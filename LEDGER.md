@@ -5043,3 +5043,55 @@ exists and was validated end-to-end on the release host; V2c may reinstate
 **Next action**
 - Start a fresh pi session at `/home/calvin/SelfTUI` for V2d; decide its exact
   agent-breadth cut at that session's start. Do not chain V2d here.
+
+## 2026-09-07 — V2d landed: agent breadth (git-awareness + project indexing)
+
+**Milestone:** V2d · **Result:** GO — implemented and verified. v0.2 set (V2a–V2d) complete.
+
+**Work done**
+- Orchestrator triage: DIRECT (zero agents) — one scoped implementation;
+  canonical routing sources + SelfTUI session ritual read first. The V2d cut
+  itself was owner-selected in-session via structured question:
+  **git-awareness + project indexing** (multi-file edits and mutation
+  undo/redo explicitly stayed out of this cut).
+- Added `internal/agent/workspace.go`: `WorkspaceContext(ctx, root)` builds a
+  bounded (8 KiB) context block — Git section (branch via `rev-parse`
+  probe, `status --porcelain -b` capped at 40 lines, `log --oneline -n 3`;
+  fixed read-only host-side argv, 3s timeout, section omitted gracefully
+  outside a git repo or without git) + Project index (WalkDir tree, depth
+  ≤ 4, ≤ 300 entries, `.git` pruned, `[index truncated]` markers).
+- Runner wiring: armed runners (`NewRunnerWithPolicy`) append the block as a
+  second pinned system message every turn (BudgetMessages pins the whole
+  leading system prefix); plain chat (`NewRunner`, no policy) never receives
+  it. The closed six-tool schema is untouched — no new execution primitive.
+- Tests (`internal/agent/workspace_test.go`): non-git dir, real git repo
+  fixture (branch/porcelain/log/index assertions), 8 KiB bound + truncation
+  marker, depth cap, canceled context → empty, armed-runner wire shape
+  (system + workspace context + user), plain-chat wire shape (exactly
+  system + user, no tools field).
+- Docs: README (workspace-context paragraph), CHANGELOG (Unreleased/Added),
+  PLAN §10 V2d exit tick.
+
+**Commands + exit codes**
+- `gofmt -l .` → empty; `go vet ./...` → 0.
+- `go test ./internal/agent -run 'TestWorkspace|TestArmedRunner|TestPlainChatRunner' -count=1` → ok (after one RED→GREEN fix: section newline + porcelain assertion).
+- `make check` → 0 (build + tests + vet, all packages ok).
+- `go test -race -count=1 ./...` → 0 (all packages ok).
+
+**Decisions / lines to respect**
+- Git probes run host-side with fixed argv (the app is trusted; the V2c
+  sandbox is for model-requested commands only) — no shell, no model input
+  in argv. Non-git workspaces are a supported shape (tree-only block).
+- Injection is scoped to the armed agent runner: plain chat must not gain
+  workspace awareness. Per-turn rebuild (not cached) — cheap and always fresh.
+- Multi-file edits and mutation undo/redo remain out of scope (owner
+  decision recorded in-session); undo/redo still touches the V2c jail if
+  ever picked up.
+
+**Blockers / open decisions (carry to next session)**
+- None.
+
+**Next action**
+- v0.2 set (V2a–V2d) is complete: owner may tag the v0.2 release. Next
+  development work (e.g. PLAN §12 N-series) starts in a fresh session at
+  `/home/calvin/SelfTUI`. Do not chain here.

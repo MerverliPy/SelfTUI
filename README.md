@@ -302,7 +302,11 @@ tools. With tools enabled, requests to sensitive paths (`.ssh`, `.gnupg`, `.aws`
 `.azure`, `.kube`, `.config/gcloud`, or credential files like `.env`, `.env.local`,
 `.env.production`, `credentials`, `credentials.json` — `.env.example` stays
 allowed) are refused before the tool runs, on top of canonical workspace
-containment. Models that reject
+containment. Every armed agent turn also starts with a **bounded workspace-context**
+message (V2d): git branch/porcelain status/recent commits when the workspace is
+a git repo (fixed read-only git argv, run by the app on the host — not through
+the sandbox) plus a depth- and entry-capped project index (`.git` pruned).
+Plain chat (`tools off`) never receives it. Models that reject
 tools or return no tool call show an explicit plain-chat fallback.
 
 **Command palette (M7)**: `ctrl+p` from any tab opens the command palette —
