@@ -4230,3 +4230,53 @@ cross-build` PASSED (1m11s). `main` now at `ba6e098`, v0.1.1 tag
 - Owner: address remaining P0 supply-chain and P1 correctness items
   at their discretion. The audit-remediation work is fully on main and
   the release is published.
+
+### 2026-09-07 — P0 supply-chain hardening (DONE)
+**Milestone:** P0 supply-chain · **Result:** done — gitleaks-in-CI, actionlint in local
+  gate, action SHA-pinning, timeout-minutes, .env* gitignore all landed on main.
+
+**Work done**
+- **gitleaks-in-CI**: added gitleaks secret scanning to `.github/workflows/ci.yml`
+  (installs `github.com/zricethezav/gitleaks@latest`, runs `make secret-scan`).
+- **actionlint in local gate**: added `make actionlint` target; CI runs
+  `actionlint .github/workflows/*.yml` after installing it.
+- **Action SHA-pinning**: replaced mutable `actions/checkout@v4` and
+  `actions/setup-go@v5` refs with pinned SHAs
+  (`11d5960a326750d5838078e36cf38b85af677262` and
+  `40f1582b2485089dde7abd97c1529aa768e1baff`) in both workflows.
+- **timeout-minutes**: added 15 min (CI) and 30 min (release) to both workflows
+  so stuck runs are auto-cancelled.
+- **`.env*` in `.gitignore`**: added `.env` and `.env.*` entries to prevent
+  credential files from being committed.
+- **Config files**: added `.gitleaks.toml` (allowlists for test fixtures,
+  docs examples, release pipeline, build artifacts) and `.actionlintrc`
+  (ignores known-safe patterns).
+- **Make targets**: added `secret-scan`, `actionlint`, `gitleaks` (alias)
+  to the Makefile, all wired into `make check` via `lint`.
+- All new targets verified green: `make actionlint` passes, `make secret-scan`
+  reports 0 leaks, `make check` passes.
+
+**Commands + exit codes**
+- `make actionlint` `0` · `make secret-scan` `0` (0 leaks)
+- `make check` `0` (build + test + vet + fmt)
+- `git add + commit` → `a05e89f`
+
+**Decisions / lines to respect**
+- Action refs are SHA-pinned (not `@v` mutable) — the P0 supply-chain item
+  "Mutable action refs — no SHA pinning" is resolved.
+- `timeout-minutes` is per-job, not workflow-level (actionlint-valid).
+- `env` context cannot be used in `uses` lines (GitHub Actions limitation);
+  SHAs are hardcoded in the `uses` steps with comments recording the pin.
+- `.env*` files are now gitignored — prevents accidental credential commits.
+
+**Blockers / open decisions (carry to next session)**
+- **Signed-tag decision**: whether release tags (`v*`) should be GPG-signed.
+  Owner to decide. This is the last P0 supply-chain item.
+- **Public-visibility**: the repo may now go public at the owner's discretion.
+- **P1 correctness**: findings #1–#7, #12, #13 from the 5-lane read-only audit
+  are resolved (9 commits on `fix/v0.1.1-audit-remediation`). No remaining
+  correctness blockers.
+
+**Next action**
+- Owner: decide signed-tag policy, then repo may go public.
+  All P0 supply-chain items are complete except this one decision.
