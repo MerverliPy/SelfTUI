@@ -52,9 +52,22 @@ jobs:
         run: |
           set -euo pipefail
           # Owner policy (2026-09-07): every v* release tag is GPG-signed.
-          # The tag object is present because checkout fetched the tag ref;
           # verify-tag fails on unsigned or lightweight tags, failing the
           # release before any asset is built or published.
+          #
+          # actions/checkout (fetch-depth: 1, fetch-tags: false) fetches the
+          # triggering commit and writes its SHA directly into
+          # refs/tags/<tag> — a peeled commit ref with no tag object, so a
+          # plain `git verify-tag` fails with "cannot verify a non-tag object
+          # of type commit" (observed live on the v0.2.0 run 34156039028).
+          # Re-fetch the exact tag ref so the real annotated tag object lands
+          # in refs/tags/, refuse anything that is still not a tag object,
+          # then verify the signature.
+          git fetch --force origin "refs/tags/$VERSION:refs/tags/$VERSION"
+          [[ "$(git cat-file -t "refs/tags/$VERSION")" == "tag" ]] || {
+            echo "refs/tags/$VERSION is not an annotated tag object" >&2
+            exit 1
+          }
           gpg --import docs/release-signing-key.asc
           git verify-tag "$VERSION"
 
