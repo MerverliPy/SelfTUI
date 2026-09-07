@@ -768,7 +768,12 @@ brief (state of the art 2025–2026, Bubble Tea v2 / Crush / opencode / Claude C
 statusline; artifact: subagent research.md d7577a9c) + repo recon against the D4
 benchmarks. Claims below were verified against the pinned tree where marked ✅v.
 
-### N1 — Render windowing (P, highest value, baseline pinned)
+### N1 — Render windowing (P, highest value, baseline pinned) — **LANDED 2026-09-07**
+Landed: O(visible) window via `chatLineCount` + `chatWindowTotal`;
+equivalence pinned against a frozen naive copy; golden frames byte-identical.
+Gate result: `ChatWindow100x/tail` ≈111 µs / 14 allocs vs pinned
+`ChatLines100x` ≈754 µs / 2 018 allocs (~6.6×, −450× bytes); `ChatPane100x/tail`
+1.4 → 0.92 ms. See LEDGER 2026-09-07.
 The known hotspot: `chatLines` rebuilds the **O(total cached lines)** join every
 frame (D4: ChatPane100x ≈1.5 ms/op · 14k allocs; ChatLines100x ≈0.87 ms/op).
 Plan: render only the visible window — slice from the cached per-turn blocks and
