@@ -5331,3 +5331,65 @@ owner-selected v0.2 set (V2a–V2d). DIRECT execution, zero agents.
 - Fresh session at `/home/calvin/SelfTUI`; next N-item per the §12
   sequencing sketch: N2 (streaming repaint discipline), or N6/N5 if the
   owner reorders.
+
+## 2026-09-07 — N2 streaming repaint discipline (PLAN §12)
+
+**Work done**
+- N2 landed: token deltas (`agent.TokenMsg`) now queue into `pendingStream` and
+  flush on a 60 ms repaint tick (`streamTickMsg`, wrapped in `agentEventMsg` so
+  the App shell forwards it) — ≈17 fps instead of per-token frames (Ollama
+  deltas arrive ~10–50 ms; 60 ms coalesces 1–6 deltas per repaint, keeps the
+  caret visually smooth, and leaves the final chunk's immediate flush
+  imperceptibly late).
+- Active-block render cache: `primeStreamRender` renders the streaming block
+  once per (content, header, width, theme) change; a frame's count pass and
+  window pass share that one render (was 3 glamour renders per token/frame)
+  and frames with no new flushed text cost zero glamour. Cache miss falls back
+  to a fresh `renderBlock` — byte-identical by construction, equivalence
+  re-pinned by `TestStreamCacheMatchesFreshRender`.
+- Final chunk flushes immediately in `onChatDone` (`mergeStreamDeltas` runs
+  before the commit) — no tick-tail latency for the committed turn or the N3
+  footer metrics riding its meta row.
+- Sub-block section split (thinking/content, the sketch's Crush pattern) is
+  **rejected with evidence**: glamour's margin collapsing is not composable
+  across `\n\n` section boundaries (probe-verified: a paragraph's top margin
+  renders inline after a code block), so a section-level split cannot stay
+  byte-identical. Freeze discipline stays at the committed-turn level (the
+  per-turn render cache deltas never touch); true sub-block caching would need
+  glamour-output stitching — upstream-risky, N7 territory.
+- Scope note: tick priming renders ≤1 glamour render/60 ms even while the
+  Agent tab is hidden (documented in code) — vs 60–180/s pre-N2 when visible.
+- Delegation note: single implementation lane `developer-tooling-engineer`
+  (run completed, mission ef562a65); no commits made by the child. New bench
+  `BenchmarkStreamingFrame100x` + 9-test `stream_repaint_test.go`; 5 existing
+  tests updated to drive the tick protocol — assertions preserved/strengthened
+  (routing table now covers `streamTickMsg` flush), nothing weakened.
+
+**Commands + exit codes**
+- Parent verification (uncached): `gofmt -l .` → empty; `make check` → 0;
+  `go test -race -count=1 ./...` → 0 (all pkgs ok; ui 15.8s).
+- Goldens: `TestGoldenRender` + `TestGoldenFramesFitTerminal` PASS; **no
+  fixture regeneration** — goldens never render mid-stream and the render
+  paths are byte-identical by construction.
+- Bench (parent-run, 88×40, 2 000 turns): short-stream tick frame 0.99 ms /
+  13.4k allocs; 4 KB stream naive per-token frame 2.92 ms / 85k allocs →
+  cached token frame 0.74 ms / 5.8k (stream-length independent); tick frame
+  2.68 ms / 48k allocs, capped at ≤17 Hz.
+
+**Decisions / lines to respect**
+- 60 ms tick cadence is the repaint contract; the final chunk is flushed
+  immediately, never ticked.
+- `pendingStream` is the only delta queue; flushed `streamText` is the render
+  source; `liveStreamText()` (both) is what payload budgeting and the commit
+  path read — never split those roles.
+- Sub-block section caching is rejected unless the owner buys a glamour
+  output-stitching scheme (upstream-risky; track under N7).
+
+**Blockers / open decisions (carry to next session)**
+- None. (Owner-optional GPG key upload remains with the owner; local `main`
+  is now ahead of `origin/main` by N4 + N2 — awaiting the owner's push.)
+
+**Next action**
+- Fresh session at `/home/calvin/SelfTUI`; next N-item per the §12
+  sequencing sketch: N6 (composer upgrades), or N5 (debug drawer) if the
+  owner reorders.

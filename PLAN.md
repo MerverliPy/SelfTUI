@@ -783,7 +783,23 @@ per-width cache, so the delta is the window slice). Gate: new bench must beat th
 pinned ChatLines100x baseline; golden frames unchanged (72×30 + 120×40 still
 byte-identical). ✅v baseline verified in `internal/ui/agent_view_bench_test.go`.
 
-### N2 — Streaming repaint discipline (P)
+### N2 — Streaming repaint discipline (P) — **LANDED 2026-09-07**
+Landed: token deltas batch into `pendingStream` and flush on a 60 ms repaint
+(`streamTickMsg`, ≈17 fps vs 60–180 renders/s per token); the active block's
+glamour render is cached per (content, header, width, theme) so a frame's
+count+window passes share one render (was 3/frame) and unchanged frames cost
+zero glamour; the final chunk flushes immediately in `onChatDone` (no tick-tail
+latency for the N3 footer). Caret "▍" + follow byte-identical (M7-B pins hold);
+goldens untouched (cache miss falls back to a fresh render, equivalence
+re-pinned by `TestStreamCacheMatchesFreshRender`). Bench: 4 KB stream naive
+token-frame 3.17 ms/85k allocs → cached 0.73 ms/5.8k (stream-length
+independent); tick frame 0.96 ms/13.4k (short) / 1.96 ms/45k (4k, ≤17 Hz).
+The sketch's sub-block thinking/content section split is **rejected with
+evidence**: glamour's margin collapsing is not composable across `\n\n`
+section boundaries (probe-verified), so a section-level split cannot stay
+byte-identical; freeze discipline stays at the committed-turn level. Sub-block
+caching would need glamour-output stitching — upstream-risky, N7 territory.
+See LEDGER 2026-09-07.
 During a live stream, re-render only the active block, not the whole pane; cache
 thinking/content sections separately so stream deltas don't invalidate rendered
 neighbors (Crush pattern); batch deltas to a repaint tick instead of per-token

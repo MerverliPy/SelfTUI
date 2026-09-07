@@ -87,6 +87,7 @@ func TestNoCaretDuringToolOnlyStreaming(t *testing.T) {
 
 	// Once real text arrives the caret rides it; gone again at rest.
 	v, _ = v.Update(agent.TokenMsg{Text: "#!/bin/sh"})
+	tickStream(t, &v) // N2: the delta renders at the repaint tick
 	if out := stripANSI(v.View()); !strings.Contains(out, "▍") || !strings.Contains(out, "#!/bin/sh") {
 		t.Errorf("caret missing while text streams:\n%s", out)
 	}

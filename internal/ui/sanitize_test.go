@@ -121,6 +121,7 @@ func TestAgentChatSanitizesControlSequencesStreamAndCommit(t *testing.T) {
 	for _, c := range chunks {
 		v, _ = v.Update(agent.TokenMsg{Text: c})
 	}
+	tickStream(t, &v) // N2: the batch renders at the repaint tick
 	assertCleanOutput(t, v.View(), "hello", "world")
 
 	// Commit the turn; the cached block must stay clean.
