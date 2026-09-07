@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"strings"
 	"time"
@@ -1610,49 +1611,206 @@ func (v AgentView) renderBlock(header, md string) string {
 // chatLines assembles the full rendered transcript as individual display
 // lines: an optional truncation marker (M7-C), the cached history blocks
 // (header + markdown content + per-turn footer), plus the live streaming
-// block with the streaming caret (M7-B). Block content is split on newlines
-// so scroll/window arithmetic counts real rows, not multi-line entries.
+// block with the streaming caret (M7-B). It is the O(total) convenience
+// view over the same windowing machinery renderChatPane uses — production
+// frames go through chatWindow so only the visible rows are materialized
+// (N1); a test-side naive copy of this assembly pins the two paths equal.
 func (v AgentView) chatLines() []string {
-	var lines []string
-	if v.truncated {
-		// The runner silently omitted older turns once the budget filled; show
-		// the same marker in the transcript head instead of hiding it (M7-C).
-		lines = append(lines, v.styles.mutedText().Render("… "+agent.TruncationNotice))
-		lines = append(lines, "")
+	return v.chatWindow(0, math.MaxInt)
+}
+
+// truncationMarkerLines returns the transcript-head marker shown when the
+// runner silently omitted older turns to fit the budget (M7-C); empty when
+// nothing was truncated.
+func (v AgentView) truncationMarkerLines() []string {
+	if !v.truncated {
+		return nil
 	}
-	for i := range v.turns {
-		t := v.turns[i]
-		block := t.render
-		if block == "" {
-			// H-05: never let raw (unsanitized) history reach the transcript.
-			// The cached branch was sanitized by renderBlock; this fallback
-			// covers an empty cache entry (belt-and-suspenders for a render
-			// gap, e.g. a hand-built transcript in tests).
-			block = sanitizeTerminalText(t.msg.Content)
+	return []string{
+		v.styles.mutedText().Render("… " + agent.TruncationNotice),
+		"",
+	}
+}
+
+// effectiveBlock returns the turn's display block: the cached per-width
+// render, or the sanitized raw content when the cache entry is empty. The
+// fallback covers a render gap (e.g. a hand-built transcript in tests); raw
+// history must never reach the transcript unsanitized (H-05).
+func (t turn) effectiveBlock() string {
+	if t.render != "" {
+		return t.render
+	}
+	return sanitizeTerminalText(t.msg.Content)
+}
+
+// turnDisplayLines returns the display lines one committed turn contributes
+// to the transcript: its effective block split on newlines plus the trailing
+// separator row. An empty block contributes nothing at all — not even the
+// separator — so blank turns never leave a gap in the transcript.
+func (t turn) turnDisplayLines() []string {
+	block := t.effectiveBlock()
+	if block == "" {
+		return nil
+	}
+	lines := strings.Split(block, "\n")
+	return append(lines, "") // separator after each message
+}
+
+// lineCount is the row count turnDisplayLines would produce, computed by
+// newline arithmetic on the effective block: a non-empty block splits into
+// Count("\n")+1 lines plus the separator row. Zero allocs, no splitting —
+// chatLineCount walks a 2,000-turn transcript with this alone.
+func (t turn) lineCount() int {
+	block := t.effectiveBlock()
+	if block == "" {
+		return 0
+	}
+	return strings.Count(block, "\n") + 2
+}
+
+// streamDisplayLines renders the live streaming block: header + content
+// split on newlines, the streaming caret riding the last line while a turn
+// streams (M7-B), and the trailing separator. Rendered only once the model
+// is actually producing text — no phantom empty header/caret while a tool
+// runs or during qwen3's thinking phase (that state lives on the statusline).
+func (v AgentView) streamDisplayLines() []string {
+	if v.streamText == "" {
+		return nil
+	}
+	sb := strings.Split(v.renderBlock(v.assistantHeader(v.model), v.streamText), "\n")
+	if v.streaming {
+		sb = withStreamingCaret(sb)
+	}
+	return append(sb, "")
+}
+
+// streamLineCount is the row count streamDisplayLines would produce. The
+// caret appends a row only when the block's last split line is blank (the
+// block ends with "\n"); otherwise it rides that line.
+func (v AgentView) streamLineCount() int {
+	if v.streamText == "" {
+		return 0
+	}
+	block := v.renderBlock(v.assistantHeader(v.model), v.streamText)
+	n := strings.Count(block, "\n") + 1 // split lines
+	if v.streaming && strings.HasSuffix(block, "\n") {
+		n++ // caret becomes its own row after the blank last line
+	}
+	return n + 1 // separator
+}
+
+// trailingBlankCount counts the blank lines chatLines drops from the tail of
+// the full transcript. Blanks can only trail inside the last contributing
+// source: every earlier source ends with its separator row immediately
+// followed by the next source's header, and empty sources contribute
+// nothing. Only the tail source is examined.
+func (v AgentView) trailingBlankCount() int {
+	if v.streamText != "" {
+		if v.streaming {
+			return 1 // the caret keeps the last line non-empty; separator only
 		}
+		block := v.renderBlock(v.assistantHeader(v.model), v.streamText)
+		return strings.Count(block[len(strings.TrimRight(block, "\n")):], "\n") + 1
+	}
+	for i := len(v.turns) - 1; i >= 0; i-- {
+		block := v.turns[i].effectiveBlock()
 		if block == "" {
 			continue
 		}
-		lines = append(lines, strings.Split(block, "\n")...)
-		lines = append(lines, "") // separator after each message
+		return strings.Count(block[len(strings.TrimRight(block, "\n")):], "\n") + 1
 	}
-	// Live block: rendered only once the model is actually producing text —
-	// no phantom empty header/caret while a tool runs or during qwen3's
-	// thinking phase (that state lives on the statusline). The caret rides
-	// the last line while text streams and disappears when the turn commits.
-	if v.streamText != "" {
-		sb := strings.Split(v.renderBlock(v.assistantHeader(v.model), v.streamText), "\n")
-		if v.streaming {
-			sb = withStreamingCaret(sb)
+	if v.truncated {
+		return 1 // marker row + its separator; the marker itself is non-empty
+	}
+	return 0
+}
+
+// chatLineCount returns the total number of transcript display lines —
+// exactly len(chatLines()) — without splitting any block: committed turns
+// are counted by newline arithmetic (O(turns), zero allocs) and only the
+// tail source is walked for the trailing-blank drop.
+func (v AgentView) chatLineCount() int {
+	total := len(v.truncationMarkerLines())
+	for i := range v.turns {
+		total += v.turns[i].lineCount()
+	}
+	total += v.streamLineCount()
+	if blanks := v.trailingBlankCount(); blanks > 0 {
+		if blanks > total {
+			blanks = total
 		}
-		lines = append(lines, sb...)
-		lines = append(lines, "")
+		total -= blanks
 	}
-	// Drop trailing blanks.
-	for len(lines) > 0 && lines[len(lines)-1] == "" {
-		lines = lines[:len(lines)-1]
+	return total
+}
+
+// chatWindow materializes only the transcript display lines in [start, end)
+// — the N1 render window. Committed turns are advanced by their line
+// counts; only blocks overlapping the window are split and copied, so a
+// tail window (the follow-mode common case) touches O(visible) rows no
+// matter how long the session. Output is byte-identical to the O(total)
+// assembly; a test-side naive copy pins that equivalence.
+func (v AgentView) chatWindow(start, end int) []string {
+	return v.chatWindowTotal(start, end, v.chatLineCount())
+}
+
+// chatWindowTotal is chatWindow with the transcript total supplied by the
+// caller (renderChatPane already computed it for the scroll clamp; this
+// avoids a second counting walk per frame).
+func (v AgentView) chatWindowTotal(start, end, total int) []string {
+	if end > total {
+		end = total
 	}
-	return lines
+	if start < 0 {
+		start = 0
+	}
+	if end <= start {
+		return nil
+	}
+	var out []string
+	pos := 0
+	take := func(lines []string) {
+		lo := start - pos
+		if lo < 0 {
+			lo = 0
+		}
+		hi := end - pos
+		if hi > len(lines) {
+			hi = len(lines)
+		}
+		if lo < hi {
+			out = append(out, lines[lo:hi]...)
+		}
+		pos += len(lines)
+	}
+	if marker := v.truncationMarkerLines(); len(marker) > 0 {
+		take(marker)
+	}
+	for i := range v.turns {
+		if pos >= end {
+			break
+		}
+		n := v.turns[i].lineCount()
+		if n == 0 {
+			continue
+		}
+		if pos+n <= start {
+			pos += n // entirely before the window: skip the split
+			continue
+		}
+		take(v.turns[i].turnDisplayLines())
+	}
+	if pos < end {
+		take(v.streamDisplayLines())
+	}
+	// A window ending at the transcript tail must end where chatLines ends:
+	// the trailing-blank drop.
+	if end == total {
+		for len(out) > 0 && out[len(out)-1] == "" {
+			out = out[:len(out)-1]
+		}
+	}
+	return out
 }
 
 // withStreamingCaret appends the streaming caret ("▍") to the live block. It
@@ -1728,22 +1886,23 @@ func (v AgentView) renderChatPane(h int) string {
 	if h < 2 {
 		return ""
 	}
-	lines := v.chatLines()
+	// N1 windowing: count the transcript by newline arithmetic (no block
+	// splits), then materialize only the visible rows. Rendering never
+	// mutates state: the effective offset is computed locally. Follow
+	// anchors to the tail (offset 0); otherwise the stored offset clamps to
+	// the current content, so a shrink never shows past the head.
+	total := v.chatLineCount()
 	contentH := h - 2
-	// Rendering never mutates state: the effective offset is computed
-	// locally. Follow anchors to the tail (offset 0); otherwise the stored
-	// offset clamps to the current content, so a shrink never shows past
-	// the head.
 	scroll := 0
 	if !v.follow {
-		scroll = clampInt(v.scroll, 0, maxInt(0, len(lines)-contentH))
+		scroll = clampInt(v.scroll, 0, maxInt(0, total-contentH))
 	}
 
 	// Window honors the scroll offset: scroll 0 shows the tail; scrolling
 	// up shifts the window toward the head.
-	end := len(lines) - scroll
+	end := total - scroll
 	start := maxInt(0, end-contentH)
-	window := lines[start:end]
+	window := v.chatWindowTotal(start, end, total)
 	pane := v.styles.Pane.Width(v.w).Height(h)
 	return pane.Render(lipgloss.JoinVertical(lipgloss.Left, window...))
 }
@@ -2245,7 +2404,7 @@ func (v AgentView) renderOverlayTitle(bodyH int, title string, lines []string) s
 func (v *AgentView) clampScroll() {
 	bodyH := maxInt(v.h-2, 1)
 	chatH := maxInt(bodyH-v.composerRows()-3-1, 1)
-	lines := len(v.chatLines())
+	lines := v.chatLineCount()
 	maxScroll := maxInt(0, lines-maxInt(chatH-2, 1))
 	if v.scroll > maxScroll {
 		v.scroll = maxScroll

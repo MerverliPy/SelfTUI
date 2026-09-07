@@ -110,9 +110,12 @@ func BenchmarkChatPane100x(b *testing.B) {
 	})
 }
 
-// BenchmarkChatLines100x isolates the O(total cached lines) rebuild that
-// chatLines performs every frame — the specific hotspot named in the D4
-// owner decision.
+// BenchmarkChatLines100x pins the pre-N1 O(total) rebuild for historical
+// comparison (Pinned baseline 2026-09-07, i7-9700K/go1.27.1: ≈0.75 ms/op,
+// 1.39 MB/op, 2 018 allocs/op). Production no longer runs this path per
+// frame — chatLines is now the O(total) convenience view over the windowed
+// machinery; keep the benchmark so regressions in the naive path stay
+// visible and the N1 gate (window must beat this) stays measurable.
 func BenchmarkChatLines100x(b *testing.B) {
 	v := benchAgentView(b)
 	seedBenchTranscript(b, &v, 1000) // 2,000 turns total
@@ -121,4 +124,45 @@ func BenchmarkChatLines100x(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		_ = v.chatLines()
 	}
+}
+
+// BenchmarkChatWindow100x isolates the N1 render window: count by newline
+// arithmetic (O(turns), zero allocs) and materialize only the O(visible)
+// rows renderChatPane actually shows — the per-frame production path. The
+// N1 gate: this must beat the pinned ChatLines100x baseline above.
+func BenchmarkChatWindow100x(b *testing.B) {
+	b.Run("tail", func(b *testing.B) {
+		v := benchAgentView(b)
+		seedBenchTranscript(b, &v, 1000) // 2,000 turns total
+		total := v.chatLineCount()
+		contentH := benchChatH(v) - 2
+		start := maxInt(0, total-contentH)
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			_ = v.chatWindowTotal(start, total, total)
+		}
+	})
+	b.Run("count-only", func(b *testing.B) {
+		v := benchAgentView(b)
+		seedBenchTranscript(b, &v, 1000)
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			_ = v.chatLineCount()
+		}
+	})
+	b.Run("scrolled-up", func(b *testing.B) {
+		v := benchAgentView(b)
+		seedBenchTranscript(b, &v, 1000)
+		total := v.chatLineCount()
+		contentH := benchChatH(v) - 2
+		end := total - 2000 // deep in the history
+		start := maxInt(0, end-contentH)
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			_ = v.chatWindowTotal(start, end, total)
+		}
+	})
 }

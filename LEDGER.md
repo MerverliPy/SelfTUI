@@ -5160,3 +5160,65 @@ owner-selected v0.2 set (V2a–V2d). DIRECT execution, zero agents.
 **Next action**
 - Fresh session at `/home/calvin/SelfTUI`; owner picks next work (e.g. PLAN
   §12 N-series, N1 first). Do not chain here.
+
+## 2026-09-07 — N1 render windowing (PLAN §12)
+
+**Work done**
+- N1 landed: `chatLines` no longer rebuilds the O(total cached lines) list
+  every frame. New windowed machinery in `agent_view.go`:
+  `chatLineCount` (newline arithmetic per cached turn, zero allocs) +
+  `chatWindowTotal(start,end,total)` (splits only blocks overlapping the
+  visible window; `chatLines()` is now the O(total) convenience view over
+  the same machinery). `renderChatPane` and `clampScroll` consume the
+  counted path; committed turns stay frozen (per-width cache unchanged).
+- Tail windows (follow mode) are O(visible): 2 000-turn transcript window
+  splits ~2 blocks regardless of session length; trailing-blank drop and
+  truncation-marker/stream edge cases replicated exactly.
+- Equivalence pinned by `agent_view_window_test.go`: a test-side frozen
+  naive copy of the old assembly must match `chatLineCount` and
+  `chatWindow` byte-for-byte across 11 transcript shapes × 9 window slices
+  (caught and fixed one real negative-start clamp edge).
+- N1 gate **PASSED** (i7-9700K, go1.27.1, `-count 3`):
+  - `BenchmarkChatWindow100x/tail`: **~111 µs/op, 3.1 KB, 14 allocs** vs
+    pinned `ChatLines100x` baseline **~754 µs/op, 1.39 MB, 2 018 allocs**
+    → ~6.6× faster, ~450× less memory, ~144× fewer allocs.
+  - `ChatPane100x/tail` 1.32–1.48 ms → **0.92 ms** (−35%), 1.71 MB →
+    0.30 MB; scrolled-up 1.38–1.48 → 0.82 ms; streaming 1.51–1.66 →
+    1.13 ms (stream block now rendered twice per frame — count + window —
+    accepted; still well under baseline).
+- Golden frames 72×30 + 120×40 byte-identical (TestGolden in `make check`).
+- `make check` green; `go test -race ./internal/ui` green.
+- Owner-optional carried (unchanged): upload GPG public key
+  `8D3A52AB6583DD5C207FE81B5F74A36F7B5C1670` (Ed25519, uid MerverliPy
+  <calvinbrady8@gmail.com>) at github.com/settings/keys → New GPG key →
+  paste `gpg --armor --export 8D3A52AB6583DD5C207FE81B5F74A36F7B5C1670`
+  for the tag commit's green Verified badge.
+
+**Commands + exit codes**
+- Baseline pre-change: `go test ./internal/ui -run '^$' -bench
+  'BenchmarkChatPane100x|BenchmarkChatLines100x' -benchmem -count 3` → 0.
+- `gofmt -l internal/ui` → dirty (new test file), `gofmt -w` → clean.
+- `go test ./internal/ui -run 'TestChatLine|TestChatWindow|TestGolden|
+  TestSanitize|TestSmallTerminal'` → FAIL ×3 (test-harness slicing bug +
+  negative-start clamp), fixed → 0. Red-green followed.
+- `make check` → 0 (twice: pre-bench and final).
+- `go test -race ./internal/ui -count=1` → 0.
+
+**Decisions / lines to respect**
+- No struct/behavior changes: `turn`, commit paths, and golden output
+  untouched; windowing is a rendering-layer change only (verified by the
+  naive-copy equivalence tests).
+- N7 micro-item (glamour width-bucketing, round width to 5 cols) NOT done
+  here — deliberately left as its own micro-task to keep this diff
+  rendering-only; tracked in PLAN §12 N7.
+- Bench: old `BenchmarkChatLines100x` kept (with pinned baseline in its
+  comment) for regression visibility; new `BenchmarkChatWindow100x`
+  (tail/count-only/scrolled-up) is the per-frame production path.
+
+**Blockers / open decisions (carry to next session)**
+- None. (Owner-optional GPG upload remains with the owner.)
+
+**Next action**
+- Fresh session at `/home/calvin/SelfTUI`; next N-item per the §12
+  sequencing sketch: N3 (tok/s + exact token counts), or N2 if owner
+  reorders.
