@@ -197,8 +197,8 @@ func TestSettingsToolsToggleRejectsUnsafeWorkspace(t *testing.T) {
 	if !strings.Contains(out, "workspace_root is required when tools are enabled") {
 		t.Errorf("expected the stable config policy message inline, got:\n%s", out)
 	}
-	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Errorf("config file exists after a rejected enable (%v)", err)
+	if b, err := os.ReadFile(path); err != nil || len(b) != 0 {
+		t.Errorf("config file was written despite the rejected enable (len=%d err=%v); want it still empty", len(b), err)
 	}
 	if app.agent.toolsEnabled {
 		t.Error("Agent view enabled tools despite the rejected save")

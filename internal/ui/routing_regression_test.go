@@ -362,6 +362,231 @@ func TestAppEnvelopeRoutingTable(t *testing.T) {
 	})
 }
 
+// --- M-01: child modals own Tab/Shift-Tab ----------------------------------
+//
+// The root App previously routed Tab/Shift-Tab to its tab bar BEFORE
+// consulting the active child's modal state (only the 1/2/3 digit jumps
+// checked ModalOpen), so a single tab press could switch tabs behind a
+// pending mutation approval, a delete/pull dialog, or the Agent's
+// picker/help/clear overlays — hiding the only approval surface. These tests
+// drive every Agent and Models modal at the ROOT App and assert the active
+// tab never changes while the modal owns input, and that the tab bar is
+// restored once the modal closes.
+
+// tabTestApp boots a fresh app at 100x40 with the given tab active and its
+// model list loaded (Models: modelsLoadedMsg; Agent: agentModelsLoadedMsg).
+func tabTestApp(t *testing.T, tab int) App {
+	t.Helper()
+	m := newTestApp(t)
+	m = updateTab(t, m, tea.WindowSizeMsg{Width: 100, Height: 40})
+	switch tab {
+	case 0:
+		m = updateTab(t, m, modelsEventMsg{msg: modelsLoadedMsg{list: sampleModels()}})
+	case agentTab:
+		m = updateTab(t, m, tea.KeyPressMsg{Text: "2"})
+		m = updateTab(t, m, agentEventMsg{msg: agentModelsLoadedMsg{models: sampleModels()}})
+	default:
+		t.Fatalf("tabTestApp: unsupported tab %d", tab)
+	}
+	if m.tab != tab {
+		t.Fatalf("test app landed on tab %d, want %d", m.tab, tab)
+	}
+	return m
+}
+
+// typeKeys feeds each rune as a root-level key press (used to open slash
+// commands and type a pull name through the shell).
+func typeKeys(t *testing.T, m App, s string) App {
+	t.Helper()
+	for _, r := range s {
+		m = updateTab(t, m, tea.KeyPressMsg{Text: string(r)})
+	}
+	return m
+}
+
+func TestModalOwnsTabAndShiftTabWhileOpen(t *testing.T) {
+	tabForward := tea.KeyPressMsg{Code: tea.KeyTab}
+	tabBackward := tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift}
+
+	t.Run("models delete confirm", func(t *testing.T) {
+		m := tabTestApp(t, 0)
+		m = updateTab(t, m, tea.KeyPressMsg{Text: "x"})
+		if !m.models.confirmDelete {
+			t.Fatal("x should open the delete confirm dialog")
+		}
+		for name, key := range map[string]tea.KeyPressMsg{"tab": tabForward, "shift+tab": tabBackward} {
+			m = updateTab(t, m, key)
+			if m.tab != 0 || !m.models.ModalOpen() {
+				t.Fatalf("%s hid the delete confirm: tab=%d modal=%v", name, m.tab, m.models.ModalOpen())
+			}
+		}
+		if out := view(t, m); !strings.Contains(out, "Delete model") {
+			t.Errorf("delete dialog not rendered after tab keys:\n%s", out)
+		}
+		// n closes the dialog; only then do the tab keys come back.
+		m = updateTab(t, m, tea.KeyPressMsg{Text: "n"})
+		m = updateTab(t, m, tabForward)
+		if m.tab != agentTab {
+			t.Errorf("tab after the dialog closed = %d, want Agent (tab keys restored)", m.tab)
+		}
+	})
+
+	t.Run("models pull name input", func(t *testing.T) {
+		m := tabTestApp(t, 0)
+		m = updateTab(t, m, tea.KeyPressMsg{Text: "p"})
+		if !m.models.inputMode {
+			t.Fatal("p should open the pull name input")
+		}
+		m = typeKeys(t, m, "qwen3:0.6b")
+		for name, key := range map[string]tea.KeyPressMsg{"tab": tabForward, "shift+tab": tabBackward} {
+			m = updateTab(t, m, key)
+			if m.tab != 0 || !m.models.ModalOpen() || !m.models.inputMode {
+				t.Fatalf("%s stole from the name input: tab=%d modal=%v", name, m.tab, m.models.ModalOpen())
+			}
+		}
+		if out := view(t, m); !strings.Contains(out, "Pull a model") {
+			t.Errorf("pull dialog not rendered after tab keys:\n%s", out)
+		}
+		m = updateTab(t, m, tea.KeyPressMsg{Code: tea.KeyEsc})
+		m = updateTab(t, m, tabForward)
+		if m.tab != agentTab {
+			t.Errorf("tab after the input closed = %d, want Agent (tab keys restored)", m.tab)
+		}
+	})
+
+	t.Run("models pull in flight", func(t *testing.T) {
+		m := tabTestApp(t, 0)
+		m = updateTab(t, m, tea.KeyPressMsg{Text: "p"})
+		m = typeKeys(t, m, "qwen3:0.6b")
+		m = updateTab(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+		if !m.models.pulling {
+			t.Fatal("enter should start the pull")
+		}
+		for name, key := range map[string]tea.KeyPressMsg{"tab": tabForward, "shift+tab": tabBackward} {
+			m = updateTab(t, m, key)
+			if m.tab != 0 || !m.models.ModalOpen() {
+				t.Fatalf("%s hid the pull dialog: tab=%d modal=%v", name, m.tab, m.models.ModalOpen())
+			}
+		}
+		if out := view(t, m); !strings.Contains(out, "Pulling qwen3:0.6b") {
+			t.Errorf("pull dialog not rendered after tab keys:\n%s", out)
+		}
+	})
+
+	t.Run("models delete in flight", func(t *testing.T) {
+		m := tabTestApp(t, 0)
+		m = updateTab(t, m, tea.KeyPressMsg{Text: "x"})
+		m = updateTab(t, m, tea.KeyPressMsg{Text: "y"})
+		if !m.models.deleting {
+			t.Fatal("y should start the delete")
+		}
+		for name, key := range map[string]tea.KeyPressMsg{"tab": tabForward, "shift+tab": tabBackward} {
+			m = updateTab(t, m, key)
+			if m.tab != 0 || !m.models.ModalOpen() {
+				t.Fatalf("%s stole from the in-flight delete: tab=%d modal=%v", name, m.tab, m.models.ModalOpen())
+			}
+		}
+	})
+
+	t.Run("agent mutation approval", func(t *testing.T) {
+		m := tabTestApp(t, agentTab)
+		// The runner posts a real ToolConfirmMsg; route it through the shell.
+		m = updateTab(t, m, agentEventMsg{msg: agent.ToolConfirmMsg{
+			Name: "write_file", Input: `{"path":"timer.sh","content":"#!/bin/sh"}`,
+			Workspace: "/tmp/ws", Timeout: 30 * time.Second,
+		}})
+		if m.agent.confirmation == nil || !m.agent.ModalOpen() {
+			t.Fatal("confirmation should surface as a modal")
+		}
+		for name, key := range map[string]tea.KeyPressMsg{"tab": tabForward, "shift+tab": tabBackward} {
+			m = updateTab(t, m, key)
+			if m.tab != agentTab || !m.agent.ModalOpen() || m.agent.confirmation == nil {
+				t.Fatalf("%s hid the approval dialog: tab=%d modal=%v", name, m.tab, m.agent.ModalOpen())
+			}
+		}
+		if out := view(t, m); !strings.Contains(out, "Confirm mutation") {
+			t.Errorf("approval dialog not rendered after tab keys:\n%s", out)
+		}
+		// n declines and closes the dialog; only then do the tab keys return.
+		m = updateTab(t, m, tea.KeyPressMsg{Text: "n"})
+		m = updateTab(t, m, tabForward)
+		if m.tab != 2 {
+			t.Errorf("tab after the approval closed = %d, want Settings (tab keys restored)", m.tab)
+		}
+	})
+
+	t.Run("agent model selector", func(t *testing.T) {
+		m := tabTestApp(t, agentTab)
+		m = updateTab(t, m, tea.KeyPressMsg{Text: "m"})
+		if !m.agent.selectorOpen {
+			t.Fatal("m should open the model picker")
+		}
+		for name, key := range map[string]tea.KeyPressMsg{"tab": tabForward, "shift+tab": tabBackward} {
+			m = updateTab(t, m, key)
+			if m.tab != agentTab || !m.agent.ModalOpen() {
+				t.Fatalf("%s escaped the picker: tab=%d modal=%v", name, m.tab, m.agent.ModalOpen())
+			}
+		}
+		if out := view(t, m); !strings.Contains(out, "filter:") {
+			t.Errorf("picker not rendered after tab keys:\n%s", out)
+		}
+		m = updateTab(t, m, tea.KeyPressMsg{Code: tea.KeyEsc})
+		m = updateTab(t, m, tabForward)
+		if m.tab != 2 {
+			t.Errorf("tab after the picker closed = %d, want Settings (tab keys restored)", m.tab)
+		}
+	})
+
+	t.Run("agent help overlay", func(t *testing.T) {
+		m := tabTestApp(t, agentTab)
+		m = typeKeys(t, m, "/help")
+		m = updateTab(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+		if !m.agent.helpOpen {
+			t.Fatal("/help should open the help overlay")
+		}
+		for name, key := range map[string]tea.KeyPressMsg{"tab": tabForward, "shift+tab": tabBackward} {
+			m = updateTab(t, m, key)
+			if m.tab != agentTab || !m.agent.ModalOpen() {
+				t.Fatalf("%s hid the help overlay: tab=%d modal=%v", name, m.tab, m.agent.ModalOpen())
+			}
+		}
+		if out := view(t, m); !strings.Contains(out, "/theme") {
+			t.Errorf("help overlay not rendered after tab keys:\n%s", out)
+		}
+		m = updateTab(t, m, tea.KeyPressMsg{Code: tea.KeyEsc})
+		m = updateTab(t, m, tabForward)
+		if m.tab != 2 {
+			t.Errorf("tab after the help overlay closed = %d, want Settings (tab keys restored)", m.tab)
+		}
+	})
+
+	t.Run("agent clear confirmation", func(t *testing.T) {
+		m := tabTestApp(t, agentTab)
+		// /clear only asks when there is a conversation; seed one turn (no
+		// server traffic needed to open the confirm dialog itself).
+		m.agent.history = []ollama.ChatMessage{{Role: ollama.RoleUser, Content: "hi"}}
+		m = typeKeys(t, m, "/clear")
+		m = updateTab(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+		if !m.agent.clearConfirm {
+			t.Fatal("/clear should ask for confirmation first")
+		}
+		for name, key := range map[string]tea.KeyPressMsg{"tab": tabForward, "shift+tab": tabBackward} {
+			m = updateTab(t, m, key)
+			if m.tab != agentTab || !m.agent.ModalOpen() {
+				t.Fatalf("%s hid the clear confirm: tab=%d modal=%v", name, m.tab, m.agent.ModalOpen())
+			}
+		}
+		if out := view(t, m); !strings.Contains(out, "Clear conversation") {
+			t.Errorf("clear dialog not rendered after tab keys:\n%s", out)
+		}
+		m = updateTab(t, m, tea.KeyPressMsg{Text: "n"})
+		m = updateTab(t, m, tabForward)
+		if m.tab != 2 {
+			t.Errorf("tab after the clear dialog closed = %d, want Settings (tab keys restored)", m.tab)
+		}
+	})
+}
+
 // TestUnrelatedSpinnerTickNotRoutedToModels: a bare spinner.TickMsg that was
 // NOT wrapped in modelsEventMsg (an unrelated spinner, e.g. from another
 // component) must not be silently routed to ModelsView. The raw type is no

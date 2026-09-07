@@ -24,9 +24,18 @@ dated release-hardening note at the top.
 
 ## Building and testing
 
-Requires Go ≥ 1.25 (`GOTOOLCHAIN=auto` fetches it on demand). CI and the
-release gates pin **Go 1.27.1** (current official stable at phase-8 time);
-run gates locally with the same toolchain so local == CI.
+Requires Go ≥ 1.25 for day-to-day development (`GOTOOLCHAIN=auto` fetches it
+on demand). CI and the release gates pin **Go 1.27.1** (current official
+stable at phase-8 time). The release gate **enforces** the local
+prerequisites rather than trusting the docs: it fails fast (exit 2, before
+any gate work) unless the `go` on PATH reports `go1.27.1`, the `gofmt` on
+PATH is the gofmt shipping with that same distribution (`$(go env
+GOROOT)/bin/gofmt` — gofmt has no version flag, so the pin is by identity),
+and govulncheck reports `v1.7.0` (`govulncheck -version`). CI configures the
+same versions in the workflows (`setup-go` + a pinned `go install`); run the
+gate locally with the pinned distribution's `bin` first on PATH so local ==
+CI. This is a local prerequisite only — `.github/workflows/` needs no change
+when you install a different toolchain elsewhere.
 
 ```sh
 make build     # bin/selftui
@@ -54,11 +63,17 @@ go test ./internal/ui -run TestGoldenRender -update
 ## Releases
 
 v0.1.x releases are gated end-to-end by `scripts/release-check.sh`
-(`VERSION=v0.1.0 make release-check`): it demands a clean worktree and a
-`VERSION` matching `v<major>.<minor>.<patch>`, then runs module verification,
-gofmt, vet, uncached tests, race tests, `govulncheck`, both CGO-disabled
-Linux builds, per-binary version-stamp checks, deterministic archives, and a
-`SHA256SUMS` manifest under `dist/` (gitignored). The gate **never tags**;
+(`VERSION=v0.1.1 make release-check`): it demands a clean worktree, a
+`VERSION` matching `v<major>.<minor>.<patch>`, and the enforced toolchain
+pin above (go 1.27.1 + same-distribution gofmt + govulncheck v1.7.0 — fails
+fast before any slow step), then runs module verification, gofmt, vet,
+uncached tests, race tests, `govulncheck`, both CGO-disabled Linux builds,
+per-binary version-stamp checks, deterministic archives with fixed member
+modes (binary 0755, documents 0644), and a flat-named `SHA256SUMS` manifest
+under `dist/` (gitignored). Verify an archive set with
+`cd dist && sha256sum -c SHA256SUMS` — the manifest's flat entries are what
+downloaders see beside GitHub Release assets. Regression suite:
+`bash scripts/release-check-test.sh`. The gate **never tags**;
 pushing a `v*` tag is the owner's step and triggers `.github/workflows/
 release.yml`, which re-runs the gate, verifies the tag against both binaries'
 stamped versions, uploads the archives + `SHA256SUMS`, and generates release

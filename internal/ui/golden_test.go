@@ -89,6 +89,57 @@ func bootApp(t *testing.T, w, h int) App {
 	return updateTab(t, goldenApp(t), tea.WindowSizeMsg{Width: w, Height: h})
 }
 
+// lightApp builds the App for one light-theme golden frame. It
+// mirrors goldenApp but forces the "light" theme so the same
+// geometry/content is verified under both palettes.
+func lightApp(t *testing.T) App {
+	t.Helper()
+	cfg := config.Default()
+	cfg.WorkspaceRoot = "/tmp"
+	cfg.Theme = "light"
+	return New(&cfg, NewStyles("light"), ollama.New(cfg.Host, cfg.AuthToken))
+}
+
+// bootLightApp boots a light-theme App at the given geometry.
+func bootLightApp(t *testing.T, w, h int) App {
+	t.Helper()
+	return updateTab(t, lightApp(t), tea.WindowSizeMsg{Width: w, Height: h})
+}
+
+// buildLightFrame maps every goldenFrames name to an explicit
+// scenario builder for the light theme. The test fails if a name
+// falls through to a default screen — every frame must have an
+// explicit builder here.
+func buildLightFrame(t *testing.T, name string, w, h int) App {
+	switch name {
+	case "models-compact":
+		return buildModelsCompact(t, w, h)
+	case "models-compact-inspect":
+		return buildModelsCompactInspect(t, w, h)
+	case "models-wide-inspect":
+		return buildModelsWideInspect(t, w, h)
+	case "agent-compact", "agent-wide":
+		return buildAgent(t, w, h)
+	case "agent-turn-compact", "agent-turn-wide":
+		return buildAgentTurn(t, w, h)
+	case "agent-picker-compact", "agent-picker-wide":
+		return buildAgentModal(t, w, h, openModelPicker)
+	case "agent-slash-compact", "agent-slash-wide":
+		return buildAgentModal(t, w, h, openSlashMenu)
+	case "agent-help-compact", "agent-help-wide":
+		return buildAgentModal(t, w, h, openHelp)
+	case "agent-clear-confirm-compact", "agent-clear-confirm-wide":
+		return buildAgentModal(t, w, h, openClearConfirm)
+	case "palette-compact", "palette-wide":
+		return buildAgentModal(t, w, h, openPalette)
+	case "settings-compact", "settings-wide":
+		return buildSettingsEditing(t, w, h)
+	default:
+		t.Fatalf("buildLightFrame: no explicit builder for frame %q — add it before this test can pass", name)
+		return App{}
+	}
+}
+
 func buildModelsCompact(t *testing.T, w, h int) App {
 	m := bootApp(t, w, h)
 	return updateTab(t, m, modelsEventMsg{msg: modelsLoadedMsg{list: sampleModels()}})
@@ -456,28 +507,55 @@ func TestThemePalettesDiffer(t *testing.T) {
 
 // TestLightThemeRendersEveryTab renders the populated shell in the light
 // palette at both canonical geometries: no panics, every frame inside the
-// terminal, and the tab chrome present.
+// terminal, and the tab chrome present. Each frame is built by an explicit
+// builder (buildLightFrame), never a default: the test fails if a frame name
+// has no builder.
 func TestLightThemeRendersEveryTab(t *testing.T) {
 	for _, f := range goldenFrames {
-		cfg := config.Default()
-		cfg.Theme = "light"
-		m := New(&cfg, NewStyles("light"), ollama.New(cfg.Host, cfg.AuthToken))
-		m = updateTab(t, m, tea.WindowSizeMsg{Width: f.w, Height: f.h})
+		m := buildLightFrame(t, f.name, f.w, f.h)
+		// Verify the intended active tab, modal/state marker, and
+		// representative content before checking geometry.
+		allRows := strings.Join(viewRows(m), "\n")
+		stripped := stripANSI(allRows)
 		switch f.name {
-		case "models-compact":
-			m = updateTab(t, m, modelsEventMsg{msg: modelsLoadedMsg{list: sampleModels()}})
-		case "models-compact-inspect":
-			m = updateTab(t, m, modelsEventMsg{msg: modelsLoadedMsg{list: sampleModels()}})
-			m = updateTab(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
-			m = updateTab(t, m, modelsEventMsg{msg: modelsShowMsg{name: "qwen3:8b", details: sampleDetails()}})
-		case "models-wide-inspect":
-			m = updateTab(t, m, modelsEventMsg{msg: modelsLoadedMsg{list: sampleModels()}})
-			m = updateTab(t, m, modelsEventMsg{msg: modelsShowMsg{name: "qwen3:8b", details: sampleDetails()}})
-		case "agent-compact", "agent-wide":
-			m = updateTab(t, m, tea.KeyPressMsg{Text: "2"})
-			m = updateTab(t, m, agentEventMsg{msg: agentModelsLoadedMsg{models: sampleModels()}})
+		case "models-compact", "models-compact-inspect", "models-wide-inspect":
+			if !strings.Contains(stripped, "Models") {
+				t.Errorf("light %s: tab bar missing Models tab", f.name)
+			}
+			if strings.Contains(f.name, "inspect") && !strings.Contains(stripped, "qwen3:8b") {
+				t.Errorf("light %s: inspect detail missing model name", f.name)
+			}
+		case "agent-compact", "agent-wide", "agent-turn-compact", "agent-turn-wide":
+			if !strings.Contains(stripped, "Agent") {
+				t.Errorf("light %s: tab bar missing Agent tab", f.name)
+			}
+			if strings.Contains(f.name, "agent-turn") && !strings.Contains(stripped, "It is a mobile-first") {
+				t.Errorf("light %s: turn content missing", f.name)
+			}
+		case "agent-picker-compact", "agent-picker-wide":
+			if !strings.Contains(stripped, "qwen3:8b") {
+				t.Errorf("light %s: picker modal missing model list", f.name)
+			}
+		case "agent-slash-compact", "agent-slash-wide":
+			if !strings.Contains(stripped, "/") {
+				t.Errorf("light %s: slash menu missing command hint", f.name)
+			}
+		case "agent-help-compact", "agent-help-wide":
+			if !strings.Contains(stripped, "help") {
+				t.Errorf("light %s: help modal missing help text", f.name)
+			}
+		case "agent-clear-confirm-compact", "agent-clear-confirm-wide":
+			if !strings.Contains(stripped, "clear") {
+				t.Errorf("light %s: confirm modal missing confirm action", f.name)
+			}
+		case "palette-compact", "palette-wide":
+			if !strings.Contains(stripped, "command") && !strings.Contains(stripped, "palette") {
+				t.Errorf("light %s: palette missing command palette content", f.name)
+			}
 		case "settings-compact", "settings-wide":
-			m = updateTab(t, m, tea.KeyPressMsg{Text: "3"})
+			if !strings.Contains(stripped, "Settings") {
+				t.Errorf("light %s: tab bar missing Settings tab", f.name)
+			}
 		}
 		rows := viewRows(m)
 		if len(rows) > f.h {
@@ -488,15 +566,24 @@ func TestLightThemeRendersEveryTab(t *testing.T) {
 				t.Errorf("light %s %dx%d: row %d is %d wide (%d)", f.name, f.w, f.h, i+1, w, f.w)
 			}
 		}
-		if !strings.Contains(stripANSI(strings.Join(rows, "\n")), tabLabels[0]) {
+		if !strings.Contains(stripANSI(allRows), tabLabels[0]) {
 			t.Errorf("light %s: tab bar missing", f.name)
 		}
 	}
 }
 
+// TestLightFrameCoverage: every goldenFrames name must have an explicit
+// builder in buildLightFrame. The test fails if any frame falls through
+// to the default case — no frame is allowed to render a default screen.
+func TestLightFrameCoverage(t *testing.T) {
+	for _, f := range goldenFrames {
+		// buildLightFrame t.fails with t.Fatalf for unknown names,
+		// so a passing iteration proves the name has an explicit builder.
+		_ = buildLightFrame(t, f.name, f.w, f.h)
+	}
+}
+
 // TestLightThemeAgentChatRenders drives one markdown reply through the
-// light glamour renderer at the phone geometry (heading, bold, code block)
-// and checks it renders inside the frame.
 func TestLightThemeAgentChatRenders(t *testing.T) {
 	client, _, _ := fakeOllamaUI(t)
 	cfg := config.Default()

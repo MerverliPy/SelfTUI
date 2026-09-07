@@ -2,17 +2,20 @@
 
 ## Supported scope
 
-SelfTUI v0.1 is a single-process Linux/WSL TUI for Ollama. The security-relevant
+SelfTUI **v0.1.x** is a single-process Linux/WSL TUI for Ollama — **v0.1.0
+released 2026-09-04**, with **v0.1.1 hardening in progress** (see
+`CHANGELOG.md`). The security-relevant
 boundaries of that release:
 
 - chat sessions are **in-memory**; the Markdown transcript export is an
   append-only file that survives exit but **cannot be resumed**;
 - workspace tools are **disabled by default** and require an explicitly
-  configured project workspace root;
+  configured project workspace root (`/` and the home directory are rejected
+  as roots);
 - **command execution is not shipped** (no shell, no interpreters, no
   subprocess tools);
 - a bearer token for a **non-loopback host requires `https://`**;
-- native Windows and macOS are **not supported** in v0.1.
+- native Windows and macOS are **not supported** in v0.1.x.
 
 ## Reporting a vulnerability
 
@@ -43,9 +46,31 @@ configuration, the input that triggered it, and any log excerpt from
   logged and never accepted over plain `http://` to a non-loopback host.
 - Transcript files under the XDG state dir are written `0600`.
 - Workspace tool access is jailed to the resolved workspace root and gated by
-  a sensitive-path denylist (`.ssh`, `.gnupg`, `.aws`, `.azure`, `.kube`,
-  `.config/gcloud`, `.env*`, `credentials*`).
-- Ollama streams are bounded (per-event and cumulative caps, idle timeout);
-  pull/chat bodies cannot grow without limit.
+  a lexical sensitive-path policy. A requested path is refused when any of
+  its components is a sensitive dot-directory — `.ssh`, `.gnupg`, `.aws`,
+  `.azure`, `.kube`, or the adjacent `.config`/`gcloud` pair — or when its
+  final component is a credential file: the dotenv family (`.env` and any
+  `.env.*`, e.g. `.env.local` or `.env.production`) or exactly `credentials`
+  or `credentials.json`. The carve-out is exact too: `.env.example`, the
+  dotenv template, stays readable and writable, and a name merely prefixed
+  with `credentials` (e.g. `credentials.json.backup`) is not in the
+  denylist.
+- Ollama streams are bounded. Every NDJSON stream (pull and chat) aborts when
+  a single event exceeds 4 MiB of raw JSON or when the body delivers no bytes
+  for the 90s idle window — there is no total request deadline, so a long
+  generation or download with steady deltas keeps running. Chat additionally
+  caps cumulative raw NDJSON bytes at 16 MiB per request, counting JSON
+  framing, content, thinking, and tool calls, so tool arguments cannot slip
+  past the cap. Pull (model downloads) deliberately has no cumulative cap;
+  its per-event cap and idle watchdog still apply. Non-stream responses are
+  read capped at 64 MiB and ordinary requests time out at 30 s; error bodies
+  from failed streams are read under the same idle watchdog.
+- No HTTP redirect is ever followed (both the finite and the streaming
+  client refuse), so a bearer token cannot be forwarded to a different
+  origin or downgraded to plain `http://` by a redirecting Ollama host.
+- Agent runs are budgeted: one decoded tool-call argument may not exceed
+  1 MiB, a run executes at most 64 tool calls across its iterations, and the
+  model loop runs at most 12 iterations by default (raise the iteration cap
+  with `-max-tool-iterations` / `SELFTUI_AGENT_MAX_TOOL_ITERATIONS`).
 - See `docs/run-command-containment.md` for the dated record of why command
   execution was deferred rather than shipped.

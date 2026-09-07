@@ -75,7 +75,14 @@ func Load(ov Overrides) (Config, error) {
 			return cfg, fmt.Errorf("parse config %s: %w", *path, err)
 		}
 		applyFile(&cfg, file)
-	} else if !os.IsNotExist(err) {
+	} else if os.IsNotExist(err) {
+		// A missing *explicit* -config path is a user-intent statement (a typo'd
+		// path must not silently run with defaults); only the auto-resolved
+		// default XDG file may be absent on first boot (H-01).
+		if ov.ConfigPath != nil {
+			return cfg, fmt.Errorf("config file not found at %s", *path)
+		}
+	} else {
 		return cfg, fmt.Errorf("read config %s: %w", *path, err)
 	}
 
@@ -90,6 +97,19 @@ func Load(ov Overrides) (Config, error) {
 	// 4. policy check on the fully resolved value.
 	if err := Validate(cfg); err != nil {
 		return cfg, err
+	}
+
+	// 5. canonical persistence: with workspace tools armed, Load replaces the
+	// accepted spelling with its canonical absolute root, so every consumer of
+	// this Config — the agent runner, the status bar, a later Settings save —
+	// receives the same directory the tool jail canonicalizes against (H-02).
+	// Validate just resolved the same spelling successfully, so this cannot
+	// fail unless the filesystem changes in between; on that rare race the
+	// spelling is kept and the tool layer still canonicalizes per call.
+	if cfg.ToolsEnabled && cfg.WorkspaceRoot != "" {
+		if canon, err := canonicalDir(cfg.WorkspaceRoot); err == nil {
+			cfg.WorkspaceRoot = canon
+		}
 	}
 
 	return cfg, nil
@@ -163,21 +183,21 @@ func applyEnv(c *Config) error {
 	if v := os.Getenv(envPrefix + "AGENT_TEMPERATURE"); v != "" {
 		parsed, err := strconv.ParseFloat(v, 64)
 		if err != nil {
-			return fmt.Errorf("parse %sTEMPERATURE=%q: %w", envPrefix, v, err)
+			return fmt.Errorf("parse %sAGENT_TEMPERATURE=%q: %w", envPrefix, v, err)
 		}
 		c.Agent.Temperature = parsed
 	}
 	if v := os.Getenv(envPrefix + "AGENT_TOP_P"); v != "" {
 		parsed, err := strconv.ParseFloat(v, 64)
 		if err != nil {
-			return fmt.Errorf("parse %sTOP_P=%q: %w", envPrefix, v, err)
+			return fmt.Errorf("parse %sAGENT_TOP_P=%q: %w", envPrefix, v, err)
 		}
 		c.Agent.TopP = parsed
 	}
 	if v := os.Getenv(envPrefix + "AGENT_NUM_CTX"); v != "" {
 		parsed, err := strconv.Atoi(v)
 		if err != nil {
-			return fmt.Errorf("parse %sNUM_CTX=%q: %w", envPrefix, v, err)
+			return fmt.Errorf("parse %sAGENT_NUM_CTX=%q: %w", envPrefix, v, err)
 		}
 		c.Agent.NumCtx = parsed
 	}
@@ -187,7 +207,7 @@ func applyEnv(c *Config) error {
 	if v := os.Getenv(envPrefix + "AGENT_MAX_TOOL_ITERATIONS"); v != "" {
 		parsed, err := strconv.Atoi(v)
 		if err != nil {
-			return fmt.Errorf("parse %sMAX_TOOL_ITERATIONS=%q: %w", envPrefix, v, err)
+			return fmt.Errorf("parse %sAGENT_MAX_TOOL_ITERATIONS=%q: %w", envPrefix, v, err)
 		}
 		c.Agent.MaxToolIterations = parsed
 	}

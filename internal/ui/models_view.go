@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/list"
@@ -14,6 +16,7 @@ import (
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"selftui/internal/ollama"
 )
@@ -46,6 +49,26 @@ type ModelsView struct {
 	showPane    bool // stacked layout: detail pane toggled open
 	scroll      int  // detail pane scroll offset (lines)
 
+	// clientGen counts client replacements (ApplyClient). Every async
+	// list/show result stamps the generation it was issued under; a
+	// completion whose generation differs from the current one belongs to an
+	// obsolete host and is dropped (M-03).
+	clientGen uint64
+
+	// showReq/showTarget track the latest issued detail (show) request.
+	// showTarget is the model that request asked for; showReq is its
+	// monotonically increasing id. A completion is applied only when it
+	// answers the latest request (its id matches) and comes from the current
+	// client generation — a superseded or obsolete /api/show can never
+	// repaint the pane under a newer selection or host (M-03).
+	showReq    uint64
+	showTarget string
+
+	// showCancel cancels the in-flight /api/show request so an obsolete
+	// detail fetch stops as soon as the selection changes or the client is
+	// replaced (M-03). The tea loop owns it: commands only read it.
+	showCancel context.CancelFunc
+
 	// Transient feedback ("deleted qwen3:8b"…), cleared on the next reload.
 	notice string
 
@@ -56,21 +79,31 @@ type ModelsView struct {
 	deleteErr     string
 
 	// Pull flow (p → name input → stream; esc cancels).
-	inputMode  bool
-	input      textinput.Model
-	pulling    bool
-	pullName   string
-	pullErr    string
-	pullStatus string
-	pullDigest string
-	pullTotal  int64
-	pullDone   int64
-	pullCh     chan tea.Msg // activity channel (PLAN §8), owned by one pull
-	pullCancel func()       // cancels the in-flight pull context
+	inputMode      bool
+	input          textinput.Model
+	pulling        bool
+	pullName       string
+	pullErr        string
+	pullStatus     string
+	pullDigest     string
+	pullTotal      int64
+	pullDone       int64
+	pullCh         chan tea.Msg  // activity channel (PLAN §8), owned by one pull
+	pullStreamDone chan struct{} // closed by the pull producer when its goroutine exits (M-06)
+	pullCancel     func()        // cancels the in-flight pull context
 
 	// Reusable dialog widgets.
 	spinner  spinner.Model
 	progress progress.Model
+
+	// spinnerPending is the M-09 deterministic test seam: it counts live
+	// dialog-spinner chains — the one seed scheduled when pulling/deleting
+	// opens, plus each FPS-paced successor scheduled after a consumed tick —
+	// whose TickMsg has not yet arrived. It stays 0 or 1 in every steady
+	// state and is reset when a busy state closes, so tests can assert that
+	// progress events and unrelated input never create extra chains without
+	// waiting on real spinner.FPS timers.
+	spinnerPending int
 
 	selIdx int
 
@@ -164,18 +197,30 @@ func modelSummary(m ollama.Model) string {
 	if m.Quantization != "" {
 		parts = append(parts, m.Quantization)
 	}
-	return strings.Join(parts, " · ")
+	// List secondary rows and the picker summary render these remote values;
+	// sanitize the joined display string (H-05).
+	return sanitizeTerminalText(strings.Join(parts, " · "))
 }
 
 // --- messages -------------------------------------------------------------
 
-type modelsLoadedMsg struct{ list []ollama.Model }
-type modelsLoadErrMsg struct{ err string }
+type modelsLoadedMsg struct {
+	gen  uint64 // client generation at issue; mismatched completions are dropped
+	list []ollama.Model
+}
+type modelsLoadErrMsg struct {
+	gen uint64
+	err string
+}
 type modelsShowMsg struct {
+	gen     uint64 // client generation at issue
+	req     uint64 // request id (0 = hand-built/legacy result)
 	name    string
 	details ollama.Details
 }
 type modelsShowErrMsg struct {
+	gen  uint64
+	req  uint64
 	name string
 	err  string
 }
@@ -210,27 +255,84 @@ func (v ModelsView) Init() tea.Cmd {
 }
 
 func (v ModelsView) loadCmd() tea.Cmd {
+	gen := v.clientGen
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(v.ctx, 60*time.Second)
 		defer cancel()
 		models, err := v.client.List(ctx)
 		if err != nil {
-			return modelsEventMsg{msg: modelsLoadErrMsg{err: err.Error()}}
+			return modelsEventMsg{msg: modelsLoadErrMsg{gen: gen, err: err.Error()}}
 		}
-		return modelsEventMsg{msg: modelsLoadedMsg{list: models}}
+		return modelsEventMsg{msg: modelsLoadedMsg{gen: gen, list: models}}
 	}
 }
 
-func (v ModelsView) showCmd(name string) tea.Cmd {
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(v.ctx, 60*time.Second)
+// requestShow starts a /api/show fetch for name, replacing any in-flight
+// detail request (whose context is canceled and whose late completion is
+// dropped by request id). The returned command stamps the request id and the
+// client generation, so a completion can never repaint the pane after the
+// selection moved or the host changed (M-03). All state mutation happens on
+// the tea update loop; the command only reads and reports.
+func (v ModelsView) requestShow(name string) (ModelsView, tea.Cmd) {
+	if v.showCancel != nil {
+		v.showCancel()
+	}
+	ctx, cancel := context.WithTimeout(v.ctx, 60*time.Second)
+	v.showReq++
+	req, gen := v.showReq, v.clientGen
+	v.showTarget = name
+	v.showCancel = cancel
+	v.loadingShow = true
+	v.detailErr = ""
+	return v, func() tea.Msg {
 		defer cancel()
 		details, err := v.client.Show(ctx, name)
 		if err != nil {
-			return modelsEventMsg{msg: modelsShowErrMsg{name: name, err: err.Error()}}
+			return modelsEventMsg{msg: modelsShowErrMsg{gen: gen, req: req, name: name, err: err.Error()}}
 		}
-		return modelsEventMsg{msg: modelsShowMsg{name: name, details: details}}
+		return modelsEventMsg{msg: modelsShowMsg{gen: gen, req: req, name: name, details: details}}
 	}
+}
+
+// releaseShow clears the in-flight show state: nothing is pending, so the
+// pane can no longer sit on a dangling "inspecting…" state after the latest
+// request's result was dropped or superseded.
+func (v ModelsView) releaseShow() ModelsView {
+	v.loadingShow = false
+	v.showTarget = ""
+	if v.showCancel != nil {
+		v.showCancel()
+	}
+	v.showCancel = nil
+	return v
+}
+
+// acceptShow reports whether a delivered /api/show result may repaint the
+// detail pane. It must (1) come from the current client generation, (2) not
+// belong to a superseded request, and (3) not name a model the user no
+// longer has selected (M-03). Real completions carry the request id they
+// answer and must match both the latest id and the current selection. A
+// hand-built result without an id (req 0 — legacy deliveries, routing/
+// render tests) applies only when there is no selection to protect (empty
+// list) or when it names the model of the pending request, so a stale
+// hand-built result cannot race a real one.
+func (v ModelsView) acceptShow(gen, req uint64, name string) bool {
+	if gen != v.clientGen {
+		return false
+	}
+	if req == 0 {
+		if len(v.models) == 0 {
+			return true
+		}
+		if name != v.modelName(v.list.Index()) {
+			return false
+		}
+		return v.showTarget == "" || v.showTarget == name
+	}
+	if len(v.models) == 0 {
+		return false
+	}
+	return req == v.showReq && name == v.modelName(v.list.Index())
 }
 
 func (v ModelsView) deleteCmd(name string) tea.Cmd {
@@ -260,9 +362,11 @@ func (v ModelsView) waitPullCmd() tea.Cmd {
 // modelsPullMsg; the trailing result as one modelsPullDoneMsg.
 func (v ModelsView) startPull(name string) (ModelsView, tea.Cmd) {
 	ch := make(chan tea.Msg, 64)
+	done := make(chan struct{})
 	ctx, cancel := context.WithCancel(v.ctx)
 
 	v.pullCh = ch
+	v.pullStreamDone = done
 	v.pullCancel = cancel
 	v.pulling = true
 	v.pullName = name
@@ -272,23 +376,37 @@ func (v ModelsView) startPull(name string) (ModelsView, tea.Cmd) {
 	v.pullTotal, v.pullDone = 0, 0
 
 	go func() {
+		defer close(done)
 		defer close(ch)
 		defer cancel()
 		err := v.client.Pull(ctx, name, func(p ollama.PullProgress) {
-			ch <- modelsEventMsg{msg: modelsPullMsg{name: name, progress: p}}
+			emitEvent(ctx, ch, modelsEventMsg{msg: modelsPullMsg{name: name, progress: p}})
 		})
 		if err != nil {
-			ch <- modelsEventMsg{msg: modelsPullDoneMsg{name: name, err: err.Error()}}
+			emitEvent(ctx, ch, modelsEventMsg{msg: modelsPullDoneMsg{name: name, err: err.Error()}})
 			return
 		}
-		ch <- modelsEventMsg{msg: modelsPullDoneMsg{name: name}}
+		emitEvent(ctx, ch, modelsEventMsg{msg: modelsPullDoneMsg{name: name}})
 	}()
 
 	return v, v.waitPullCmd()
 }
 
-func (v ModelsView) spinnerTick() tea.Cmd {
+// spinnerSeed starts the single dialog-spinner chain: one immediate TickMsg
+// whose consumption makes spinner.Update hand back the first FPS-paced
+// successor. Only the transition into pulling/deleting seeds a chain (M-09);
+// the name-input and confirm states have no spinner.
+func (v ModelsView) spinnerSeed() tea.Cmd {
 	return func() tea.Msg { return modelsEventMsg{msg: v.spinner.Tick()} }
+}
+
+// spinnerResume keeps the one chain alive: it wraps the FPS-paced successor
+// command spinner.Update returned for a consumed TickMsg so the next tick
+// crosses the App shell inside modelsEventMsg (the envelope every async
+// Models result uses). Update schedules it only while the busy state that
+// owns the spinner is still active, so completion stops rescheduling (M-09).
+func (v ModelsView) spinnerResume(successor tea.Cmd) tea.Cmd {
+	return func() tea.Msg { return modelsEventMsg{msg: successor()} }
 }
 
 // ModalOpen reports whether the Models tab is showing a modal (confirm /
@@ -305,6 +423,7 @@ func (v ModelsView) ModalOpen() bool {
 func (v ModelsView) Update(msg tea.Msg) (ModelsView, tea.Cmd) {
 	cmds := make([]tea.Cmd, 0, 3)
 	var cmd tea.Cmd
+	spinnerBusy := v.deleting || v.pulling
 	switch msg := msg.(type) {
 	case modelsEventMsg:
 		// The App shell normally unwraps the envelope before delegating; when
@@ -318,30 +437,75 @@ func (v ModelsView) Update(msg tea.Msg) (ModelsView, tea.Cmd) {
 		return v, nil
 
 	case modelsLoadedMsg:
+		// A list from an obsolete client generation must not replace the
+		// current host's state (M-03).
+		if msg.gen != v.clientGen {
+			return v, nil
+		}
 		v, cmd = v.onLoaded(msg.list)
 		cmds = append(cmds, cmd)
 
 	case modelsLoadErrMsg:
+		if msg.gen != v.clientGen {
+			return v, nil
+		}
 		v.loading = false
-		v.listErr = msg.err
+		v.listErr = sanitizeTerminalText(msg.err)
 		v.notice = ""
 		return v, nil
 
 	case modelsShowMsg:
-		v.detail = &msg.details
-		v.detailName = msg.name
+		// A stale detail result — from an obsolete host, a superseded
+		// request, or for a model the user no longer has selected — must
+		// never repaint the pane (M-03).
+		if msg.gen != v.clientGen {
+			return v, nil
+		}
+		if !v.acceptShow(msg.gen, msg.req, msg.name) {
+			// The result answered the latest request but for a model that is
+			// no longer selected (the selection or host moved on without a
+			// replacement request): drop the payload and release the pending
+			// show state so the pane never dangles on "inspecting…".
+			if msg.req != 0 && msg.req == v.showReq {
+				v = v.releaseShow()
+			}
+			return v, nil
+		}
+		d := sanitizeDetails(msg.details) // H-05: remote /api/show payload
+		v.detail = &d
+		v.detailName = sanitizeTerminalText(msg.name)
 		v.detailErr = ""
 		v.loadingShow = false
+		v.showTarget = ""
+		v.showCancel = nil
 		v.scroll = 0
 		return v, nil
 
 	case modelsShowErrMsg:
-		v.detailErr = msg.err
+		if msg.gen != v.clientGen {
+			return v, nil
+		}
+		if !v.acceptShow(msg.gen, msg.req, msg.name) {
+			if msg.req != 0 && msg.req == v.showReq {
+				v = v.releaseShow()
+			}
+			return v, nil
+		}
+		v.detailErr = sanitizeTerminalText(msg.err)
 		v.loadingShow = false
+		v.showTarget = ""
+		v.showCancel = nil
 		return v, nil
 
 	case spinner.TickMsg:
-		v.spinner, _ = v.spinner.Update(msg)
+		v.spinner, cmd = v.spinner.Update(msg)
+		if msg.ID == v.spinner.ID() && v.spinnerPending > 0 {
+			v.spinnerPending-- // this scheduled tick arrived
+		}
+		if cmd != nil && (v.deleting || v.pulling) {
+			v.spinnerPending++
+			cmds = append(cmds, v.spinnerResume(cmd))
+		}
 
 	case modelsDeleteDoneMsg:
 		v, cmd = v.onDeleteDone(msg)
@@ -360,10 +524,15 @@ func (v ModelsView) Update(msg tea.Msg) (ModelsView, tea.Cmd) {
 		cmds = append(cmds, cmd)
 	}
 
-	// Keep the dialog spinner ticking while it is actually visible
-	// (deleting / pulling). The name-input and confirm states have no spinner.
-	if v.deleting || v.pulling {
-		cmds = append(cmds, v.spinnerTick())
+	// Seed exactly one spinner chain on the transition into a busy state
+	// (pulling / deleting). While a busy state is already open, progress,
+	// keys, and every other message schedule nothing: the spinner's own
+	// successor (above) is the only continuation, paced by spinner.FPS
+	// instead of by event volume. Before M-09 every message re-seeded an
+	// unpaced tick, so a long pull multiplied scheduled chains.
+	if !spinnerBusy && (v.deleting || v.pulling) {
+		v.spinnerPending++
+		cmds = append(cmds, v.spinnerSeed())
 	}
 	if len(cmds) == 0 {
 		return v, nil
@@ -371,27 +540,89 @@ func (v ModelsView) Update(msg tea.Msg) (ModelsView, tea.Cmd) {
 	return v, tea.Batch(cmds...)
 }
 
-// onLoaded replaces the model list. On wide/medium-split layouts the inspect
-// pane is always visible, so the first model is inspected immediately.
+// onLoaded replaces the model list. The bubbles list preserves (clamped) its
+// cursor across SetItems, so after a reload the selection is the model now
+// under that cursor — not necessarily the first item, and not necessarily the
+// model the retained detail payload belongs to. The inspect pane must always
+// describe the model under the cursor (its header is that model's name): a
+// reload that drops or reorders the previously inspected model therefore has
+// to drop the stale payload and re-inspect the new selection, or the pane
+// paints one model's header over another's facts (P1-3).
 func (v ModelsView) onLoaded(models []ollama.Model) (ModelsView, tea.Cmd) {
+	models = sanitizeModelNames(models) // H-05: /api/tags names are remote
 	v.models = models
 	v.loading = false
 	v.listErr = ""
 	v.pullErr = ""
 	v.notice = ""
-	v.selIdx = 0
 
 	items := make([]list.Item, len(models))
 	for i, m := range models {
 		items[i] = modelsItem{m}
 	}
 	cmds := []tea.Cmd{v.list.SetItems(items)}
+	// Sync our selection mirror to the list's actual (clamped) cursor: the
+	// bubbles cursor survives SetItems, so mirroring it here keeps selIdx,
+	// the highlight, and any later auto-inspect in agreement (P1-3).
+	cur := v.list.Index()
+	if len(models) > 0 {
+		cur = clampInt(cur, 0, len(models)-1)
+	} else {
+		cur = 0
+	}
+	v.selIdx = cur
 
-	if ForModels(v.w).SideBySide && len(models) > 0 {
-		v.loadingShow = true
-		cmds = append(cmds, v.showCmd(models[0].Name))
+	// Reconcile the detail pane with the reloaded list. PaneVisible is the
+	// geometry where the pane is drawn: side-by-side always, stacked after
+	// enter.
+	paneVisible := ForModels(v.w).SideBySide || v.showPane
+	switch {
+	case len(models) == 0:
+		// Nothing to inspect: no pane can render, drop any stale payload so a
+		// later reload cannot resurrect it under a fresh list.
+		v.detail = nil
+		v.detailName = ""
+		v = v.releaseShow()
+
+	case paneVisible:
+		name := models[cur].Name
+		if v.detailName != name || v.detail == nil {
+			// The retained payload belongs to a model that is no longer under
+			// the cursor (removed or reordered by the reload): drop it and
+			// inspect the new selection so header and body always agree.
+			// requestShow replaces any in-flight fetch for the pre-reload list
+			// (cancel + id guard), so a superseded completion cannot repaint.
+			v.detail = nil
+			v.detailName = ""
+			v = v.releaseShow()
+			var sc tea.Cmd
+			v, sc = v.requestShow(name)
+			cmds = append(cmds, sc)
+		}
+		// detailName == name with a payload: the pane already shows the model
+		// under the cursor; retain it (no redundant refetch on every reload).
+
+	default:
+		// Stacked layout with the pane closed: nothing is drawn, but a stale
+		// payload for a model no longer listed would be resurrected by the
+		// next enter on that name. Drop it when the inspected model vanished.
+		if v.detailName != "" && !containsModel(models, v.detailName) {
+			v.detail = nil
+			v.detailName = ""
+			v = v.releaseShow()
+		}
 	}
 	return v, tea.Batch(cmds...)
+}
+
+// containsModel reports whether models lists a model with the given name.
+func containsModel(models []ollama.Model, name string) bool {
+	for _, m := range models {
+		if m.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 // onDeleteDone finalizes a DELETE round-trip. Success closes the dialog and
@@ -399,17 +630,23 @@ func (v ModelsView) onLoaded(models []ollama.Model) (ModelsView, tea.Cmd) {
 // under the question for an immediate retry.
 func (v ModelsView) onDeleteDone(m modelsDeleteDoneMsg) (ModelsView, tea.Cmd) {
 	v.deleting = false
+	v.spinnerPending = 0 // M-09: no live spinner chain once the busy state closes
 	if m.err != "" {
 		v.confirmDelete = true
-		v.deleteErr = m.err
+		v.deleteErr = sanitizeTerminalText(m.err) // remote DELETE error body
 		return v, nil
 	}
 	v.confirmDelete = false
 	v.deleteTarget = ""
 	v.notice = "deleted " + m.name
-	if v.detailName == m.name {
+	if v.detailName == m.name || v.showTarget == m.name {
 		v.detail = nil
 		v.detailName = ""
+		if v.showTarget == m.name {
+			// A pending show for the deleted model is pointless; release it
+			// so its late completion cannot resurrect the detail.
+			v = v.releaseShow()
+		}
 	}
 	return v, v.loadCmd()
 }
@@ -418,7 +655,7 @@ func (v ModelsView) onDeleteDone(m modelsDeleteDoneMsg) (ModelsView, tea.Cmd) {
 // activity command. A new layer digest resets the progress numbers.
 func (v ModelsView) onPullProgress(m modelsPullMsg) (ModelsView, tea.Cmd) {
 	p := m.progress
-	v.pullStatus = p.Status
+	v.pullStatus = sanitizeTerminalText(p.Status) // remote pull status text
 	if p.Digest != "" {
 		if p.Digest != v.pullDigest {
 			v.pullDigest = p.Digest
@@ -433,10 +670,12 @@ func (v ModelsView) onPullProgress(m modelsPullMsg) (ModelsView, tea.Cmd) {
 // failure surfaces the error in the view.
 func (v ModelsView) onPullDone(m modelsPullDoneMsg) (ModelsView, tea.Cmd) {
 	v.pulling = false
+	v.spinnerPending = 0 // M-09: no live spinner chain once the busy state closes
 	v.pullCh = nil
+	v.pullStreamDone = nil
 	v.pullCancel = nil
 	if m.err != "" {
-		v.pullErr = m.err
+		v.pullErr = sanitizeTerminalText(m.err) // remote pull error body
 		return v, nil
 	}
 	v.notice = "pulled " + m.name
@@ -506,12 +745,20 @@ func (v ModelsView) handleKey(msg tea.KeyMsg) (ModelsView, tea.Cmd) {
 	v.list = updated
 
 	// Auto-inspect on selection change when the pane is always visible.
+	// M-03: a show that is still in flight for the previously selected model
+	// must not suppress the fetch for the new selection — requestShow
+	// replaces it (cancel + id guard), so the user always ends up looking at
+	// the model they actually selected.
 	if ForModels(v.w).SideBySide && len(v.models) > 0 {
 		cur := v.list.Index()
 		if cur != v.selIdx {
 			v.selIdx = cur
-			if !v.loadingShow && v.detailName != v.modelName(cur) {
-				return v, tea.Batch(cmd, v.showCmd(v.modelName(cur)))
+			name := v.modelName(cur)
+			alreadyShown := v.detailName == name && v.detail != nil && !v.loadingShow
+			if !alreadyShown && name != v.showTarget {
+				var sc tea.Cmd
+				v, sc = v.requestShow(name)
+				return v, tea.Batch(cmd, sc)
 			}
 		}
 	}
@@ -597,12 +844,18 @@ func (v ModelsView) targetSize(name string) string {
 // --- view -----------------------------------------------------------------
 
 // View renders list + inspect per the breakpoint layout. A modal state
-// (confirm / input / pull) replaces the whole body with a centered dialog.
+// (confirm / input / pull / deleting) replaces the whole body with a
+// centered dialog.
 func (v ModelsView) View() string {
 	layout := ForModels(v.w)
 	bodyH := v.h - 2 // tab bar + status bar
 
 	switch {
+	case v.deleting:
+		// M-07: the in-flight delete keeps its own busy overlay from approval
+		// until the DELETE completes; without this branch the view fell back
+		// to the interactive list while keys were ignored (a frozen look).
+		return v.renderOverlay(bodyH, "Deleting "+v.deleteTarget, v.deleteProgressLines())
 	case v.confirmDelete:
 		return v.renderOverlay(bodyH, "Delete model", v.confirmLines())
 	case v.inputMode:
@@ -753,9 +1006,6 @@ func (v ModelsView) renderOverlay(bodyH int, title string, lines []string) strin
 
 // confirmLines builds the delete-confirm dialog body.
 func (v ModelsView) confirmLines() []string {
-	if v.deleting {
-		return []string{v.spinner.View() + " deleting " + v.deleteTarget + "…"}
-	}
 	lines := []string{"Delete " + v.deleteTarget + "?"}
 	if sz := v.targetSize(v.deleteTarget); sz != "" {
 		lines = append(lines, "size "+sz)
@@ -765,6 +1015,13 @@ func (v ModelsView) confirmLines() []string {
 		lines = append(lines, "", v.styles.Error.Render("⚠ "+v.deleteErr))
 	}
 	return lines
+}
+
+// deleteProgressLines builds the in-flight delete dialog body (M-07): the
+// spinner plus the model being removed. Esc deliberately does not cancel —
+// the DELETE HTTP round-trip is not safely interruptible.
+func (v ModelsView) deleteProgressLines() []string {
+	return []string{v.spinner.View() + " deleting " + v.deleteTarget + "…"}
 }
 
 // inputLines builds the pull name-entry dialog body.
@@ -820,9 +1077,7 @@ func (v ModelsView) inspectSelected() (ModelsView, tea.Cmd) {
 	if v.detailName == name && v.detail != nil && !v.loadingShow {
 		return v, nil // already inspecting this model
 	}
-	v.loadingShow = true
-	v.detailErr = ""
-	return v, v.showCmd(name)
+	return v.requestShow(name)
 }
 
 func (v ModelsView) paneVisible() bool {
@@ -952,31 +1207,105 @@ func modelInfoLines(info map[string]any) string {
 
 // wrapLines word-wraps every line to at most width cells, splitting at the
 // last whitespace and hard-breaking mid-word when a single word overflows.
-// wrapLines wraps each line to width columns. Rows that already fit (judged
-// by visible width, so styled rows with ANSI escapes are never re-split
-// mid-sequence) pass through untouched; only genuinely long lines are
-// wrapped at word boundaries.
+// Rows that already fit (judged by visible width, so styled rows with ANSI
+// escapes are never re-split mid-sequence) pass through untouched; only
+// genuinely long lines are wrapped.
+//
+// Wrapping is display-cell- and grapheme-aware (M-05): the overflow path
+// delegates to the pinned Charm wrap primitive (github.com/charmbracelet/x/ansi
+// — the same width model lipgloss.Width uses), which preserves ANSI sequences
+// whole and measures wide CJK/emoji at 2 cells and ZWJ clusters atomically,
+// then rejoinSplitMarks repairs the one cluster defect that primitive has
+// with zero-width combining marks. Never slice by len/byte offsets here:
+// bytes are not cells and a cut inside a rune or an escape sequence corrupts
+// the terminal output.
 func wrapLines(lines []string, width int) []string {
 	if width < 1 {
 		return lines
 	}
-	var out []string
+	out := make([]string, 0, len(lines))
 	for _, line := range lines {
 		if lipgloss.Width(line) <= width {
 			out = append(out, line)
 			continue
 		}
-		for len(line) > width {
-			cut := strings.LastIndex(line[:width+1], " ")
-			if cut <= 0 {
-				cut = width
-			}
-			out = append(out, line[:cut])
-			line = strings.TrimLeft(line[cut:], " ")
-		}
-		out = append(out, line)
+		wrapped := ansi.Wrap(line, width, "")
+		out = append(out, rejoinSplitMarks(strings.Split(wrapped, "\n"))...)
 	}
 	return out
+}
+
+// rejoinSplitMarks repairs the one cluster defect of the Charm wrap primitive:
+// ansi.Wrap measures combining marks and ZWJ as zero width, so when a word
+// fills its line exactly the row break can land right after the base rune,
+// stranding the mark at the head of the next row — visually detached from the
+// glyph it modifies. Moving a stranded mark to the end of the previous row
+// changes neither row's cell count (marks are zero-width) and never loses or
+// reorders visible text. Style sequences at the row head (SelfTUI's own SGR
+// opens; remote text is ANSI-sanitized before it reaches wrapLines) are
+// skipped so a styled run starting a row is not mistaken for a stranded mark.
+func rejoinSplitMarks(rows []string) []string {
+	for i := 1; i < len(rows); i++ {
+		for {
+			head := ansiHeadLen(rows[i])
+			if head >= len(rows[i]) {
+				break // style-only row
+			}
+			r, size := utf8.DecodeRuneInString(rows[i][head:])
+			if !isZeroWidthMark(r) {
+				break
+			}
+			rows[i-1] += rows[i][head : head+size]
+			rows[i] = rows[i][:head] + rows[i][head+size:]
+		}
+	}
+	return rows
+}
+
+// isZeroWidthMark reports whether r is a combining mark or a zero-width joiner
+// — zero-width runes that must stay glued to the rune they modify and must
+// never open a wrapped row.
+func isZeroWidthMark(r rune) bool {
+	return r == '\u200d' ||
+		unicode.Is(unicode.Mn, r) || unicode.Is(unicode.Mc, r) || unicode.Is(unicode.Me, r)
+}
+
+// ansiHeadLen returns the byte length of the leading ANSI escape sequences in
+// s (CSI through its final byte, OSC through BEL/ST, two-byte ESC pairs), so
+// callers can inspect the first visible rune of a styled row.
+func ansiHeadLen(s string) int {
+	i := 0
+	for i < len(s) && s[i] == '\x1b' {
+		if i+1 >= len(s) {
+			return len(s)
+		}
+		switch s[i+1] {
+		case '[': // CSI: through the final byte (0x40-0x7e).
+			j := i + 2
+			for j < len(s) && (s[j] < 0x40 || s[j] > 0x7e) {
+				j++
+			}
+			if j < len(s) {
+				j++
+			}
+			i = j
+		case ']': // OSC: through BEL or ST (ESC \).
+			j := i + 2
+			for j < len(s) && s[j] != '\a' && !(s[j] == '\x1b' && j+1 < len(s) && s[j+1] == '\\') {
+				j++
+			}
+			if j < len(s) {
+				j++ // consume BEL (or the ESC of an ST pair)
+				if j-1 < len(s) && s[j-1] == '\x1b' && j < len(s) {
+					j++ // consume the '\' of an ST pair
+				}
+			}
+			i = j
+		default: // Two-byte escape (ESC X).
+			i += 2
+		}
+	}
+	return i
 }
 
 func humanBytes(n int64) string {
@@ -1036,9 +1365,15 @@ func (v ModelsView) applyTheme(dark bool, styles Styles) ModelsView {
 // from the new host via the returned non-blocking load cmd.
 func (v ModelsView) ApplyClient(c *ollama.Client) (ModelsView, tea.Cmd) {
 	v.client = c
-	v.models = nil
+	// A client replacement invalidates every in-flight result of the old
+	// host: bump the generation and cancel the pending show so a stale
+	// list/show completion is dropped on arrival (M-03).
+	v.clientGen++
+	v = v.releaseShow()
 	v.detail = nil
 	v.detailName = ""
+	v.detailErr = ""
+	v.models = nil
 	v.listErr = ""
 	v.notice = ""
 	v.loading = true

@@ -759,3 +759,47 @@ func TestAgentViewRendersAtBothGeometries(t *testing.T) {
 		}
 	}
 }
+
+// TestAgentViewReloadRejectsObsoleteModelList reproduces M-03's agent-side
+// load shape: the Agent view starts a model-list fetch against the old host
+// (Init, r, or a picker refresh) and the user then saves a new host in
+// Settings, which reloads through ApplyConfig. The old host's late result
+// must not replace the new host's list or the chat model chosen from it.
+func TestAgentViewReloadRejectsObsoleteModelList(t *testing.T) {
+	oldClient, _ := tagsServer(t, "old-agent-model")
+	newClient, _ := tagsServer(t, "new-agent-model")
+
+	v := testAgent(t, oldClient)
+
+	// An old-host model-list fetch completes before the host is swapped; its
+	// result is captured (it was "in flight" across ApplyConfig).
+	staleEv := v.loadModelsCmd()()
+	staleLoaded, ok := staleEv.(agentEventMsg).msg.(agentModelsLoadedMsg)
+	if !ok || len(staleLoaded.models) != 1 || staleLoaded.models[0].Name != "old-agent-model" {
+		t.Fatalf("captured stale agent load = %#v", staleLoaded)
+	}
+
+	// The user saves a new host: ApplyConfig(reload=true) refetches from the
+	// new client.
+	cfg := config.Default()
+	v, cmd := v.ApplyConfig(cfg, newClient, true)
+	if cmd == nil {
+		t.Fatal("ApplyConfig(reload): expected a model-list command")
+	}
+	freshEv := cmd()
+	freshLoaded, ok := freshEv.(agentEventMsg).msg.(agentModelsLoadedMsg)
+	if !ok {
+		t.Fatalf("ApplyConfig reload produced %T, want agentModelsLoadedMsg", freshEv)
+	}
+	v, _ = v.Update(freshLoaded)
+	if len(v.models) != 1 || v.models[0].Name != "new-agent-model" || v.model != "new-agent-model" {
+		t.Fatalf("new-host agent list not applied: models=%v model=%q", modelNames(v.models), v.model)
+	}
+
+	// The old host's late result arrives: it must be ignored.
+	v, _ = v.Update(staleLoaded)
+	if len(v.models) != 1 || v.models[0].Name != "new-agent-model" || v.model != "new-agent-model" {
+		t.Errorf("M-03: obsolete agent model list replaced the new host's after ApplyConfig: models=%v model=%q",
+			modelNames(v.models), v.model)
+	}
+}

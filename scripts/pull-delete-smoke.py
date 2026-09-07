@@ -3,15 +3,24 @@
 delete-with-confirm and streamed pull against a real Ollama host.
 
 Usage: scripts/pull-delete-smoke.py [model]
-Defaults to qwen3:0.6b — a real registry model. The smoke deletes it via the
-API first so tag presence is unambiguous, pulls it through the TUI (waiting
-on the UI's own completion signals), then deletes it through the TUI and
-verifies it left /api/tags. The host is left exactly as found.
+Defaults to qwen3:0.6b — a real registry model. NON-DESTRUCTIVE: the script
+captures the host's initial state before any mutation and refuses to run when
+the target model is already installed — it never deletes (or re-pulls to
+"restore") a model this run did not create, because a tag can move and the
+original digest is not recorded. Point make smoke at a disposable model/tag
+or run it against an isolated Ollama store. When the target is absent the run
+pulls it through the TUI (waiting on the UI's own completion signals), deletes
+it through the TUI, verifies it left /api/tags, and cleans up (including on
+failure) only a model this run provably created.
 
-Exit 0 only when, in order: the pull name input opens, the pull dialog
-renders (spinner/status/progress), the UI leaves the dialog with the model
-landed in /api/tags, delete confirm renders naming the model, and the model
-leaves /api/tags after `y`.
+Exit 0 only when, in order: the target was absent at start, the pull name
+input opens, the pull dialog renders (spinner/status/progress), the UI leaves
+the dialog with the model landed in /api/tags, delete confirm renders naming
+the model, and the model leaves /api/tags after `y`.
+
+Capture: the full TUI capture is written to a fresh private unique 0700 temp
+dir as one exclusive 0600 file. It is retained on failure (its exact path is
+printed) and removed after a successful run unless SMOKE_KEEP_CAPTURE=1.
 """
 import fcntl
 import json
@@ -22,16 +31,28 @@ import select
 import struct
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.request
 
-MODEL = sys.argv[1] if len(sys.argv) > 1 else "qwen3:0.6b"
-WATCH = float(os.environ.get("SMOKE_WATCH", "300"))  # max wait for the pull
-LOG = "/tmp/selftui-smoke.log"
-SIZE = (int(os.environ.get("SMOKE_COLS", "110")), int(os.environ.get("SMOKE_ROWS", "36")))
+# Import-safe defaults: argv, SMOKE_*, and the capture location are read or
+# created inside main() only — never at import time — so
+# scripts/pull_delete_smoke_test.py can exec_module() and drive every
+# function through unittest.mock fakes.
+MODEL = "qwen3:0.6b"
 
 out = bytearray()
 seen = ""
+
+# M-11: private unique capture. The run's TUI capture lives in a fresh
+# unique 0700 temp dir as one exclusive 0600 file, created only when a
+# capture is retained (failure) or explicitly kept — never at a fixed /tmp
+# path, so a symlink pre-placed at the old /tmp/selftui-smoke.log can never
+# be followed or overwritten. SMOKE_KEEP_CAPTURE=1 retains the capture
+# after a successful run.
+CAPTURE_PREFIX = "selftui-pull-delete-smoke-"
+capture_dir = None
+capture_path = None
 
 
 def api_delete(name):
@@ -54,6 +75,27 @@ def tags():
         return [m["name"] for m in d["models"]]
     except Exception as e:  # noqa: BLE001
         return f"tags error: {e}"
+
+
+def preflight(model):
+    """Capture initial host state before any mutation; refuse a live target.
+
+    Runs before any DELETE, pull, or TUI action. Aborts (exit 1) when the
+    target is already installed: deleting it would destroy something this run
+    did not create, and re-pulling the tag is not a safe restore because a tag
+    can move and the original digest is not recorded.
+    """
+    initial = tags()
+    if not isinstance(initial, list):
+        fail(f"ollama not reachable: {initial}")
+    if model in initial:
+        fail(
+            f"{model} is already installed; refusing to run — pull-delete-smoke "
+            "never deletes a pre-existing model (it would remove something this "
+            "run did not create). Use a disposable model/tag or an isolated "
+            "Ollama store."
+        )
+    return initial
 
 
 def pump(fd, deadline):
@@ -83,25 +125,72 @@ def wait_for(fd, pattern, timeout, step=0.25):
     return False
 
 
+def keep_capture():
+    """True when SMOKE_KEEP_CAPTURE=1 — retain the capture after a pass."""
+    return os.environ.get("SMOKE_KEEP_CAPTURE") == "1"
+
+
+def open_capture():
+    """Create (once) the run's private unique capture location.
+
+    Returns the capture path: a fresh 0700 temp dir (mkdtemp) holding one
+    freshly created exclusive 0600 file (mkstemp opens with O_CREAT|O_EXCL
+    and pins 0600). The path is never derived from a fixed caller-visible
+    path, so nothing pre-placed at an old /tmp capture path can be opened.
+    """
+    global capture_dir, capture_path
+    if capture_path is None:
+        capture_dir = tempfile.mkdtemp(prefix=CAPTURE_PREFIX)
+        fd, capture_path = tempfile.mkstemp(prefix="capture-", dir=capture_dir)
+        os.close(fd)
+    return capture_path
+
+
+def write_capture(text):
+    """Persist `text` into the run's capture file; returns its path."""
+    path = open_capture()
+    with open(path, "w") as f:
+        f.write(text)
+    return path
+
+
+def discard_capture():
+    """Remove the run's capture file and its private dir (best effort)."""
+    global capture_dir, capture_path
+    if capture_path is not None:
+        try:
+            os.unlink(capture_path)
+        except OSError:
+            pass
+        capture_path = None
+    if capture_dir is not None:
+        try:
+            os.rmdir(capture_dir)
+        except OSError:
+            pass
+        capture_dir = None
+
+
 def fail(msg):
-    with open(LOG, "w") as f:
-        f.write(seen)
-    print(f"SMOKE FAIL: {msg} (capture: {LOG})")
+    path = write_capture(seen)
+    print(f"SMOKE FAIL: {msg} (capture: {path})")
     sys.exit(1)
 
 
-def main():
-    # Leave no trace: ensure the target model is absent before we start.
-    api_delete(MODEL)
-    before = tags()
-    if not isinstance(before, list):
-        fail(f"ollama not reachable: {before}")
-    if MODEL in before:
-        fail(f"{MODEL} still present after pre-run cleanup")
+def main(argv=None):
+    model = argv[0] if argv else MODEL
+    watch = float(os.environ.get("SMOKE_WATCH", "300"))  # max wait for the pull
+    size = (int(os.environ.get("SMOKE_COLS", "110")), int(os.environ.get("SMOKE_ROWS", "36")))
+
+    # H-04: capture initial state and refuse an already-installed target
+    # BEFORE any mutation. A pre-existing model is never deleted and never
+    # "restored" by re-pulling its tag — the whole run aborts instead.
+    preflight(model)
+    created = False  # becomes True only after this run's pull installed it
 
     master, slave = pty.openpty()
     # target geometry: wide (110x36)
-    fcntl.ioctl(slave, 0x5414, struct.pack("HHHH", SIZE[1], SIZE[0], 0, 0))
+    fcntl.ioctl(slave, 0x5414, struct.pack("HHHH", size[1], size[0], 0, 0))
     proc = subprocess.Popen(
         ["./bin/selftui"],
         stdin=slave, stdout=slave, stderr=slave, close_fds=True,
@@ -142,7 +231,7 @@ def main():
         #    silent for a sustained beat the dialog is gone. A surfaced
         #    "⚠ <error>" aborts first.
         in_dialog = re.compile(r"Pulling %s|esc cancel|pulling [0-9a-f]{6,}|verifying sha256|writing manifest|success|B / |%%" % re.escape(MODEL))
-        end = time.time() + WATCH
+        end = time.time() + watch
         quiet_since = None
         while time.time() < end:
             pump(master, time.time() + 0.5)
@@ -161,7 +250,7 @@ def main():
             time.sleep(0.2)
         else:
             states = sorted(set(re.findall(r"pulling [^\r\n]*|\d+(\.\d+)? ?[KMG]?B / \d+(\.\d+)? ?[KMG]?B|\d+%%", seen)))
-            fail("pull dialog never exited within %ds (UI last showed: %s)" % (WATCH, " | ".join(states)))
+            fail("pull dialog never exited within %ds (UI last showed: %s)" % (watch, " | ".join(states)))
         pump(master, time.time() + 0.6)
 
         # 4. Server truth: the model is installed.
@@ -170,6 +259,7 @@ def main():
             fail(f"tags query after pull failed: {after}")
         if MODEL not in after:
             fail(f"{MODEL} missing from /api/tags after the UI reported done")
+        created = True  # this run's pull provably installed the model
         try:
             jump = after.index(MODEL)
         except ValueError:
@@ -203,15 +293,24 @@ def main():
             proc.kill()
             fail("app did not exit on ctrl+c")
 
-        with open(LOG, "w") as f:
-            f.write(seen)
+        kept = None
+        if keep_capture():
+            kept = write_capture(seen)
+        else:
+            discard_capture()
+        cap = f"; capture: {kept})" if kept else ")"
         print(f"SMOKE PASS in {time.time()-started:.0f}s (progress bar evidence: {progress_seen}, "
-              f"deleted-notice seen: {deleted_seen}; capture: {LOG})")
+              f"deleted-notice seen: {deleted_seen}{cap}")
     finally:
-        if proc.poll() is None:
+        if proc is not None and proc.poll() is None:
             proc.kill()
-        api_delete(MODEL)  # leave the host clean even on failure
+        # H-04: clean up only a model this run provably created (its own
+        # pull), never a pre-existing one. On the success path the model was
+        # already deleted through the TUI, so this is a harmless no-op safety
+        # net; on failure it removes only this run's leftover model.
+        if created:
+            api_delete(model)
 
 
 if __name__ == "__main__":
-    main()
+    main(sys.argv[1:] if len(sys.argv) > 1 else None)

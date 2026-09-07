@@ -2,6 +2,8 @@ package ui
 
 import (
 	"context"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"runtime"
@@ -270,6 +272,178 @@ func TestModelsViewParentCancellationStopsList(t *testing.T) {
 	case <-released:
 	case <-time.After(time.Second):
 		t.Fatal("server never observed cancellation of the list request within 1s")
+	}
+	requireSettledGoroutines(t, baseline)
+}
+
+// saturationChatHost streams >64 chat events (80 content deltas + done) in
+// one burst and closes burstDone only after the whole body reached the
+// socket, so a caller knows the producer still has events pending beyond the
+// 64-slot activity channel when it stops draining.
+func saturationChatHost(burstDone chan struct{}) *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/chat" {
+			w.WriteHeader(404)
+			return
+		}
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		for i := 0; i < 80; i++ {
+			io.WriteString(w, chatEvent("x", false)+"\n")
+		}
+		io.WriteString(w, chatEvent("", true)+"\n")
+		close(burstDone)
+	}))
+}
+
+// waitForSaturatedChannel polls until the 64-slot activity channel holds 64
+// messages, which — with no reader draining — proves the producer goroutine
+// is blocked on its next unconditional send rather than merely between
+// events. Returns false if the channel never fills.
+func waitForSaturatedChannel(t *testing.T, ch chan tea.Msg) bool {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	for len(ch) < 64 {
+		select {
+		case <-deadline:
+			return false
+		default:
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+	return true
+}
+
+// TestAgentProducerSaturationCancellationTerminates (M-06): a chat whose
+// fake host streams more events than the 64-slot activity channel can hold
+// saturates the channel while the test stops draining. Canceling the parent
+// context must terminate the producer goroutine even though nobody consumes:
+// the explicit producer-done channel (closed only when the goroutine exits)
+// is the oracle. Pre-fix the producer's unconditional send #65 blocked
+// forever — cancellation could not win the send — so chatDone never closed.
+func TestAgentProducerSaturationCancellationTerminates(t *testing.T) {
+	burstDone := make(chan struct{})
+	srv := saturationChatHost(burstDone)
+	t.Cleanup(srv.Close)
+
+	parentCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cfg := config.Default()
+	v := newAgentView(parentCtx, ollama.New(srv.URL, ""), NewStyles("dark"), "dark",
+		"", cfg.WorkspaceRoot, cfg.Agent.SystemPrompt, cfg.Agent, false, srv.URL)
+	v, _ = v.Update(tea.WindowSizeMsg{Width: 88, Height: 40})
+	v, _ = v.Update(agentModelsLoadedMsg{models: sampleModels()})
+	typeText(t, &v, "hello")
+	v, _ = v.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if !v.streaming {
+		t.Fatal("enter: chat should start")
+	}
+	if v.chatDone == nil {
+		t.Fatal("producer-done channel not armed by startChat")
+	}
+
+	// Prove the stream is live, then STOP draining: the producer cannot
+	// observe the pause and keeps producing until the channel is full.
+	for i := 0; i < 3; i++ {
+		select {
+		case msg := <-v.chatCh:
+			v, _ = v.Update(msg)
+		case <-time.After(2 * time.Second):
+			t.Fatalf("chat deltas stopped arriving before saturation (streaming=%v chatErr=%q notice=%q len(ch)=%d model=%q)",
+				v.streaming, v.chatErr, v.notice, len(v.chatCh), v.model)
+		}
+	}
+	select {
+	case <-burstDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("fake host never finished its burst")
+	}
+	if !waitForSaturatedChannel(t, v.chatCh) {
+		t.Fatal("activity channel never saturated (producer did not block?)")
+	}
+
+	baseline := runtime.NumGoroutine()
+	start := time.Now()
+	cancel()
+
+	select {
+	case <-v.chatDone:
+		if elapsed := time.Since(start); elapsed > 2*time.Second {
+			t.Errorf("chat producer exited after %s, want ≤ 2s", elapsed.Round(time.Millisecond))
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("chat producer still blocked after parent cancel with a full channel "+
+			"(goroutines %d, want ≤ baseline %d): cancellation cannot win the send",
+			runtime.NumGoroutine(), baseline)
+	}
+	requireSettledGoroutines(t, baseline)
+}
+
+// TestModelsViewPullSaturationCancellationTerminates (M-06): the Pull
+// producer saturates its 64-slot channel the same way; canceling the parent
+// context must let the pull goroutine exit (pullStreamDone closes) with nobody
+// draining the backlog.
+func TestModelsViewPullSaturationCancellationTerminates(t *testing.T) {
+	burstDone := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/pull" {
+			w.WriteHeader(404)
+			return
+		}
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		for i := 0; i < 80; i++ {
+			fmt.Fprintf(w, `{"status":"layer %d/80","digest":"sha256:%d","total":1000,"completed":%d}`+"\n", i, i, i*10)
+		}
+		io.WriteString(w, `{"status":"success"}`+"\n")
+		close(burstDone)
+	}))
+	t.Cleanup(srv.Close)
+
+	parentCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	v := newModelsView(parentCtx, ollama.New(srv.URL, ""), NewStyles("dark"), "dark")
+	v, _ = v.Update(tea.WindowSizeMsg{Width: 88, Height: 40})
+	v, _ = v.Update(modelsLoadedMsg{list: sampleModels()})
+	v, _ = v.Update(tea.KeyPressMsg{Text: "p"})
+	v, _ = v.Update(tea.KeyPressMsg{Text: "qwen3:big"})
+	v, _ = v.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if !v.pulling {
+		t.Fatal("enter: pull should start")
+	}
+	if v.pullStreamDone == nil {
+		t.Fatal("producer-done channel not armed by startPull")
+	}
+
+	// Prove progress is flowing, then STOP draining.
+	for i := 0; i < 3; i++ {
+		select {
+		case msg := <-v.pullCh:
+			v, _ = v.Update(msg)
+		case <-time.After(2 * time.Second):
+			t.Fatal("pull progress stopped arriving before saturation")
+		}
+	}
+	select {
+	case <-burstDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("fake host never finished its pull burst")
+	}
+	if !waitForSaturatedChannel(t, v.pullCh) {
+		t.Fatal("pull channel never saturated (producer did not block?)")
+	}
+
+	baseline := runtime.NumGoroutine()
+	start := time.Now()
+	cancel()
+
+	select {
+	case <-v.pullStreamDone:
+		if elapsed := time.Since(start); elapsed > 2*time.Second {
+			t.Errorf("pull producer exited after %s, want ≤ 2s", elapsed.Round(time.Millisecond))
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("pull producer still blocked after parent cancel with a full channel "+
+			"(goroutines %d, want ≤ baseline %d): cancellation cannot win the send",
+			runtime.NumGoroutine(), baseline)
 	}
 	requireSettledGoroutines(t, baseline)
 }

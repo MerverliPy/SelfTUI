@@ -61,20 +61,56 @@ func Validate(c Config) error {
 }
 
 // validateToolsWorkspace enforces the tools_enabled/workspace_root pairing
-// (see Validate). workspaceRoot is compared after cleaning, so a trailing
-// slash on the home directory does not dodge the rule.
+// (see Validate). Both the candidate root and the home directory are compared
+// in canonical form, so an ordinary alias cannot dodge the boundary: "/tmp/.."
+// collapsing to "/", a symlink to "/" or to home, a trailing slash, or a
+// relative spelling that resolves to home all reduce to the same directory the
+// tool jail will compute from the same string.
 func validateToolsWorkspace(workspaceRoot string) error {
 	if workspaceRoot == "" {
 		return errors.New("config: tools_enabled: workspace_root is required when tools are enabled")
 	}
-	if workspaceRoot == "/" {
+	canonical, err := canonicalDir(workspaceRoot)
+	if err != nil {
+		return fmt.Errorf("config: tools_enabled: workspace_root: cannot resolve %q: %w", workspaceRoot, err)
+	}
+	if canonical == "/" {
 		return errors.New("config: tools_enabled: workspace_root must not be / when tools are enabled")
 	}
 	home, err := os.UserHomeDir()
-	if err == nil && filepath.Clean(workspaceRoot) == filepath.Clean(home) {
-		return errors.New("config: tools_enabled: workspace_root must not be your home directory when tools are enabled")
+	if err == nil {
+		homeCanonical, herr := canonicalDir(home)
+		if herr == nil && canonical == homeCanonical {
+			return errors.New("config: tools_enabled: workspace_root must not be your home directory when tools are enabled")
+		}
 	}
 	return nil
+}
+
+// canonicalDir resolves path to its canonical absolute directory form using
+// the same three steps internal/agent/tools.go canonicalRoot applies to every
+// workspace tool call — filepath.Abs, filepath.EvalSymlinks, then a directory
+// check — so config validation and the tool jail compute the same directory
+// identity from the same spelling. canonicalDir must stay config-local: the
+// config package must not import internal/agent, and the tool layer must not
+// import config's policy.
+func canonicalDir(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	real, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return "", err
+	}
+	info, err := os.Stat(real)
+	if err != nil {
+		return "", err
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("%q is not a directory", real)
+	}
+	return real, nil
 }
 
 func validateAgentRange(field string, v, lo, hi float64) error {

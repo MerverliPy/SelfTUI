@@ -25,9 +25,10 @@ const (
 	// streamIdleTimeout is how long a stream may deliver no bytes before the
 	// client aborts it.
 	streamIdleTimeout = 90 * time.Second
-	// maxChatStreamBytes caps the cumulative decoded content+thinking a chat
-	// stream may deliver (thinking arrives in message.thinking or top-level
-	// thinking, depending on the server).
+	// maxChatStreamBytes caps the cumulative raw NDJSON bytes a chat stream may
+	// deliver. The ceiling counts complete event bytes — JSON framing,
+	// content, thinking, and tool calls — so tool arguments cannot escape the
+	// 16 MiB budget the way decoded content-only accounting would (H-03).
 	maxChatStreamBytes = 16 << 20
 )
 
@@ -62,6 +63,21 @@ func (c *Client) postStream(ctx context.Context, path string, body []byte) (*htt
 		return nil, nil, fmt.Errorf("ollama POST %s: %w", path, err)
 	}
 	return resp, cancel, nil
+}
+
+// readErrorBody reads a non-2xx response body under the same idle watchdog as
+// the success stream (P1-2). A host that answers an error status but then
+// never delivers the error body must abort on the idle window — the no-timeout
+// stream client has no other bound — rather than pin the producer until the
+// caller's deadline. A complete (or partially delivered) body still surfaces
+// through apiError exactly as before; only a genuinely silent body becomes the
+// stable idle error.
+func (c *Client) readErrorBody(method, path string, resp *http.Response, cancel context.CancelFunc) error {
+	raw, rerr := io.ReadAll(io.LimitReader(newIdleReader(resp.Body, cancel, c.streamIdle), maxBodyBytes))
+	if rerr != nil && errors.Is(rerr, errIdleTimeout) {
+		return fmt.Errorf("ollama %s %s: %w", method, path, rerr)
+	}
+	return apiError(method, path, resp.StatusCode, raw)
 }
 
 // idleReader wraps a streaming response body so that a read delivering no

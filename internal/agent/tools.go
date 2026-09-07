@@ -4,6 +4,7 @@ package agent
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -71,9 +72,16 @@ func ReadOnlyTools() []ollama.ToolDefinition {
 	return AgentTools()[:3]
 }
 
-func ReadFile(root, path string) (string, error) {
+// ReadFile reads one workspace file, bounded to maxReadBytes. ctx is
+// checked before and after the operation (M-06): a canceled run neither
+// starts a doomed read nor reports a result that only finished after the
+// context died — cancellation wins and the caller stops promptly.
+func ReadFile(ctx context.Context, root, path string) (string, error) {
 	p, err := securePath(root, path)
 	if err != nil {
+		return "", err
+	}
+	if err := ctx.Err(); err != nil {
 		return "", err
 	}
 	info, err := os.Stat(p)
@@ -90,17 +98,26 @@ func ReadFile(root, path string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("read_file %q: %w", path, err)
 	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	return string(b), nil
 }
 
-func ListDir(root, path string) (string, error) {
+func ListDir(ctx context.Context, root, path string) (string, error) {
 	p, err := securePath(root, path)
 	if err != nil {
+		return "", err
+	}
+	if err := ctx.Err(); err != nil {
 		return "", err
 	}
 	entries, err := os.ReadDir(p)
 	if err != nil {
 		return "", fmt.Errorf("list_dir %q: %w", path, err)
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
 	}
 	lines := make([]string, 0, len(entries))
 	for _, entry := range entries {
@@ -113,7 +130,22 @@ func ListDir(root, path string) (string, error) {
 	return boundedResult(strings.Join(lines, "\n")), nil
 }
 
-func Grep(root, pattern, path string) (string, error) {
+// Grep searches files under root matching pattern, bounded to maxResultBytes
+// and sorted deterministically. path is workspace-relative or absolute; a
+// directory is searched recursively and a regular file directly.
+//
+// authorize, when non-nil, is the sensitive-path policy applied to every
+// canonical workspace-relative descendant (C-01): a denied directory is
+// pruned before descent and a denied file is skipped before it is ever
+// opened, so a denied path can neither leak content nor its own name. A nil
+// authorize allows every descendant, preserving the pre-policy direct-call
+// behavior for callers that intend no policy. Denials are skips, never
+// whole-operation failures; real traversal/I/O errors still fail the grep.
+//
+// ctx is checked before the walk and before each file is scanned so a
+// canceled run returns promptly instead of grinding through the tree
+// (Task 13/M-06 boundary).
+func Grep(ctx context.Context, root, pattern, path string, authorize func(string) error) (string, error) {
 	rootReal, err := canonicalRoot(root)
 	if err != nil {
 		return "", err
@@ -124,6 +156,9 @@ func Grep(root, pattern, path string) (string, error) {
 	rx, err := regexp.Compile(pattern)
 	if err != nil {
 		return "", fmt.Errorf("grep: invalid pattern: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
 	}
 	p, err := securePath(rootReal, path)
 	if err != nil {
@@ -139,14 +174,26 @@ func Grep(root, pattern, path string) (string, error) {
 			if walkErr != nil {
 				return walkErr
 			}
-			if entry.IsDir() {
-				if entry.Name() == ".git" {
-					return filepath.SkipDir
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if !entry.IsDir() {
+				if entry.Type()&os.ModeSymlink == 0 {
+					files = append(files, file)
 				}
 				return nil
 			}
-			if entry.Type()&os.ModeSymlink == 0 {
-				files = append(files, file)
+			if entry.Name() == ".git" {
+				return filepath.SkipDir
+			}
+			if authorize != nil {
+				rel, err := filepath.Rel(rootReal, file)
+				if err != nil {
+					return err
+				}
+				if authorize(rel) != nil {
+					return filepath.SkipDir // policy-denied directory: prune before descent
+				}
 			}
 			return nil
 		})
@@ -164,6 +211,18 @@ func Grep(root, pattern, path string) (string, error) {
 	for _, file := range files {
 		if out.Len() >= maxResultBytes {
 			break
+		}
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		if authorize != nil {
+			rel, err := filepath.Rel(rootReal, file)
+			if err != nil {
+				return "", err
+			}
+			if authorize(rel) != nil {
+				continue // policy-denied file: never opened
+			}
 		}
 		if err := grepFile(rootReal, file, rx, &out); err != nil {
 			return "", err

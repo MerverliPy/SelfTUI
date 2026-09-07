@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# release-check.sh — SelfTUI v0.1 release gate (hardening phase 8).
+# release-check.sh — SelfTUI v0.1 release gate (hardening phase 8; M-10 fix:
+# enforced toolchain pin, fixed archive member modes, flat SHA256SUMS).
 #
 # The full gate a versioned release must pass BEFORE the owner tags it.
 # Usage:
@@ -11,11 +12,23 @@
 #   * The git worktree must be clean - nothing staged, unstaged, or
 #     untracked. Ignored build artifacts (bin/, dist/) don't count, so the
 #     gate runs on exactly the commit that would be tagged.
-#   * The gate uses whatever `go`/`gofmt`/`govulncheck` the caller put on
-#     PATH. CI and the documented local gate pin Go 1.27.1 (current official
-#     stable) and govulncheck v1.7.0 - see README "Release engineering".
+#   * The local toolchain is enforced, not just documented: `go` must report
+#     go1.27.1, `gofmt` must be the gofmt from that same distribution (gofmt
+#     has no version flag, so the pin is by identity), and govulncheck must
+#     report v1.7.0 - the same versions CI pins. Wrong or missing versions
+#     fail fast (exit 2) before any slow gate and before dist/ is touched.
+#     See CONTRIBUTING "prerequisites" and README "Release engineering".
+#   * Archive members carry fixed modes (binary 0755, LICENSE/README 0644)
+#     via install -m, so two builders or umasks produce byte-identical
+#     archives.
+#   * dist/SHA256SUMS is generated from inside dist/ and holds only the flat
+#     archive names (no dist/ prefix, no absolute paths), so downloaded
+#     GitHub Release assets verify beside the files with
+#     `sha256sum -c SHA256SUMS`.
 #
 # Steps, in order:
+#   0. toolchain pin               go 1.27.1 + same-distribution gofmt +
+#                                  govulncheck v1.7.0 all on PATH
 #   1. go mod verify                 module graph + go.sum integrity
 #   2. gofmt check                   no file needs formatting
 #   3. go vet ./...                  static analysis
@@ -29,10 +42,11 @@
 #                                    (executed where the host can run it,
 #                                    otherwise the exact string linked in)
 #   9. deterministic archives        dist/selftui-$VERSION-linux-{amd64,arm64}.tar.gz
-#  10. dist/SHA256SUMS               sha256 over both archives, entries
-#                                    prefixed dist/ so
-#                                    `sha256sum -c dist/SHA256SUMS` verifies
-#                                    from the repo root
+#                                    fixed member modes (0755 binary, 0644 docs)
+#  10. dist/SHA256SUMS               sha256 over both archives; entries flat
+#                                    (no dist/ prefix) so a download
+#                                    directory verifies with
+#                                    `sha256sum -c SHA256SUMS`
 #
 # This script NEVER creates or pushes a git tag; tagging stays the owner's
 # separate release step, done only once this gate is green.
@@ -54,21 +68,66 @@ if [[ -n "$(git status --porcelain)" ]]; then
   exit 2
 fi
 
-# dist/ is owned by this gate: start from a fresh, empty artifact dir so no
-# stale file can leak into the archives or the checksum manifest.
-rm -rf dist
-mkdir -p dist
+# --- 0. toolchain pin (enforced): local gate == CI --------------------------
+# CI pins Go 1.27.1 and govulncheck v1.7.0 (workflow env). The local gate
+# must run on the same tools, so wrong or missing versions stop here - before
+# the slow gates and before dist/ is touched. gofmt has no -version flag
+# (verified against go1.27.1), so it is pinned by identity: the gofmt on PATH
+# must be the gofmt shipping with the pinned `go` distribution.
+want_go="go1.27.1"
+want_govuln="v1.7.0"
 
-# Fail fast on the external tools before any slow step runs.
-if ! command -v govulncheck >/dev/null 2>&1; then
-  echo "release-check: govulncheck not on PATH - install the pinned version:" >&2
-  echo "  go install golang.org/x/vuln/cmd/govulncheck@v1.7.0" >&2
+if ! command -v go >/dev/null 2>&1; then
+  echo "release-check: go not on PATH - install Go ${want_go#go} and put its bin directory first on PATH (see CONTRIBUTING 'prerequisites')" >&2
   exit 2
 fi
+go_out="$(go version 2>&1)" || true
+go_ver="$(printf '%s\n' "$go_out" | awk 'NR==1 { print $3 }')"
+if [[ "$go_ver" != "$want_go" ]]; then
+  echo "release-check: go on PATH is '${go_ver:-<no version parsed from \`go version\`>}'; release gates need exactly ${want_go} (documented pin)" >&2
+  echo "release-check: 'go version' output was: $(printf '%s' "$go_out" | head -1)" >&2
+  echo "release-check: install Go ${want_go#go} and put its bin directory first on PATH (see CONTRIBUTING 'prerequisites')" >&2
+  exit 2
+fi
+
+if ! command -v gofmt >/dev/null 2>&1; then
+  echo "release-check: gofmt not on PATH - the Go ${want_go#go} distribution ships gofmt; put its bin directory first on PATH (see CONTRIBUTING 'prerequisites')" >&2
+  exit 2
+fi
+goroot="$(go env GOROOT 2>&1)" || true
+want_gofmt="$(readlink -f "$goroot/bin/gofmt" 2>/dev/null || true)"
+have_gofmt="$(readlink -f "$(command -v gofmt)" 2>/dev/null || true)"
+if [[ -z "$want_gofmt" || "$have_gofmt" != "$want_gofmt" ]]; then
+  echo "release-check: gofmt on PATH is '$(command -v gofmt)'; the pinned Go ${want_go#go} distribution's gofmt is '$goroot/bin/gofmt'" >&2
+  echo "release-check: gofmt has no version flag, so the pin is enforced by identity - put the pinned distribution's bin directory first on PATH:" >&2
+  echo "  export PATH=\"$goroot/bin:\$PATH\"" >&2
+  exit 2
+fi
+
+if ! command -v govulncheck >/dev/null 2>&1; then
+  echo "release-check: govulncheck not on PATH - install the pinned version:" >&2
+  echo "  go install golang.org/x/vuln/cmd/govulncheck@${want_govuln}" >&2
+  exit 2
+fi
+gv_out="$(govulncheck -version 2>&1)" || true
+gv_ver="$(printf '%s\n' "$gv_out" | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
+if [[ "$gv_ver" != "$want_govuln" ]]; then
+  echo "release-check: govulncheck on PATH is '${gv_ver:-<no vX.Y.Z token in \`govulncheck -version\` output>}'; release gates need exactly ${want_govuln} (documented pin)" >&2
+  echo "release-check: 'govulncheck -version' output was: $(printf '%s' "$gv_out" | head -1)" >&2
+  echo "release-check: reinstall the pinned version: go install golang.org/x/vuln/cmd/govulncheck@${want_govuln}" >&2
+  exit 2
+fi
+
 if ! command -v strings >/dev/null 2>&1; then
   echo "release-check: 'strings' (binutils) not on PATH - needed for the cross-arch version check" >&2
   exit 2
 fi
+echo "== toolchain pin: go ${want_go} + same-distribution gofmt + govulncheck ${want_govuln} =="
+
+# dist/ is owned by this gate: start from a fresh, empty artifact dir so no
+# stale file can leak into the archives or the checksum manifest.
+rm -rf dist
+mkdir -p dist
 
 # --- 1. go mod verify ------------------------------------------------------
 echo "== go mod verify =="
@@ -120,9 +179,12 @@ for arch in amd64 arm64; do
   stage="dist/.stage-$arch"
   rm -rf "$stage"
   mkdir -p "$stage"
-  cp "$bin" "$stage/selftui"
-  cp LICENSE "$stage/LICENSE"
-  cp README.md "$stage/README.md"
+  # Fixed member modes: install -m forces 0755 (binary) / 0644 (documents)
+  # regardless of the builder's umask or staging tool, so two builders (or
+  # umasks) produce byte-identical archives.
+  install -m 0755 "$bin" "$stage/selftui"
+  install -m 0644 LICENSE "$stage/LICENSE"
+  install -m 0644 README.md "$stage/README.md"
   # Fixed member order and mtimes, owner/group 0, and gzip without header
   # name/mtime stamp, so identical inputs yield byte-identical archives.
   tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner \
@@ -134,10 +196,11 @@ done
 
 # --- 10. SHA256SUMS --------------------------------------------------------
 echo "== dist/SHA256SUMS =="
-# Entries are dist/-prefixed so `sha256sum -c dist/SHA256SUMS` verifies from
-# the repo root (the documented local gate). LC_ALL=C keeps member order and
-# the manifest stable across locales and runs.
-LC_ALL=C sha256sum dist/selftui-"$VERSION"-linux-*.tar.gz > dist/SHA256SUMS
+# Generated from inside dist/ so entries are the flat archive names that
+# GitHub Release assets use; downloaders verify beside the downloaded assets
+# with `sha256sum -c SHA256SUMS`. LC_ALL=C keeps member order and the
+# manifest stable across locales and runs.
+( cd dist && LC_ALL=C sha256sum selftui-"$VERSION"-linux-*.tar.gz > SHA256SUMS )
 cat dist/SHA256SUMS
 
 echo

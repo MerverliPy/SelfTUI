@@ -11,6 +11,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"selftui/internal/config"
+	"selftui/internal/ollama"
 )
 
 // settingsApp builds an App whose session config lives at a temp file path so
@@ -18,7 +19,13 @@ import (
 func settingsApp(t *testing.T) (App, config.Config) {
 	t.Helper()
 	dir := t.TempDir()
-	path := dir + "/config.toml"
+	// The config file exists (possibly empty = defaults): an explicit path
+	// that does not exist is now a hard load error (P1-13), and these flows
+	// model an install whose Settings tab will persist into this file.
+	path := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	cfg, err := config.Load(config.Overrides{ConfigPath: &path})
 	if err != nil {
 		t.Fatal(err)
@@ -304,7 +311,141 @@ func TestSettingsFieldValidationReusesConfigPolicy(t *testing.T) {
 	if !strings.Contains(got, "max_tool_iterations must be between 1 and 100") {
 		t.Errorf("expected config.Validate's stable message inline, got:\n%s", got)
 	}
-	if _, err := os.Stat(cfg.ConfigPath()); !os.IsNotExist(err) {
-		t.Errorf("config file should not exist after a rejected edit (nothing was saved)")
+	if b, err := os.ReadFile(cfg.ConfigPath()); err != nil || len(b) != 0 {
+		t.Errorf("config file was written despite the rejected edit (len=%d err=%v); want it still empty", len(b), err)
+	}
+}
+
+// P1-4 regression: when a config write fails after the user previewed a
+// different theme, the shell must roll back to the theme this editing session
+// started from — a failed save must not leave the app stuck on an unsaved
+// preview (the "write failure leaves in-session state untouched" contract).
+// RED before the fix: the error panel showed but the previewed theme stayed
+// live because only the discard path rolled previews back.
+func TestThemePreviewRollsBackOnSaveFailure(t *testing.T) {
+	m, cfg := settingsApp(t)
+	if cfg.Theme != "dark" {
+		t.Fatalf("test fixture expects a dark start theme, got %q", cfg.Theme)
+	}
+	dir := filepath.Dir(cfg.ConfigPath())
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+
+	m = openSettings(t, m)
+
+	// Walk to the Theme select (Connection 2 + Model defaults 4 fields) and
+	// preview Light.
+	keys := make([]tea.Msg, 0, 7)
+	for i := 0; i < 6; i++ {
+		keys = append(keys, tea.KeyPressMsg{Code: tea.KeyEnter})
+	}
+	app := drive(t, m, append(keys, tea.KeyPressMsg{Code: tea.KeyDown})...).(App)
+	if app.curTheme != "light" || app.settings.val.theme != "light" {
+		t.Fatalf("preview did not apply: curTheme=%q val.theme=%q, want light/light",
+			app.curTheme, app.settings.val.theme)
+	}
+
+	// Submit the remaining fields (Theme select, then Agent group). The save
+	// to the read-only dir must fail and surface the error panel.
+	keys = make([]tea.Msg, 5)
+	for i := range keys {
+		keys[i] = tea.KeyPressMsg{Code: tea.KeyEnter}
+	}
+	app = drive(t, app, keys...).(App)
+	if app.settings.state != settingsError {
+		t.Fatalf("state = %v, want settingsError (save to read-only dir should fail)\n%s",
+			app.settings.state, view(t, app))
+	}
+
+	// The shell must be back on the committed (start) theme, not the unsaved
+	// Light preview, and the session config must be untouched.
+	if app.curTheme != "dark" {
+		t.Errorf("curTheme after failed save = %q, want dark (roll back the unsaved preview)", app.curTheme)
+	}
+	if app.cfg.Theme != "dark" {
+		t.Errorf("cfg.Theme mutated by failed save = %q, want dark", app.cfg.Theme)
+	}
+	got := view(t, app)
+	if !strings.Contains(got, "Could not save settings") {
+		t.Errorf("expected the save-error panel, got:\n%s", got)
+	}
+}
+
+// P1-6 regression: a settings save that only changes scalar/agent values must
+// reuse the App-owned Ollama client, not construct a fresh one — otherwise the
+// Agent tab silently holds a different client instance than the Models tab
+// after every non-host save (the shared-client seam drifts, and future
+// client-local state/policies diverge between tabs). The App is built the way
+// main does: one real client at construction.
+func applySavedApp(t *testing.T) (App, config.Config) {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(config.Overrides{ConfigPath: &path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := ollama.New(cfg.Host, cfg.AuthToken)
+	m := New(&cfg, NewStyles(cfg.Theme), client)
+	return m, cfg
+}
+
+func TestApplySavedReusesClientWhenHostTokenUnchanged(t *testing.T) {
+	m, _ := applySavedApp(t)
+
+	// Capture the client each tab holds before the save.
+	preAgentClient := m.agent.client
+	preModelsClient := m.models.client
+	if preAgentClient == nil || preModelsClient == nil {
+		t.Fatal("test fixture should hold a real client on both tabs")
+	}
+
+	// A scalar-only save (temperature changed, host/token identical).
+	next := *m.cfg
+	next.Agent.Temperature = 0.42
+	_ = m.applySaved(next)
+
+	if m.agent.client != preAgentClient {
+		t.Error("Agent client was rebuilt on a host/token-unchanged save; want the same instance reused")
+	}
+	if m.models.client != preModelsClient {
+		t.Error("Models client was rebuilt on a host/token-unchanged save; want the same instance reused")
+	}
+	// The scalar still applied.
+	if m.agent.temperature != 0.42 {
+		t.Errorf("agent temperature = %v after save, want 0.42", m.agent.temperature)
+	}
+	if m.cfg.Agent.Temperature != 0.42 {
+		t.Errorf("cfg temperature = %v after save, want 0.42", m.cfg.Agent.Temperature)
+	}
+}
+
+// TestApplySavedSwapsClientOnHostChange proves the rebuild still happens when
+// host actually changes (both tabs point at the same new instance, and it is
+// not the pre-save one).
+func TestApplySavedSwapsClientOnHostChange(t *testing.T) {
+	m, _ := applySavedApp(t)
+	old := m.agent.client
+	if old == nil {
+		t.Fatal("test fixture should hold a client")
+	}
+
+	next := *m.cfg
+	next.Host = "https://other.example:11434"
+	_ = m.applySaved(next)
+
+	if m.agent.client == nil || m.agent.client == old {
+		t.Error("Agent client was not rebuilt on a host change; want a fresh instance")
+	}
+	if m.models.client != m.agent.client {
+		t.Error("Models and Agent tabs must share one client after a host change")
+	}
+	if m.cfg.Host != "https://other.example:11434" {
+		t.Errorf("cfg.Host = %q after save, want the new host", m.cfg.Host)
 	}
 }

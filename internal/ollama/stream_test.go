@@ -79,11 +79,50 @@ func TestChatOversizedEventRejected(t *testing.T) {
 	}
 }
 
+func TestChatCumulativeToolBytesOverflowRejected(t *testing.T) {
+	// H-03: tool calls must count toward the cumulative 16 MiB chat ceiling.
+	// Each event carries one native tool call whose arguments hold ~2.5 MiB
+	// of text: every event is well under the 4 MiB per-event raw cap, but the
+	// raw NDJSON bytes (JSON framing and tool calls included) cross the
+	// cumulative cap on the seventh event. Before the fix the ceiling counted
+	// only decoded content/thinking, so tool-argument bytes escaped it and
+	// every event was delivered.
+	chunk := strings.Repeat("a", 2_600_000)
+	event := fmt.Sprintf(`{"message":{"role":"assistant","tool_calls":[{"function":{"name":"read_file","arguments":{"path":"%s"}}}]},"done":false}`+"\n", chunk)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Tolerate this host's localhost port prober (stray GET /); only the
+		// real POST matters.
+		if r.Method != http.MethodPost || r.URL.Path != "/api/chat" {
+			w.WriteHeader(404)
+			return
+		}
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		for i := 0; i < 7; i++ {
+			io.WriteString(w, event)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	c := New(srv.URL, "")
+
+	delivered := 0
+	err := c.ChatStream(context.Background(), chatReq(), func(ChatEvent) { delivered++ })
+	if err == nil {
+		t.Fatal("want cumulative cap error, got nil")
+	}
+	if !strings.Contains(err.Error(), "chat stream exceeds 16777216 bytes") {
+		t.Errorf("error = %v, want chat cumulative cap message", err)
+	}
+	if delivered != 6 {
+		t.Errorf("events delivered = %d, want 6 (crossing event rejected before delivery)", delivered)
+	}
+}
+
 func TestChatCumulativeOverflowRejected(t *testing.T) {
 	// Four content events of ~4 MiB each stay under both caps; a fifth event
-	// carrying thinking bytes crosses the 16 MiB cumulative content+thinking
-	// budget. The cap must count content and thinking together and reject the
-	// crossing event before it is delivered.
+	// carrying thinking bytes crosses the 16 MiB cumulative chat ceiling.
+	// The cap counts complete raw NDJSON event bytes (content, thinking,
+	// framing, and any tool calls), so the crossing event is rejected before
+	// it is delivered.
 	chunk := strings.Repeat("a", 4*miB-8*1024) // each event stays under 4 MiB raw
 	var b strings.Builder
 	for i := 0; i < 4; i++ {
@@ -300,5 +339,99 @@ func TestPullEOFWithoutSuccessRejected(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "stream ended without success") {
 		t.Errorf("error = %v, want ended-without-success message", err)
+	}
+}
+
+// errorStallServer responds non-2xx (500), flushes the status, then holds the
+// error body open without writing a single body byte until the client
+// disconnects — the exact stalled-error-body shape P1-2 targets. The request
+// body is drained first so client-close detection arms (same discipline as
+// stallServer).
+func errorStallServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.Copy(io.Discard, r.Body)
+		w.WriteHeader(http.StatusInternalServerError)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		<-r.Context().Done()
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// TestChatStalledErrorBodyBoundedByIdle proves a non-2xx /api/chat response
+// whose error body delivers no bytes is aborted by the idle watchdog, not
+// pinned until the caller's deadline: the phase-5 "streams are bounded"
+// guarantee must cover the error branch too (P1-2). RED before the fix: the
+// error body was read with io.ReadAll and no idle bound on the no-timeout
+// stream client, so the producer hung until caller cancellation.
+func TestChatStalledErrorBodyBoundedByIdle(t *testing.T) {
+	srv := errorStallServer(t)
+	c := New(srv.URL, "")
+	c.streamIdle = 60 * time.Millisecond
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	start := time.Now()
+	err := c.ChatStream(ctx, chatReq(), nil)
+	if err == nil {
+		t.Fatal("want idle timeout error on a stalled error body, got nil")
+	}
+	if !strings.Contains(err.Error(), "stream idle") {
+		t.Errorf("error = %v, want idle-timeout message naming the abort", err)
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Errorf("stalled error body took %v to abort; want the ~60ms idle window", elapsed)
+	}
+}
+
+// TestPullStalledErrorBodyBoundedByIdle is the pull-side twin: a 500 response
+// to POST /api/pull with a silent error body must abort on the idle window.
+func TestPullStalledErrorBodyBoundedByIdle(t *testing.T) {
+	srv := errorStallServer(t)
+	c := New(srv.URL, "")
+	c.streamIdle = 60 * time.Millisecond
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	start := time.Now()
+	err := c.Pull(ctx, "big-model", nil)
+	if err == nil {
+		t.Fatal("want idle timeout error on a stalled error body, got nil")
+	}
+	if !strings.Contains(err.Error(), "stream idle") {
+		t.Errorf("error = %v, want idle-timeout message naming the abort", err)
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Errorf("stalled error body took %v to abort; want the ~60ms idle window", elapsed)
+	}
+}
+
+// TestNon2xxErrorBodyStillSurfaced ensures the error-body read still reports
+// a genuinely received error payload (fast path unchanged): a 500 with a
+// complete JSON error body must surface the API error, not the idle error.
+func TestNon2xxErrorBodyStillSurfaced(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.Copy(io.Discard, r.Body)
+		w.WriteHeader(http.StatusInternalServerError)
+		io.WriteString(w, `{"error":"boom from host"}`)
+	}))
+	t.Cleanup(srv.Close)
+	c := New(srv.URL, "")
+	c.streamIdle = 5 * time.Second // far away; the complete body must win
+
+	err := c.ChatStream(context.Background(), chatReq(), nil)
+	if err == nil {
+		t.Fatal("want API error, got nil")
+	}
+	if !strings.Contains(err.Error(), "boom from host") {
+		t.Errorf("error = %v, want the host's error payload surfaced", err)
+	}
+	if strings.Contains(err.Error(), "stream idle") {
+		t.Errorf("error = %v: a complete error body must not read as idle", err)
 	}
 }

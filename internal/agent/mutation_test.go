@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"selftui/internal/ollama"
 )
@@ -93,5 +94,53 @@ func TestDeclinedMutationDoesNotWrite(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, "note.txt")); !os.IsNotExist(err) {
 		t.Fatalf("file exists after refusal: %v", err)
+	}
+}
+
+// TestWriteConfirmExpiresWithoutResponse is the M-01 regression: a mutation
+// approval that receives no answer within its window must not stall the turn
+// (or, worse, stall forever). The runner's approval window is injected through
+// the per-Runner confirmTimeout seam (never a package-global mutable hook);
+// nobody responds, so the turn must end with the stable approval-timeout
+// error — not with the surrounding context deadline — having emitted exactly
+// one terminal done result and written nothing.
+func TestWriteConfirmExpiresWithoutResponse(t *testing.T) {
+	root := t.TempDir()
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		// Every chat request asks for the same write. With the expiry fix the
+		// runner gives up on its own after the injected window, so the server
+		// must never see a second request.
+		io.WriteString(w, toolEvent(nativeCall("write_file", `{"path":"note.txt","content":"late"}`)))
+	}))
+	t.Cleanup(srv.Close)
+
+	r := NewRunnerWithPolicy(ollama.New(srv.URL, ""), root, "", 4, &ToolPolicy{})
+	r.confirmTimeout = 50 * time.Millisecond // injected short approval window
+
+	// The harness itself stays time-bounded: before the M-01 timer existed the
+	// approval select only woke on this deadline with the wrong error.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	dones := 0
+	err := r.Run(ctx, Request{Model: "qwen3:8b", Messages: []ollama.ChatMessage{{Role: ollama.RoleUser, Content: "write the note"}}}, func(msg Msg) {
+		if _, ok := msg.(AgentDoneMsg); ok {
+			dones++
+		}
+	})
+	if err == nil || !strings.Contains(err.Error(), "approval timed out") {
+		t.Fatalf("Run error = %v, want the stable approval-timeout error", err)
+	}
+	if dones != 1 {
+		t.Fatalf("terminal done results = %d, want exactly one", dones)
+	}
+	if calls != 1 {
+		t.Fatalf("chat calls = %d, want 1 (the runner must not retry after expiry)", calls)
+	}
+	if _, err := os.Stat(filepath.Join(root, "note.txt")); !os.IsNotExist(err) {
+		t.Fatalf("expired approval wrote the file: %v", err)
 	}
 }

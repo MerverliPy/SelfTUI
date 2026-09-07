@@ -42,6 +42,12 @@ type AgentView struct {
 	defaultModel string // from config; used when no selection exists yet
 	model        string // selected model for the next send
 
+	// clientGen counts client replacements (ApplyConfig reload after a
+	// host/token change). Model-list results stamp the generation they were
+	// issued under; a completion whose generation differs from the current
+	// one belongs to an obsolete host and is dropped (M-03).
+	clientGen uint64
+
 	// Conversation state. history holds committed user/assistant messages;
 	// turnModel records the model each committed message belongs to (the
 	// assistant header shows it); render is the glamour-rendered block
@@ -71,6 +77,7 @@ type AgentView struct {
 	stopArmed    bool                  // M7: first esc while running arms the interrupt (opencode-style)
 	stopCancel   func()                // cancels the in-flight chat context
 	chatCh       chan tea.Msg          // activity channel (PLAN §8), one stream owner
+	chatDone     chan struct{}         // closed by the producer when the turn's goroutine exits (M-06)
 	toolStatus   string                // latest agent-tool activity for the hint row
 	confirmation *agent.ToolConfirmMsg // pending mutation approval; blocks input/tab jumps
 
@@ -94,13 +101,18 @@ type AgentView struct {
 	notice  string
 
 	// Chat-session persistence: when sessionDir is set, committed turns are
-	// appended to a per-process transcript file under it (session.Open).
-	// Errors disable the log once and surface one notice; chat never blocks
-	// on the disk.
+	// appended to a per-process transcript file under it by one ordered
+	// background recorder (M-04) — never on the update loop. Errors disable
+	// the log once and surface one notice; chat never blocks on the disk.
 	sessionDir  string
 	sessionHost string // recorded in the transcript header (best effort)
-	session     *session.Log
+	recorder    *session.Recorder
 	sessionErr  bool
+	// sessionErrMsg retains the one surfaced recorder failure so later
+	// surfaces (e.g. /export) can echo the real cause instead of giving
+	// dead-end advice — recording is permanently off for the run once the
+	// first failure lands (P1-5).
+	sessionErrMsg string
 
 	// Composer (M7-A): slash-command drafting. The menu is derived from the
 	// live input value (typing "/cl" filters to clear), so there is no
@@ -199,8 +211,14 @@ func runnerFor(client *ollama.Client, root, systemPrompt string, maxIterations i
 
 // --- messages -------------------------------------------------------------
 
-type agentModelsLoadedMsg struct{ models []ollama.Model }
-type agentModelsErrMsg struct{ err string }
+type agentModelsLoadedMsg struct {
+	gen    uint64 // client generation at issue; mismatched completions are dropped
+	models []ollama.Model
+}
+type agentModelsErrMsg struct {
+	gen uint64
+	err string
+}
 type agentTokenMsg struct{ text string }
 
 type agentDoneMsg struct {
@@ -208,9 +226,23 @@ type agentDoneMsg struct {
 	reason string // terminal ollama done_reason of the final stream (stop/length)
 }
 
+// sessionAppendMsg reports one committed turn's recorder outcome. err is nil
+// on success (which never round-trips — the ack command returns nil instead);
+// the first non-nil error disables recording once (M-04).
+type sessionAppendMsg struct{ err error }
+
+// sessionExportMsg reports the /export flush outcome: the exact transcript
+// path once every earlier enqueued turn is durable, or the failure that
+// disabled recording.
+type sessionExportMsg struct {
+	path string
+	err  error
+}
+
 // agentEventMsg is the single envelope the root App accepts for every
 // asynchronous Agent command result: the model-list fetch results
-// (agentModelsLoadedMsg/agentModelsErrMsg) and every event the chat activity
+// (agentModelsLoadedMsg/agentModelsErrMsg), the recorder outcomes
+// (sessionAppendMsg/sessionExportMsg), and every event the chat activity
 // channel delivers (agent.TokenMsg, agent.ToolStartMsg, agent.ToolResultMsg,
 // agent.ToolConfirmMsg, agent.FallbackMsg, agent.AgentDoneMsg, plus the
 // legacy agentTokenMsg/agentDoneMsg). App.Update has exactly one routing case
@@ -230,14 +262,47 @@ func (v AgentView) Init() tea.Cmd {
 }
 
 func (v AgentView) loadModelsCmd() tea.Cmd {
+	gen := v.clientGen
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(v.ctx, 60*time.Second)
 		defer cancel()
 		models, err := v.client.List(ctx)
 		if err != nil {
-			return agentEventMsg{msg: agentModelsErrMsg{err: err.Error()}}
+			return agentEventMsg{msg: agentModelsErrMsg{gen: gen, err: err.Error()}}
 		}
-		return agentEventMsg{msg: agentModelsLoadedMsg{models: models}}
+		return agentEventMsg{msg: agentModelsLoadedMsg{gen: gen, models: models}}
+	}
+}
+
+// emitEvent is the one context-aware producer delivery used by every
+// background stream producer (the chat and pull goroutines), replacing
+// unconditional channel sends (M-06). Contract:
+//
+//   - Delivery succeeds in order, or cancellation wins: while the run context
+//     is alive a blocked send (a full 64-slot activity channel nobody is
+//     draining) yields to cancellation instead of stranding the producer
+//     forever.
+//   - Once canceled, a send never blocks again: the event is delivered only
+//     when a consumer is draining at that instant, and dropped otherwise — so
+//     a producer whose consumer has gone away still terminates. The single
+//     terminal event (AgentDoneMsg / modelsPullDoneMsg) goes through the same
+//     path last, so exactly one terminal UI state is produced whenever
+//     delivery remains possible.
+//   - The channel is owned by the producing goroutine, which closes it only
+//     after its last send — nothing here can ever send on a closed channel.
+func emitEvent(ctx context.Context, ch chan tea.Msg, msg tea.Msg) {
+	select {
+	case ch <- msg:
+		return
+	case <-ctx.Done():
+	}
+	// Cancellation won a blocked send (the channel was full at that instant).
+	// The consumer may have drained concurrently — that is the one case where
+	// delivery is still possible — so give the event a single nonblocking
+	// chance; if nobody is draining, drop it and never block again.
+	select {
+	case ch <- msg:
+	default:
 	}
 }
 
@@ -245,12 +310,17 @@ func (v AgentView) loadModelsCmd() tea.Cmd {
 // activity channel carries agentEventMsg-wrapped tool events, token deltas,
 // and one final agent.AgentDoneMsg (the shell unwraps before routing, so a
 // chat event can never be dropped at the App again). turnStart anchors the
-// per-turn elapsed footer (M7-B).
+// per-turn elapsed footer (M7-B). chatDone is closed when the producer
+// goroutine exits — the M-06 termination oracle for saturation tests (the
+// channel close is not enough: reading it would drain the backlog and
+// unblock a stuck producer).
 func (v AgentView) startChat() (AgentView, tea.Cmd) {
 	ch := make(chan tea.Msg, 64)
+	done := make(chan struct{})
 	ctx, cancel := context.WithCancel(v.ctx)
 
 	v.chatCh = ch
+	v.chatDone = done
 	v.stopCancel = cancel
 	v.streaming = true
 	v.streamText = ""
@@ -265,13 +335,14 @@ func (v AgentView) startChat() (AgentView, tea.Cmd) {
 	history := append([]ollama.ChatMessage(nil), v.history...)
 
 	go func() {
+		defer close(done)
 		defer close(ch)
 		defer cancel()
 		v.runner.Run(ctx, agent.Request{
 			Model: model, Messages: history,
 			Temperature: v.temperature, TopP: v.topP, NumCtx: v.numCtx,
 		}, func(msg agent.Msg) {
-			ch <- agentEventMsg{msg: msg}
+			emitEvent(ctx, ch, agentEventMsg{msg: msg})
 		})
 	}()
 
@@ -308,6 +379,20 @@ func (v AgentView) Update(msg tea.Msg) (AgentView, tea.Cmd) {
 		// the same switch.
 		return v.Update(msg.msg)
 
+	case sessionAppendMsg:
+		// One recorder error disables the transcript once and surfaces one
+		// notice; later identical outcomes (jobs accepted before the view
+		// learned of the failure) are ignored (M-04).
+		if msg.err != nil && !v.sessionErr {
+			v.sessionErr = true
+			v.sessionErrMsg = msg.err.Error()
+			v.notice = "session log: " + msg.err.Error()
+		}
+		return v, nil
+
+	case sessionExportMsg:
+		return v.applySessionExport(msg), nil
+
 	case tea.WindowSizeMsg:
 		v.w, v.h = msg.Width, msg.Height
 		// Wrap width changed: recompose the textarea fit and force a renderer
@@ -319,12 +404,21 @@ func (v AgentView) Update(msg tea.Msg) (AgentView, tea.Cmd) {
 		return v, nil
 
 	case agentModelsLoadedMsg:
+		// A model list from an obsolete client generation (the host/token
+		// changed while the fetch was in flight) must not replace the current
+		// host's models or the chat model chosen from them (M-03).
+		if msg.gen != v.clientGen {
+			return v, nil
+		}
 		v, cmd = v.onModelsLoaded(msg.models)
 		cmds = append(cmds, cmd)
 
 	case agentModelsErrMsg:
+		if msg.gen != v.clientGen {
+			return v, nil
+		}
 		v.loading = false
-		v.modelsErr = msg.err
+		v.modelsErr = sanitizeTerminalText(msg.err)
 		return v, nil
 
 	case agentTokenMsg: // retained for focused M2/UI tests
@@ -343,7 +437,9 @@ func (v AgentView) Update(msg tea.Msg) (AgentView, tea.Cmd) {
 
 	case agent.ToolStartMsg:
 		if v.streaming {
-			v.toolStatus = "⚙ " + msg.Name + " " + msg.Input
+			// The tool name and its argument JSON come from the remote model's
+			// tool call; sanitize before the statusline shows them (H-05).
+			v.toolStatus = sanitizeTerminalText("⚙ " + msg.Name + " " + msg.Input)
 		}
 		return v, v.waitChatCmd()
 
@@ -353,16 +449,22 @@ func (v AgentView) Update(msg tea.Msg) (AgentView, tea.Cmd) {
 			if !msg.OK {
 				prefix = "⚠ "
 			}
-			v.toolStatus = prefix + msg.Name + ": " + firstLine(msg.Summary)
+			// Summary can carry bytes read from the workspace at a hostile
+			// model's request; sanitize the composed status row as one value.
+			v.toolStatus = sanitizeTerminalText(prefix + msg.Name + ": " + firstLine(msg.Summary))
 		}
 		return v, v.waitChatCmd()
 
 	case agent.ToolConfirmMsg:
+		// The confirmation overlay echoes the remote tool name and input;
+		// sanitize this display copy (the runner keeps its own raw copy).
+		msg.Name = sanitizeTerminalText(msg.Name)
+		msg.Input = sanitizeTerminalText(msg.Input)
 		v.confirmation = &msg
 		return v, v.waitChatCmd()
 
 	case agent.FallbackMsg:
-		v.notice = msg.Reason
+		v.notice = sanitizeTerminalText(msg.Reason)
 		return v, v.waitChatCmd()
 
 	case agentDoneMsg:
@@ -385,6 +487,10 @@ func (v AgentView) Update(msg tea.Msg) (AgentView, tea.Cmd) {
 // installed, otherwise the first entry (PLAN §5: "first /api/tags entry at
 // runtime when empty"). An existing selection survives a refresh.
 func (v AgentView) onModelsLoaded(models []ollama.Model) (AgentView, tea.Cmd) {
+	// Model names come from the remote /api/tags host; sanitize them as they
+	// are stored so headers, the picker, notices, and the chat request all
+	// carry one clean representation (H-05).
+	models = sanitizeModelNames(models)
 	v.models = models
 	v.loading = false
 	v.modelsErr = ""
@@ -431,16 +537,21 @@ func (v AgentView) onChatDone(m agentDoneMsg) (AgentView, tea.Cmd) {
 	v.stopCancel = nil
 	v.stopArmed = false
 	v.chatCh = nil
+	v.chatDone = nil
 	v.toolStatus = ""
 	v.confirmation = nil
 
+	var recCmd tea.Cmd // ack waiter for the committed assistant turn, if any
+
 	if v.streamText != "" {
-		meta := turnFooter(v.turnStart, m.reason, v.stopRequest)
+		// The Ollama done_reason on the done event is remote text rendered on
+		// the assistant header; sanitize it before it becomes turn meta.
+		meta := turnFooter(v.turnStart, sanitizeTerminalText(m.reason), v.stopRequest)
 		v.history = append(v.history, ollama.ChatMessage{Role: ollama.RoleAssistant, Content: v.streamText})
 		v.turnModel = append(v.turnModel, v.model)
 		v.turnMeta = append(v.turnMeta, meta)
 		v.render = append(v.render, v.renderBlock(v.assistantHeaderRow(v.model, meta), v.streamText))
-		v = v.appendSessionTurn("assistant", v.model, v.streamText, meta, time.Now())
+		v, recCmd = v.enqueueSessionTurn("assistant", v.model, v.streamText, meta, time.Now())
 		v.streamText = ""
 	}
 
@@ -448,13 +559,15 @@ func (v AgentView) onChatDone(m agentDoneMsg) (AgentView, tea.Cmd) {
 	case v.stopRequest:
 		v.notice = "stopped" // esc asked to stop, even if the stream just finished
 	case m.err != "":
-		v.chatErr = m.err
+		// The error body can come from the remote host; sanitize before the
+		// statusline renders it (H-05).
+		v.chatErr = sanitizeTerminalText(m.err)
 	default:
 		v.notice = ""
 	}
 	v.stopRequest = false
 	v.follow = true
-	return v, nil
+	return v, recCmd
 }
 
 // --- keys -----------------------------------------------------------------
@@ -693,64 +806,119 @@ func (v AgentView) sendInput() (AgentView, tea.Cmd) {
 	v.turnMeta = append(v.turnMeta, "") // placeholder keeps turnMeta aligned with history
 	v.render = append(v.render, v.renderBlock(v.userHeader(), text))
 	v.checkContextBudget()
-	v = v.appendSessionTurn("user", v.model, text, "", time.Now())
-	return v.startChat()
+	v, recCmd := v.enqueueSessionTurn("user", v.model, text, "", time.Now())
+	av, chatCmd := v.startChat()
+	return av, tea.Batch(recCmd, chatCmd)
 }
 
-// appendSessionTurn mirrors a committed message into the per-process session
-// transcript (lazily opened on the first message). I/O happens on the update
-// loop but is tiny; on any error the log is disabled and one notice tells the
-// user where it failed — a transcript is never worth breaking the chat for.
-func (v AgentView) appendSessionTurn(role, model, content, meta string, at time.Time) AgentView {
+// enqueueSessionTurn mirrors one committed turn onto the ordered background
+// recorder (started lazily on the first recorded message). The update loop
+// only enqueues immutable work and arms the ack command; Open/Append/Flush/
+// Close all happen on the recorder worker, so a slow or stalled transcript
+// directory can never block Update (M-04). On the first failure the ack
+// disables the log once and one notice tells the user where it failed — a
+// transcript is never worth breaking the chat for.
+func (v AgentView) enqueueSessionTurn(role, model, content, meta string, at time.Time) (AgentView, tea.Cmd) {
 	if v.sessionDir == "" || v.sessionErr {
-		return v
+		return v, nil
 	}
-	if v.session == nil {
-		sess, err := session.Open(v.sessionDir, v.sessionHost)
-		if err != nil {
-			v.sessionErr = true
-			v.notice = "session log: " + err.Error()
-			return v
-		}
-		v.session = sess
+	if v.recorder == nil {
+		v.recorder = session.NewRecorder(v.sessionDir, v.sessionHost)
 	}
-	if err := v.session.Append(role, model, content, meta, at); err != nil {
-		v.session.Close()
-		v.session = nil
+	// The transcript mirrors what the terminal shows, so committed content
+	// is sanitized the same way (the file can otherwise be re-opened in a
+	// terminal-paging editor where control bytes would execute).
+	done, err := v.recorder.Append(role, model, sanitizeTerminalText(content), meta, at)
+	if err != nil {
+		// Backlog full: the sink is wedged; recording is over for this run.
 		v.sessionErr = true
+		v.sessionErrMsg = err.Error()
 		v.notice = "session log: " + err.Error()
+		return v, nil
 	}
-	return v
+	return v, func() tea.Msg {
+		res := <-done
+		if res.Err == nil {
+			return nil // a successful append needs no UI round-trip
+		}
+		return agentEventMsg{msg: sessionAppendMsg{err: res.Err}}
+	}
 }
 
 // WithSessionDir enables transcript persistence under dir with host recorded
-// in the file header (called by the root App; empty dir disables).
+// in the file header (called by the root App; empty dir disables). The
+// recorder itself is created lazily on the first recorded turn (nothing runs
+// for a disabled or silent session).
 func (v AgentView) WithSessionDir(dir, host string) AgentView {
 	v.sessionDir = dir
 	v.sessionHost = host
-	v.session = nil
+	v.recorder = nil
 	v.sessionErr = false
+	v.sessionErrMsg = ""
 	return v
 }
 
+// CloseRecorder flushes every committed turn and stops the transcript
+// recorder's worker. It is the normal-shutdown lifecycle boundary (main calls
+// it after the tea program exits); a nil recorder (recording disabled or no
+// turn yet) is a no-op, and Close is idempotent.
+func (v AgentView) CloseRecorder() error {
+	if v.recorder == nil {
+		return nil
+	}
+	return v.recorder.Close()
+}
+
 // exportSession flushes the Markdown transcript and reports its path. The
-// export is append-only and cannot be resumed (chat stays in-memory), so the
-// notice reports the file and never claims the conversation can be reloaded.
+// flush runs on the recorder worker strictly after every earlier enqueued
+// turn (ordered jobs), so the reported path is exact and the export is
+// append-only and cannot be resumed (chat stays in-memory) — the notice
+// reports the file and never claims the conversation can be reloaded. Update
+// only enqueues and processes the completion message (M-04).
 func (v AgentView) exportSession() (AgentView, tea.Cmd) {
 	switch {
-	case v.session == nil && v.sessionDir == "":
+	case v.sessionDir == "":
 		v.notice = "session recording is off — no transcript is written"
-	case v.session == nil:
+		return v, nil
+	case v.sessionErr:
+		// Recording failed earlier and is permanently off for this run, so
+		// "send a message first" would be dead-end advice: echo the real
+		// failure instead (P1-5).
+		v.notice = "session recording failed: " + v.sessionErrMsg
+		return v, nil
+	case v.recorder == nil:
 		v.notice = "nothing recorded yet — send a message first"
-	default:
-		if err := v.session.Flush(); err != nil {
-			v.sessionErr = true
-			v.notice = "session log: " + err.Error()
-		} else {
-			v.notice = "transcript: " + v.session.Path()
-		}
+		return v, nil
 	}
-	return v, nil
+	done, err := v.recorder.Flush()
+	if err != nil {
+		v.sessionErr = true
+		v.sessionErrMsg = err.Error()
+		v.notice = "session log: " + err.Error()
+		return v, nil
+	}
+	return v, func() tea.Msg {
+		res := <-done
+		return agentEventMsg{msg: sessionExportMsg{path: res.Path, err: res.Err}}
+	}
+}
+
+// applySessionExport lands one /export completion on the view. A failure
+// disables recording once (same one-error surface as an append failure); an
+// empty path means nothing was ever recorded.
+func (v AgentView) applySessionExport(m sessionExportMsg) AgentView {
+	if m.err != nil {
+		v.sessionErr = true
+		v.sessionErrMsg = m.err.Error()
+		v.notice = "session log: " + m.err.Error()
+		return v
+	}
+	if m.path == "" {
+		v.notice = "nothing recorded yet — send a message first"
+		return v
+	}
+	v.notice = "transcript: " + m.path
+	return v
 }
 
 // --- slash commands (M7-A) ------------------------------------------------
@@ -1162,6 +1330,13 @@ func (v AgentView) renderBlock(header, md string) string {
 		}
 		return header
 	}
+	// H-05 boundary: chat content (streamed tokens and committed turns, from
+	// either role) is the audit-cited leak site — glamour passes ESC payload
+	// bytes through its styled output, and the raw-markdown fallback below
+	// returns md verbatim. Sanitize before both so neither branch can carry
+	// a hostile sequence into the terminal; user text is local but harmless
+	// to strip here (display-only, idempotent).
+	md = sanitizeTerminalText(md)
 	v.ensureRenderer(maxInt(v.w-2, 1))
 	if v.tr != nil {
 		if out, err := v.tr.RenderBytes([]byte(md)); err == nil {
@@ -1188,6 +1363,12 @@ func (v AgentView) chatLines() []string {
 		block := v.history[i].Content
 		if i < len(v.render) && v.render[i] != "" {
 			block = v.render[i]
+		} else {
+			// H-05: never let raw (unsanitized) history reach the transcript.
+			// Production keeps the render cache in parallel with history, so
+			// this branch is a belt-and-suspenders guard for a cache gap; the
+			// cached branch was already sanitized by renderBlock.
+			block = sanitizeTerminalText(block)
 		}
 		if block == "" {
 			continue
@@ -1767,6 +1948,10 @@ func (v AgentView) ApplyConfig(cfg config.Config, c *ollama.Client, reload bool)
 	if !reload {
 		return v, nil
 	}
+	// A host/token change invalidates every in-flight model-list result of
+	// the old client: bump the generation so an obsolete completion is
+	// dropped on arrival (M-03), then refetch from the new host.
+	v.clientGen++
 	v.loading = true
 	v.modelsErr = ""
 	v.models = nil
