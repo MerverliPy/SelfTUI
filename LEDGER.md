@@ -4651,3 +4651,46 @@ exists and was validated end-to-end on the release host; V2c may reinstate
 - Fresh session: **V2c — sandboxed run_command** (only on V2b GO — GO recorded;
   bwrap default engine + full mitigation stack per the conditions above). Do not
   chain here.
+
+---
+
+## 2026-09-07 — Conclave: architecture critique (front end, back end, TUI, visual layout)
+
+**Work done**
+- Bounded conclave per `~/.agents/skills/conclave/SKILL.md`: 3 read-only fresh-context
+  advisors (`council-architect` grok-4.6, `council-skeptic` gpt-5.6-sol,
+  `council-operator` glm-5.3-flash), pass cap 2 (independent reports → true cross-exam
+  resumes). No blind lane (whole-repo subject, not a diff). Repo untouched (read-only lanes).
+- Verdict (converged 3/3): **keep layering `ui→agent→ollama`; fit for v0.1.x; do not
+  refactor for scale.** One recommended cleanup session for `internal/ui/agent_view.go`:
+  collapse 4 parallel slices into one turn struct; extract selector/slash/resume handlers;
+  move scroll mutation out of `View()`; Recorder as concrete composition-root dependency;
+  delete legacy `agentTokenMsg`/`agentDoneMsg` after test migration; TabBar comment fix.
+- Disputes settled by evidence: Client interface rejected (skeptic withdrew); port-split
+  rejected as premature; stale-client HIGH withdrawn (children correlate via clientGen;
+  residual: in-flight pull uncanceled in `ApplyClient` — optional one-line hardening);
+  0×0 renders chrome by design (boundedness untested → add test); shutdown 3s loss = low,
+  intentional, tested. Full memo in session transcript.
+
+**Commands + exit codes**
+- Advisor passes: pass 1 arch `d2fefdf5` / skep `ee9977a9` / oper `7b3bd2e7`; pass 2
+  resumes arch `393bbdf5` / skep `d6e72ec1` / oper `51fff1a5` — all exit 0, structured.
+- Gate incident: 3 blocked operator launches (completion-guard false positive; task word
+  "refactor" + council-* outside reviewer-style list, per
+  `pi-subagents/src/runs/shared/task-intent.ts`); fixed via guard's read-only vocabulary
+  ("review only / return findings only"), verified with `bun -e` classifier check `0`.
+- No repo commands run beyond `ls`/`rg`/`fd` recon and this append.
+
+**Decisions / lines to respect**
+- Framework stays (Bubble Tea v2); no Client interface until second backend; no Bubble Tea
+  sub-model tree; `BreakpointFor` is the shared breakpoint policy point.
+- Owner decisions open: approve agent_view cleanup session; pullCancel() hardening;
+  document `looksLikeEmbeddedJSON` tradeoff; schedule 100× transcript measurement.
+
+**Blockers / open decisions (carry to next session)**
+- None blocking. Tests-for-verifications list in memo (0×0 boundedness, turn-slice
+  desync, pullCancel, mid-stream ApplyConfig, TabBar width boundary).
+
+**Next action**
+- Fresh session: owner picks up the four owner decisions; recommended next step is the
+  single agent_view.go code-motion cleanup session. Do not chain here.
