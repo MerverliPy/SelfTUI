@@ -4392,3 +4392,22 @@ cross-build` PASSED (1m11s). `main` now at `ba6e098`, v0.1.1 tag
 
 **Next action**
 - Fresh session: public-visibility flip or v0.2 scoping per owner priority. Do not chain here.
+
+### 2026-09-07 — Showcase PR #10 merged to main (DONE)
+**Milestone:** owner-assigned (most-valuable recommendation) · **Result:** done — branch `showcase-readme-showcase` merged via PR #10 `--merge` (merge commit `3a6eef4`); CI required check PASSED 1m29s (run `34076222292`, Node-20 deprecation annotation only). `main` in sync with `origin/main`. Branch kept (auditable history).
+
+**Commands + exit codes**
+- `git checkout -b showcase-readme-showcase` + push `0` · `gh pr create 10` `0`
+- `gh run watch 34076222292 --exit-status` `0` (SUCCESS 1m29s)
+- `gh pr merge 10 --merge` `0` · `git pull --ff-only` `0`
+
+**Decisions / lines to respect**
+- Merge via `--merge` (not squash), same precedent as PRs #6/#8/#9.
+- Badges resolve once the repo is public; harmless while private.
+
+**Blockers / open decisions (carry to next session)**
+- Owner clicks: pubkey upload (Verified badge), About/topics/social-preview, public-visibility flip.
+- v0.2 scope definition.
+
+**Next action**
+- Fresh session: public-visibility flip or v0.2 scoping per owner priority. Do not chain here.
