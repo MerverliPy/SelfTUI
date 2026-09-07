@@ -4943,3 +4943,54 @@ exists and was validated end-to-end on the release host; V2c may reinstate
 - Fresh session: owner picks. All four owner decisions (D1–D4) are now
   landed; conclave tests-for-verifications list is exhausted. Do not chain
   here.
+
+## 2026-09-07 — Next-level TUI plan drafted: PLAN.md §12 (N-series proposal, planning-only)
+
+**Work done**
+- Orchestrator triage: WORKFLOW (2 read-only lanes: web research + repo recon).
+  Channel health: default chain (deepseek/v4-flash) 402'd "Insufficient Balance"
+  on all 3 child attempts (researcher fg, scout ×2, researcher bg) — degraded per
+  ladder; ping `opencode-go/glm-5.3-flash:low` → PING-OK; research lane reran on
+  `opencode-go/glm-5.3-flash:medium` (run meta confirmed; primary never held).
+  Recon lane degraded to parent-local after scout 402 ×2.
+- Web research brief delivered (research.md, d7577a9c): Bubble Tea v2 Cursed
+  Renderer + SSH bandwidth; scroll-optimization PRs #1725/#1761 + event-driven
+  #1776; Crush memoization architecture (per-width cache, versioned invalidation,
+  Finished() freeze); glamour pool/width-bucket/gate patterns; opencode command
+  grammar; Claude Code statusline / token-meter category; Bast.sh mobile layout.
+- Parent-local recon + verification of consequential claims against the pinned
+  tree: `WithScrollOptimization` NOT in pinned bubbletea v2.0.9 (N7 = track
+  upstream); `eval_count`/`prompt_eval_duration` NOT parsed today (N3 additive);
+  one glamour TermRenderer already reused on width change (width-bucketing gap).
+- Deliverable: **PLAN.md §12** appended — N-series proposal (N1 render windowing,
+  N2 streaming repaint discipline, N3 tok/s + exact tokens, N4 status bar,
+  N5 debug drawer, N6 composer (@-refs, /details, /thinking), N7 upstream
+  tracking, N8 tea.Println scrollback spike) + explicit rejections
+  (leader chords, mouse capture, mutation undo) + sequencing sketch
+  N1→N3→N4→N2→N6→N5→N7→N8. Explicitly marked PROPOSAL; owner-selected v0.2
+  (V2c pending, V2d undecided) untouched and first in line.
+
+**Commands + exit codes**
+- `make check` (build + `go test -count=1 ./...` + vet) → 0, all packages ok.
+- `go doc charm.land/bubbletea/v2 WithScrollOptimization` → "no symbol" (confirms
+  absence in v2.0.9).
+- `rg eval_count internal/ollama` (non-test) → no hits (confirms gap).
+- PLAN.md §12 append via heredoc → exit 0; LEDGER append → exit 0.
+
+**Decisions / lines to respect**
+- Planning-only session: no production code touched; §12 is proposal status, not
+  committed scope. v0.2 scope decision (2026-09-07) not modified.
+- Leader-key chords and mouse capture deliberately rejected for the 72×30 phone
+  target; mutation undo/redo deferred to the V2d cut (touches V2c jail).
+- N8 (tea.Println native scrollback) is spike-first, owner-run on device; no
+  commitment until Blink/Termius gesture behavior is measured.
+
+**Blockers / open decisions (carry to next session)**
+- DeepSeek channel balance is empty (402 on every child attempt) — owner should
+  top up or the cost-router chains will keep landing there and failing.
+- Owner decisions pending: (a) sequence N-series as v0.3 vs interleave with
+  V2c/V2d; (b) N8 device-spike scheduling; (c) amber-tier threshold (~80% assumed).
+
+**Next action**
+- Fresh session: owner picks — V2c (sandboxed run_command, gate already GO) or
+  N1 (render windowing, D4 baseline pinned as the bar). Do not chain here.

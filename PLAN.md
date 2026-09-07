@@ -735,3 +735,87 @@ focused release** (one gate per session; v0.2 tags when the set lands).
 rotation geometry measurement, post-reconnect probe block `m6-live-1b`).
 Remaining owner click: upload the GPG public key at github.com/settings/keys
 for the green Verified badge.
+
+## 12. Next-level TUI plan — performance · usability · visibility (PROPOSAL, planning-only, 2026-09-07)
+
+Status: **proposal, not committed scope.** Owner-selected v0.2 (V2a–V2d) is untouched
+and stays first in line (V2c pending; V2d cut decided at its own session). This §12
+is the planning phase the owner requested 2026-09-07 ("take the TUI to the next
+level in performance, usability, visibility") — an N-series cut for the owner to
+sequence as v0.3 (or interleave) after v0.2 leftovers. Evidence base: web research
+brief (state of the art 2025–2026, Bubble Tea v2 / Crush / opencode / Claude Code
+statusline; artifact: subagent research.md d7577a9c) + repo recon against the D4
+benchmarks. Claims below were verified against the pinned tree where marked ✅v.
+
+### N1 — Render windowing (P, highest value, baseline pinned)
+The known hotspot: `chatLines` rebuilds the **O(total cached lines)** join every
+frame (D4: ChatPane100x ≈1.5 ms/op · 14k allocs; ChatLines100x ≈0.87 ms/op).
+Plan: render only the visible window — slice from the cached per-turn blocks and
+join O(visible) lines; finalized turns stay frozen (Crush pattern: per-width render
+cache + versioned invalidation + `Finished()` freeze; SelfTUI already has the
+per-width cache, so the delta is the window slice). Gate: new bench must beat the
+pinned ChatLines100x baseline; golden frames unchanged (72×30 + 120×40 still
+byte-identical). ✅v baseline verified in `internal/ui/agent_view_bench_test.go`.
+
+### N2 — Streaming repaint discipline (P)
+During a live stream, re-render only the active block, not the whole pane; cache
+thinking/content sections separately so stream deltas don't invalidate rendered
+neighbors (Crush pattern); batch deltas to a repaint tick instead of per-token
+frames. Keep the "▍" caret + follow behavior intact (M7-B pins the UX).
+
+### N3 — tok/s + exact token counts (V+U, cheap, high value)
+✅v `eval_count` / `prompt_eval_duration` from Ollama's final stream chunk are **not
+parsed today**; the ctx meter runs on `agent.ApproxTokens`. Plan: parse the final
+chunk in `internal/ollama`, surface per-turn `model · 3.4s · stop · 41 tok/s` in the
+existing M7-B turn footer, and upgrade the M7-C ctx meter with measured prompt
+tokens when a turn completes (ApproxTokens stays for live drafting).
+
+### N4 — Status bar as observability row (V)
+Extend the persistent bottom row to `model · ctx bar · tok/s · host` with an **amber
+tier** (~80% of num_ctx) before today's red-100% tier (meter is a correctness
+feature — over num_ctx silently truncates). Add background-job pills (pull progress,
+queued turns) in Crush style. All content lives in the already-cached status row, so
+frame cost ≈ 0.
+
+### N5 — Debug/log drawer (V)
+Keybind-toggled drawer over `charmbracelet/log`: ollama request/response traces,
+reconnect events, agent loop decisions (tool calls, budget, truncation markers).
+k9s-style pattern; ships with a `selftui --log-file` flag so drawer + file share one
+sink. Read-only; no secrets (redact bearer tokens).
+
+### N6 — Chat composer upgrades (U)
+- `@`-file fuzzy reference in the agent input (opencode pattern): pick a workspace
+  file, inline it into the draft/agent context (SelfTUI's jailed read_file already
+  defines the path safety rules).
+- `/details` + `/thinking` toggles to gate tool-output and reasoning blocks
+  (qwen3 thinking is suppressed in the loop; this surfaces it on demand).
+- Amber/red ctx-tier already in N4; palette (`ctrl+p`) remains the discoverable
+  path — a leader key is deliberately **not** adopted (72×30 phone: discoverable >
+  muscle-memory chords).
+
+### N7 — Upstream tracking (P, no code now)
+✅v Pinned `bubbletea v2.0.9` does **NOT** have `WithScrollOptimization` (research
+flagged release status unconfirmed; verified absent). When Charm ships the
+scroll-optimized flush (#1725/#1761) + event-driven rendering (#1776) in a release,
+pin it and re-run the D4 bench + a 72×30 scroll-frame bench. Track glamour
+width-bucketing (round width to 5 cols so resize jitter doesn't rebuild the
+renderer) as a micro-item under N1.
+
+### N8 — Spike (device test, owner-run): native scrollback via tea.Println
+Charm's chat-history pattern (discussion #1482): print *finalized* turns to the
+terminal's native scrollback (`tea.Println`) so old turns cost zero bytes over SSH;
+TUI owns only input + streaming area. Biggest open trade-off: iPhone SSH clients
+(Blink/Termius) may capture gestures / behave oddly with native scrollback —
+**on-device spike before any commitment**. Cheap alternative if N1 windowing lands:
+stay in altscreen; N8 is optional.
+
+### Explicitly rejected / deferred
+- Leader-key two-stroke chords (discoverability at 72×30; palette wins).
+- Mouse capture (keep off; preserve native selection/scroll).
+- Undo/redo of agent mutations (touches the V2c jail; revisit with V2d, owner
+  decision — aider/opencode precedent noted but out of this cut).
+
+### Sequencing sketch (owner to confirm)
+N1 → N3 → N4 → N2 → N6 → N5 → N7(continuous) → N8(spike). Each N-item = one
+session per the binding session rule; N1 first (benchmark baseline exists and any
+windowing work "must beat" it per the D4 ledger entry).
