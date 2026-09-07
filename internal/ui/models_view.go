@@ -651,6 +651,25 @@ func (v ModelsView) onDeleteDone(m modelsDeleteDoneMsg) (ModelsView, tea.Cmd) {
 	return v, v.loadCmd()
 }
 
+// pullPill renders the background-job pill for a streaming pull (N4): the
+// shell status row shows it while the pull runs, so progress stays visible
+// from any tab. Empty when no pull is in flight. Without server-reported
+// sizes (pullTotal == 0, e.g. before the first layer digest) the pill
+// degrades to name + ellipsis — the pull dialog still carries the phase.
+// The name is user-typed, but it is sanitized here like every other
+// remote-adjacent display surface.
+func (v ModelsView) pullPill() string {
+	if !v.pulling {
+		return ""
+	}
+	name := sanitizeTerminalText(v.pullName)
+	if v.pullTotal > 0 {
+		pct := int(clampFloat(float64(v.pullDone)/float64(v.pullTotal), 0, 1) * 100)
+		return fmt.Sprintf("⇣ %s %d%%", name, pct)
+	}
+	return "⇣ " + name + "…"
+}
+
 // onPullProgress applies one streamed pull event and resubscribes the
 // activity command. A new layer digest resets the progress numbers.
 func (v ModelsView) onPullProgress(m modelsPullMsg) (ModelsView, tea.Cmd) {

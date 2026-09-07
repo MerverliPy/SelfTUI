@@ -71,8 +71,37 @@ type AgentView struct {
 	measuredPromptTokens int
 	measuredDraft        string
 
-	streaming    bool                  // generation in flight
-	streamText   string                // in-flight assistant content (deltas appended)
+	// lastTokPerSec (N4): the measured tok/s of the last completed turn
+	// (same turnTokPerSec source the footer uses), surfaced in the shell
+	// status row. Zero until a turn's final chunk carried usable metrics; a
+	// user stop records no rate (the footer omits it there too); cleared
+	// wherever the conversation is replaced (/clear, import, resume).
+	lastTokPerSec int
+
+	streaming  bool   // generation in flight
+	streamText string // in-flight assistant content (flushed at the repaint tick)
+
+	// N2 — streaming repaint discipline. Token deltas land in pendingStream
+	// and merge into streamText only on streamTickMsg, so a burst of deltas
+	// costs one glamour render per tick (≤ streamTickInterval) instead of
+	// three full renders per token. streamRender caches the rendered active
+	// block (header + content, caret excluded) keyed by its exact inputs —
+	// content, header, width, theme — so the frame's count pass and window
+	// pass share one render and frames with no new flushed text cost zero
+	// glamour work. Glamour's margin collapsing is not composable across
+	// markdown section boundaries (a paragraph's top margin renders inline
+	// after a code block), so sub-block section caching would not stay
+	// byte-identical; the frozen-neighbor discipline stays at the committed-
+	// turn level (the per-turn render cache), which deltas never touch.
+	pendingStream string
+
+	streamRender      string // cached render of the active streaming block
+	streamRenderSrc   string // streamText the cache was rendered from
+	streamRenderHead  string // assistant header included in the cache
+	streamRenderW     int    // terminal width the cache was rendered at
+	streamRenderDark  bool   // theme the cache was rendered under
+	streamRenderValid bool   // cache holds a rendered block at all
+
 	stopRequest  bool                  // esc asked to stop; treat stream end as a stop
 	stopArmed    bool                  // M7: first esc while running arms the interrupt (opencode-style)
 	stopCancel   func()                // cancels the in-flight chat context
@@ -297,6 +326,21 @@ type agentEventMsg struct{ msg tea.Msg }
 // emits this and App applies it (M7-A).
 type agentThemeMsg struct{ theme string }
 
+// streamTickMsg (N2) merges the token deltas accumulated since the last tick
+// into streamText and re-primes the active-block render cache — batching
+// per-token frames into a bounded repaint cadence. It travels wrapped in
+// agentEventMsg: App.Update forwards only key presses and child envelopes to
+// the Agent tab, so a bare tea.Msg from a command would be swallowed by the
+// shell's default case and never reach this view.
+type streamTickMsg struct{}
+
+// streamTickInterval is the streaming repaint cadence. Ollama streams deltas
+// every ~10–50 ms; 60 ms coalesces 1–6 deltas per repaint (≈17 fps), keeps
+// the caret visually smooth (well under the ~100 ms perception threshold for
+// live typing), and keeps the final chunk's immediate flush (onChatDone)
+// imperceptibly late for the N3 footer metrics.
+const streamTickInterval = 60 * time.Millisecond
+
 // Init starts the model list fetch for the selector.
 func (v AgentView) Init() tea.Cmd {
 	return v.loadModelsCmd()
@@ -365,6 +409,8 @@ func (v AgentView) startChat() (AgentView, tea.Cmd) {
 	v.stopCancel = cancel
 	v.streaming = true
 	v.streamText = ""
+	v.pendingStream = "" // N2: a fresh turn starts with an empty delta batch
+	v.resetStreamRender()
 	v.stopRequest = false
 	v.stopArmed = false
 	v.chatErr = ""
@@ -391,7 +437,93 @@ func (v AgentView) startChat() (AgentView, tea.Cmd) {
 		})
 	}()
 
-	return v, v.waitChatCmd()
+	// N2: batch the activity subscription with the first repaint tick — the
+	// tick flushes deltas at streamTickInterval and re-arms itself while the
+	// turn streams.
+	return v, tea.Batch(v.waitChatCmd(), v.streamTickCmd())
+}
+
+// streamTickCmd re-arms the repaint tick (N2). The tick arrives wrapped in
+// agentEventMsg so the App shell forwards it (see streamTickMsg).
+func (v AgentView) streamTickCmd() tea.Cmd {
+	return tea.Tick(streamTickInterval, func(time.Time) tea.Msg {
+		return agentEventMsg{msg: streamTickMsg{}}
+	})
+}
+
+// mergeStreamDeltas folds pendingStream into streamText (append-only; the
+// merge is the only writer of streamText during a turn). Pure state merge:
+// rendering is the caller's concern (the tick re-primes the cache; the done
+// path commits). Also re-arms follow, matching the per-token behavior this
+// batching replaces (M7-B: streaming re-tails the pane).
+func (v *AgentView) mergeStreamDeltas() {
+	if v.pendingStream == "" {
+		return
+	}
+	v.streamText += v.pendingStream
+	v.pendingStream = ""
+	v.follow = true
+}
+
+// liveStreamText is the assistant text including deltas still awaiting the
+// repaint tick (N2). Logic that must observe the complete stream — payload
+// budgeting, transcript guards, the commit path — reads this; the render
+// path reads flushed streamText so frames stay aligned with the cache.
+func (v AgentView) liveStreamText() string {
+	if v.pendingStream == "" {
+		return v.streamText
+	}
+	return v.streamText + v.pendingStream
+}
+
+// resetStreamRender drops the active-block render cache (N2).
+func (v *AgentView) resetStreamRender() {
+	v.streamRender = ""
+	v.streamRenderSrc = ""
+	v.streamRenderHead = ""
+	v.streamRenderW = 0
+	v.streamRenderDark = false
+	v.streamRenderValid = false
+}
+
+// primeStreamRender renders the active streaming block once per content,
+// header, width, or theme change (N2). Called from the repaint tick and the
+// geometry/theme paths so View reads a warm cache; a cold View still falls
+// back to a fresh render (streamBlockRender), never to stale output.
+func (v *AgentView) primeStreamRender() {
+	if v.streamText == "" {
+		if v.streamRenderValid {
+			v.resetStreamRender()
+		}
+		return
+	}
+	header := v.assistantHeader(v.model)
+	w := maxInt(v.w-2, 1)
+	if v.streamRenderValid && v.streamRenderSrc == v.streamText &&
+		v.streamRenderHead == header && v.streamRenderW == w && v.streamRenderDark == v.dark {
+		return // unchanged inputs: the cache is still exact
+	}
+	v.streamRender = v.renderBlock(header, v.streamText)
+	v.streamRenderSrc = v.streamText
+	v.streamRenderHead = header
+	v.streamRenderW = w
+	v.streamRenderDark = v.dark
+	v.streamRenderValid = true
+}
+
+// streamBlockRender returns the rendered streaming block (header + content,
+// caret excluded) from the N2 cache when its key still matches, or a fresh
+// renderBlock otherwise. Both paths are byte-identical by construction, so
+// the N1 equivalence pins and golden discipline hold regardless of which one
+// a frame hits.
+func (v AgentView) streamBlockRender() string {
+	header := v.assistantHeader(v.model)
+	w := maxInt(v.w-2, 1)
+	if v.streamRenderValid && v.streamRenderSrc == v.streamText &&
+		v.streamRenderHead == header && v.streamRenderW == w && v.streamRenderDark == v.dark {
+		return v.streamRender
+	}
+	return v.renderBlock(header, v.streamText)
 }
 
 // waitChatCmd is the resubscribed activity command (PLAN §8; same pattern as
@@ -448,11 +580,14 @@ func (v AgentView) Update(msg tea.Msg) (AgentView, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		v.w, v.h = msg.Width, msg.Height
 		// Wrap width changed: recompose the textarea fit and force a renderer
-		// + cache rebuild at the new width.
+		// + cache rebuild at the new width. N2: re-prime the active-block
+		// cache too, so the next frame cannot fall back to per-frame renders
+		// until the next tick.
 		v = v.fitComposer()
 		v.renderW = -1
 		v.rebuildRenderer()
 		v.rebuildRenderCache()
+		v.primeStreamRender()
 		return v, nil
 
 	case agentModelsLoadedMsg:
@@ -474,11 +609,24 @@ func (v AgentView) Update(msg tea.Msg) (AgentView, tea.Cmd) {
 		return v, nil
 
 	case agent.TokenMsg:
+		// N2: deltas queue for the repaint tick; the frame itself re-renders
+		// only when the tick flushes them (or the turn commits). follow stays
+		// per-token exactly as before (M7-B: streaming re-tails the pane).
 		if v.streaming {
-			v.streamText += msg.Text
+			v.pendingStream += msg.Text
 			v.follow = true
 		}
 		return v, v.waitChatCmd()
+
+	case streamTickMsg:
+		// N2 repaint tick: flush accumulated deltas, re-prime the active-block
+		// cache once per content change, and re-arm while the turn streams.
+		v.mergeStreamDeltas()
+		v.primeStreamRender()
+		if v.streaming {
+			return v, v.streamTickCmd()
+		}
+		return v, nil
 
 	case agent.ToolStartMsg:
 		if v.streaming {
@@ -584,6 +732,10 @@ func (v AgentView) onModelsLoaded(models []ollama.Model) (AgentView, tea.Cmd) {
 // (M7-B/opencode-style), then surfaces an error unless the user stopped the
 // stream with esc (a stop is not an error).
 func (v AgentView) onChatDone(m agent.AgentDoneMsg) (AgentView, tea.Cmd) {
+	// N2: land any deltas still awaiting the repaint tick before the commit —
+	// the final chunk must flush immediately (no tick-interval tail latency
+	// for the committed turn or the N3 footer metrics riding its meta row).
+	v.mergeStreamDeltas()
 	v.streaming = false
 	v.stopCancel = nil
 	v.stopArmed = false
@@ -603,6 +755,11 @@ func (v AgentView) onChatDone(m agent.AgentDoneMsg) (AgentView, tea.Cmd) {
 	} else {
 		v.measuredPromptTokens = 0
 	}
+	// N4: remember the measured rate for the shell status row; a user stop
+	// keeps no rate, exactly like the turn footer.
+	if t := turnTokPerSec(m.Metrics); t > 0 && !v.stopRequest {
+		v.lastTokPerSec = t
+	}
 
 	var recCmd tea.Cmd // ack waiter for the committed assistant turn, if any
 
@@ -620,6 +777,7 @@ func (v AgentView) onChatDone(m agent.AgentDoneMsg) (AgentView, tea.Cmd) {
 		})
 		v, recCmd = v.enqueueSessionTurn("assistant", v.model, v.streamText, meta, time.Now())
 		v.streamText = ""
+		v.resetStreamRender() // the active block committed; nothing cached to show
 	}
 
 	switch {
@@ -1202,6 +1360,7 @@ func (v AgentView) applySessionLoaded(m sessionLoadedMsg) AgentView {
 	// truncation marker now, not only after the next send.
 	v.truncated = false
 	v.measuredPromptTokens = 0 // the conversation was replaced wholesale
+	v.lastTokPerSec = 0        // its last turn's rate no longer describes this one
 	v.checkContextBudget()
 	v.scroll = 0
 	v.follow = true
@@ -1416,6 +1575,7 @@ func (v AgentView) clearConfirmKey(k tea.Key) (AgentView, tea.Cmd) {
 		v.follow = true
 		v.truncated = false
 		v.measuredPromptTokens = 0
+		v.lastTokPerSec = 0 // the conversation was wiped; the rate described its last turn
 	case k.Text == "n" || k.Code == tea.KeyEsc:
 		v.clearConfirm = false
 		v.notice = "clear cancelled"
@@ -1437,8 +1597,12 @@ func (v AgentView) payloadMessages() []ollama.ChatMessage {
 	for i := range v.turns {
 		msgs = append(msgs, v.turns[i].msg)
 	}
-	if v.streaming && v.streamText != "" {
-		msgs = append(msgs, ollama.ChatMessage{Role: ollama.RoleAssistant, Content: v.streamText})
+	// N2: budget against the complete stream (deltas awaiting the tick
+	// included) — the payload must match what the runner would send.
+	if v.streaming {
+		if live := v.liveStreamText(); live != "" {
+			msgs = append(msgs, ollama.ChatMessage{Role: ollama.RoleAssistant, Content: live})
+		}
 	}
 	if v.input.Value() != "" {
 		msgs = append(msgs, ollama.ChatMessage{Role: ollama.RoleUser, Content: v.input.Value()})
@@ -1490,6 +1654,37 @@ func (v AgentView) ctxPct() int {
 	return pct
 }
 
+// amberCtxPct is the amber context tier (N4): at or above 80% of the meter's
+// existing displayed scale — the ¾-num_ctx input budget the runner enforces —
+// usage warns amber before the red-100% tier. OWNER DECISION (PLAN §12 N4):
+// the plan's “~80% of num_ctx” is read as 80% on the meter's displayed scale
+// so the amber tier sits before (not beyond) today's red-100% tier.
+const amberCtxPct = 80
+
+// ctxTier classifies context usage for the meter's tier colors. Shared by the
+// composer header and the shell status row so the tiers cannot drift.
+type ctxTier int
+
+const (
+	ctxOK ctxTier = iota
+	ctxAmber
+	ctxRed
+)
+
+// ctxTierFor maps a meter percentage onto its tier: red at 100% (the budget
+// is full — sending past it truncates the model's reply), amber from
+// amberCtxPct, OK below.
+func ctxTierFor(pct int) ctxTier {
+	switch {
+	case pct >= 100:
+		return ctxRed
+	case pct >= amberCtxPct:
+		return ctxAmber
+	default:
+		return ctxOK
+	}
+}
+
 // ctxMeterPlain renders the plain (unstyled) live context meter, e.g.
 // "ctx ▓▓░░░ 38%", shown on the composer header's right side.
 func (v AgentView) ctxMeterPlain() string {
@@ -1504,6 +1699,26 @@ func (v AgentView) ctxMeterPlain() string {
 	}
 	bar := strings.Repeat("▓", filled) + strings.Repeat("░", 5-filled)
 	return "ctx " + bar + " " + fmt.Sprintf("%d%%", pct)
+}
+
+// ctxMeterSegment renders the status row's compact context meter (N4), with
+// its tier color: amber at the amber tier, red at 100%, the shell's plain
+// muted style below. Empty when there is nothing to meter (no num_ctx, or a
+// zero-token conversation) so a no-data frame stays byte-identical to the
+// pre-N4 status row.
+func (v AgentView) ctxMeterSegment() string {
+	plain := v.ctxMeterPlain()
+	if plain == "" || v.ctxTokens() == 0 {
+		return ""
+	}
+	switch ctxTierFor(v.ctxPct()) {
+	case ctxAmber:
+		return v.styles.warnText().Render(plain)
+	case ctxRed:
+		return v.styles.Error.Render(plain)
+	default:
+		return plain
+	}
 }
 
 // --- rendering ------------------------------------------------------------
@@ -1729,7 +1944,7 @@ func (v AgentView) streamDisplayLines() []string {
 	if v.streamText == "" {
 		return nil
 	}
-	sb := strings.Split(v.renderBlock(v.assistantHeader(v.model), v.streamText), "\n")
+	sb := strings.Split(v.streamBlockRender(), "\n") // N2: cache-backed
 	if v.streaming {
 		sb = withStreamingCaret(sb)
 	}
@@ -1743,7 +1958,7 @@ func (v AgentView) streamLineCount() int {
 	if v.streamText == "" {
 		return 0
 	}
-	block := v.renderBlock(v.assistantHeader(v.model), v.streamText)
+	block := v.streamBlockRender()      // N2: cache-backed
 	n := strings.Count(block, "\n") + 1 // split lines
 	if v.streaming && strings.HasSuffix(block, "\n") {
 		n++ // caret becomes its own row after the blank last line
@@ -1761,7 +1976,7 @@ func (v AgentView) trailingBlankCount() int {
 		if v.streaming {
 			return 1 // the caret keeps the last line non-empty; separator only
 		}
-		block := v.renderBlock(v.assistantHeader(v.model), v.streamText)
+		block := v.streamBlockRender() // N2: cache-backed
 		return strings.Count(block[len(strings.TrimRight(block, "\n")):], "\n") + 1
 	}
 	for i := len(v.turns) - 1; i >= 0; i-- {
@@ -1984,13 +2199,18 @@ func (v AgentView) composerHeader() string {
 	innerW := maxInt(v.w-2, 10)
 	left := v.assistantHeader(v.model)
 	right := ""
-	if pct := v.ctxPct(); pct >= 100 {
+	plain := v.ctxMeterPlain()
+	if usage := v.ctxUsage(); usage != "" {
+		plain += " · " + usage
+	}
+	// N4: tier colors via the shared ctxTierFor so the composer header and
+	// the shell status row cannot drift apart.
+	switch ctxTierFor(v.ctxPct()) {
+	case ctxRed:
 		right = v.styles.Error.Render("ctx full — /clear")
-	} else {
-		plain := v.ctxMeterPlain()
-		if usage := v.ctxUsage(); usage != "" {
-			plain += " · " + usage
-		}
+	case ctxAmber:
+		right = v.styles.warnText().Render(plain)
+	default:
 		right = v.styles.mutedText().Render(plain)
 	}
 	pad := innerW - lipgloss.Width(left) - lipgloss.Width(right)
@@ -2466,6 +2686,13 @@ func (v *AgentView) clampScroll() {
 	}
 }
 
+// warnText returns the amber foreground style for the context meter's amber
+// tier (N4) — a “getting close” warning between the muted idle bar and the
+// red budget-full state.
+func (s Styles) warnText() lipgloss.Style {
+	return lipgloss.NewStyle().Foreground(s.warn)
+}
+
 // agentAccent returns the accent style applied to role headers.
 func (s Styles) agentAccent() lipgloss.Style {
 	return lipgloss.NewStyle().Bold(true).Foreground(s.accent)
@@ -2486,6 +2713,7 @@ func (v AgentView) applyTheme(dark bool, styles Styles) AgentView {
 	v.dark = dark
 	v.rebuildRenderer()
 	v.rebuildRenderCache()
+	v.primeStreamRender() // N2: active block re-tints with the shell theme
 	return v
 }
 

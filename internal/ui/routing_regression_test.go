@@ -233,8 +233,18 @@ func TestAppEnvelopeRoutingTable(t *testing.T) {
 				}},
 			{"agent.TokenMsg (delta)", envAgent, agent.TokenMsg{Text: "token delta"}, streaming,
 				func(m App) error {
-					if m.agent.streamText != "token delta" {
-						return errf("streamText = %q, want the delta appended", m.agent.streamText)
+					// N2: the delta queues for the repaint tick — reaching the
+					// child means it landed in the batch, not on the frame.
+					if m.agent.pendingStream != "token delta" {
+						return errf("pendingStream = %q, want the delta queued for the repaint tick", m.agent.pendingStream)
+					}
+					return nil
+				}},
+			{"streamTickMsg (repaint tick, N2)", envAgent, streamTickMsg{},
+				func(a *App) { a.agent.streaming = true; a.agent.pendingStream = "queued delta" },
+				func(m App) error {
+					if m.agent.streamText != "queued delta" || m.agent.pendingStream != "" {
+						return errf("streamText=%q pendingStream=%q, want the tick to flush the batch", m.agent.streamText, m.agent.pendingStream)
 					}
 					return nil
 				}},

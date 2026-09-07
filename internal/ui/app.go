@@ -273,25 +273,66 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return a, nil
 }
 
-// statusLeft composes the status bar's left cell from the session config:
-// the Ollama host, the workspace-tools state, the canonical workspace, and —
-// when tools are armed against a non-loopback host — a warning that
-// workspace content may be sent to it. Parts drop from the tail under width
-// pressure (workspace first, then the warning), so the bar never wraps and
-// the host + tools state always survive; truncateToWidth is the last resort.
+// statusLeft composes the status bar's left cell (N4 observability row).
+// Head: the observability segments — the model chip, a background-job pill
+// (pull progress; queued-turn pills await a real queue feature, see
+// ModelsView.pullPill), a compact context meter, and the last completed
+// turn's measured tok/s. Tail (today's identity row): the Ollama host, the
+// workspace-tools state, the canonical workspace, and — when tools are armed
+// against a non-loopback host — the remote-host warning.
+//
+// Under width pressure the row sheds in a fixed order: workspace first
+// (today's discipline), then the observability segments from their tail
+// (tok/s → meter → pill, and finally the model chip), then the remote-host
+// warning — host + tools always survive, on a 72-col phone too, so the N4
+// anatomy `model · ctx bar · tok/s · host` is the roomy-shape anatomy while
+// the privacy warning outlives the meter and the identity floor is never
+// truncated mid-word. truncateToWidth is the last resort.
 func (a App) statusLeft(right string) string {
-	parts := []string{"⏻ " + a.cfg.Host, toolsChip(a.cfg.ToolsEnabled)}
+	obs := make([]string, 0, 4)
+	if a.agent.model != "" {
+		obs = append(obs, a.agent.model)
+	}
+	if pill := a.models.pullPill(); pill != "" {
+		obs = append(obs, pill)
+	}
+	if meter := a.agent.ctxMeterSegment(); meter != "" {
+		obs = append(obs, meter)
+	}
+	if tps := a.agent.lastTokPerSec; tps > 0 {
+		obs = append(obs, fmt.Sprintf("%d tok/s", tps))
+	}
+	tail := []string{"⏻ " + a.cfg.Host, toolsChip(a.cfg.ToolsEnabled)}
 	if a.cfg.ToolsEnabled && a.cfg.Host != "" && !config.LoopbackHost(a.cfg.Host) {
-		parts = append(parts, "⚠ workspace content may be sent to the remote host")
+		tail = append(tail, "⚠ workspace content may be sent to the remote host")
 	}
-	if ws := canonicalWorkspaceLabel(a.cfg.WorkspaceRoot); ws != "" {
-		parts = append(parts, ws)
-	}
-	joined := strings.Join(parts, " · ")
+	ws := canonicalWorkspaceLabel(a.cfg.WorkspaceRoot)
+
 	budget := a.w - lipgloss.Width(right) - 3
-	for lipgloss.Width(joined) > budget && len(parts) > 2 {
-		parts = parts[:len(parts)-1]
-		joined = strings.Join(parts, " · ")
+	join := func(wsShown bool) string {
+		parts := append(append([]string{}, obs...), tail...)
+		if wsShown && ws != "" {
+			parts = append(parts, ws)
+		}
+		return strings.Join(parts, " · ")
+	}
+	joined := join(true)
+	// Today's tail discipline: the workspace yields first (it keeps its
+	// last-shown position whether or not the warning is present).
+	if ws != "" && lipgloss.Width(joined) > budget {
+		joined = join(false)
+	}
+	// Then observability yields from its tail, model chip last, so a tight
+	// phone keeps host + tools fully legible rather than a truncated floor.
+	for lipgloss.Width(joined) > budget && len(obs) > 0 {
+		obs = obs[:len(obs)-1]
+		joined = join(false)
+	}
+	// The remote-host warning outranks the meter but still yields before the
+	// host + tools floor.
+	for lipgloss.Width(joined) > budget && len(tail) > 2 {
+		tail = tail[:len(tail)-1]
+		joined = join(false)
 	}
 	if budget > 0 && lipgloss.Width(joined) > budget {
 		joined = truncateToWidth(joined, budget)

@@ -340,6 +340,7 @@ func TestStreamingCaretAppearsAndDisappears(t *testing.T) {
 		if cmd == nil {
 			t.Fatal("expected a resubscribed command")
 		}
+		tickStream(t, &v) // N2: the delta becomes visible at the repaint tick
 	case <-time.After(3 * time.Second):
 		t.Fatal("first token never arrived")
 	}

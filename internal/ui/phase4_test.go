@@ -98,7 +98,13 @@ func TestAgentRemoteHostWarningPersistent(t *testing.T) {
 }
 
 func TestStatusBarShowsWorkspaceAndTools(t *testing.T) {
-	ws := t.TempDir()
+	// N4: the observability row sheds the workspace first under width
+	// pressure (today's discipline, now triggered once the ctx meter claims
+	// budget), so these cases pin a short fixed workspace — the same stable
+	// absolute path the golden frames use — to keep testing the contract
+	// "the row advertises the canonical workspace when it fits". The
+	// long-path drop order is covered by TestStatusBarWidthPressure.
+	ws := "/tmp"
 
 	cfg := config.Default()
 	cfg.WorkspaceRoot = ws

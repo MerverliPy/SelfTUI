@@ -110,6 +110,75 @@ func BenchmarkChatPane100x(b *testing.B) {
 	})
 }
 
+// BenchmarkStreamingFrame100x pins the N2 streaming repaint cost. Production
+// cadence after N2: token deltas queue; each repaint tick (60 ms) flushes the
+// batch, re-primes the active-block cache (one glamour render), and the frame
+// reads that cache; token frames between ticks hit the warm cache with zero
+// glamour work. Sub-benchmarks:
+//
+//   - tick-render-short: one tick on a ~200-char stream — directly comparable
+//     to the pinned ChatPane100x/streaming baseline (which re-rendered the
+//     block three times per token frame).
+//   - tick-render-4k: one tick late in a long stream — shows the per-tick
+//     O(stream) glamour cost the batch cadence bounds to ≤ ~17 Hz.
+//   - token-frame-cached-4k: a per-token frame between ticks — cache warm.
+//
+// Gate: tick-render paths must beat the pinned naive ChatLines100x baseline
+// and must not regress the pinned ChatPane100x/streaming number; the cached
+// token frame must sit near the window-only ChatWindow100x/tail cost.
+func BenchmarkStreamingFrame100x(b *testing.B) {
+	run := func(b *testing.B, streamLen int, perTick bool) {
+		v := benchAgentView(b)
+		seedBenchTranscript(b, &v, 1000) // 2,000 turns total
+		v.streaming = true
+		v.streamText = strings.Repeat("streaming delta ", streamLen/16)
+		h := benchChatH(v)
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			if perTick {
+				// One tick's content change at fixed stream length: mutate the
+				// tail in place so the doc size (and thus the O(doc) glamour
+				// cost) stays exactly at streamLen across iterations.
+				v.streamText = v.streamText[:len(v.streamText)-1] + string(rune('a'+i%26))
+				v.primeStreamRender() // the tick's cache re-prime
+			}
+			_ = v.renderChatPane(h) // the frame (View cost)
+		}
+	}
+	b.Run("tick-render-short", func(b *testing.B) { run(b, 192, true) })
+	b.Run("tick-render-4k", func(b *testing.B) { run(b, 4096, true) })
+	// Pre-N2 comparison: per-token frames with no cache (three full glamour
+	// renders per frame — what ChatPane100x/streaming pins at 192 chars),
+	// measured at 4k so the O(stream) growth the tick cadence removes stays
+	// visible.
+	b.Run("naive-frame-4k", func(b *testing.B) {
+		v := benchAgentView(b)
+		seedBenchTranscript(b, &v, 1000)
+		v.streaming = true
+		v.streamText = strings.Repeat("streaming delta ", 4096/16)
+		h := benchChatH(v)
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			_ = v.renderChatPane(h) // cache invalid: falls back to three fresh renders
+		}
+	})
+	b.Run("token-frame-cached-4k", func(b *testing.B) {
+		v := benchAgentView(b)
+		seedBenchTranscript(b, &v, 1000)
+		v.streaming = true
+		v.streamText = strings.Repeat("streaming delta ", 4096/16)
+		v.primeStreamRender()
+		h := benchChatH(v)
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			_ = v.renderChatPane(h) // content unchanged: cache hit, no glamour
+		}
+	})
+}
+
 // BenchmarkChatLines100x pins the pre-N1 O(total) rebuild for historical
 // comparison (Pinned baseline 2026-09-07, i7-9700K/go1.27.1: ≈0.75 ms/op,
 // 1.39 MB/op, 2 018 allocs/op). Production no longer runs this path per

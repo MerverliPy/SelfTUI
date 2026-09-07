@@ -321,6 +321,11 @@ func TestAgentViewStreamingRendersLive(t *testing.T) {
 			t.Fatal("token: expected resubscribed command")
 		}
 	}
+	// N2: deltas batch to the repaint tick — queued, not yet on screen.
+	if v.streamText != "" || v.pendingStream != "Hello world" {
+		t.Errorf("batching: streamText=%q pendingStream=%q, want deltas queued for the tick", v.streamText, v.pendingStream)
+	}
+	tickStream(t, &v)
 	out := stripANSI(v.View())
 	if !strings.Contains(out, "Hello world") {
 		t.Errorf("live transcript missing streamed text:\n%s", out)
@@ -433,6 +438,7 @@ func TestAgentViewEscCancelsStream(t *testing.T) {
 	case msg := <-v.chatCh:
 		var cmd tea.Cmd
 		v, cmd = v.Update(msg)
+		tickStream(t, &v) // N2: the delta renders at the repaint tick
 		if !strings.Contains(v.streamText, "# Answer") {
 			t.Errorf("first delta = %q, want Answer content", v.streamText)
 		}

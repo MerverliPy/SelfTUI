@@ -17,6 +17,7 @@ type Styles struct {
 	fg       color.Color
 	muted    color.Color
 	selected color.Color
+	warn     color.Color
 
 	// composed styles
 	Tab         lipgloss.Style
@@ -57,6 +58,11 @@ func NewStyles(theme string) Styles {
 	s.Status = lipgloss.NewStyle().Padding(0, 1).Foreground(s.muted).Border(lipgloss.RoundedBorder(), false).
 		BorderForeground(s.muted)
 	s.Body = lipgloss.NewStyle().Padding(1).Foreground(s.fg)
+	if dark {
+		s.warn = lipgloss.Color("214") // amber
+	} else {
+		s.warn = lipgloss.Color("136") // dark amber, readable on white
+	}
 	s.Placeholder = lipgloss.NewStyle().Foreground(s.muted).Italic(true)
 	s.Pane = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(s.muted)
 	if dark {
