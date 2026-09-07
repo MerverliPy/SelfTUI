@@ -622,12 +622,24 @@ limits, and the v0.1.0-published/v0.1.1-hardening state (see the LEDGER
 Task-19 entry).
 **Task 22 — final release-candidate gate ✅ (2026-09-06):** `VERSION=v0.1.1 make release-check` PASSED (go mod verify, gofmt, vet, test, race, govulncheck v1.7.0, both Linux builds, version-stamp, deterministic archives, SHA256SUMS); `scripts/release-check-test.sh` 52/52 PASS; `scripts/create-audit-pack-test.sh` 42/42 PASS; `make audit-pack` produced manifest-complete `dist/selftui-audit-pack-9c5039f.zip` (107 tracked, 107 members, MANIFEST_MATCH=PASS); `scripts/create-audit-pack.sh verify` PASS. Full finding matrix at `dist/v0.1.1-finding-matrix.md`. All 22 external-audit findings (C-01 through L-02) remediated. **v0.1.1 is now ready for the owner to tag and publish.**
 
-**Queued, not started** — none of this has landed yet: **gitleaks-in-CI**
-(recommended; see LEDGER step-6 entry), **actionlint in the local gate**, and
-**the signed-tag decision**. The workflows already pin Node-20 majors
-(`actions/checkout@v4`, `actions/setup-go@v5`), so no Node action bump
-remains. **The public-visibility decision stays the owner's call** — the repo
-remains private until then. **Next: the owner tags `v0.1.1` and publishes.**
+**P0 supply-chain — landed 2026-09-07**:
+**gitleaks-in-CI** (added to `.github/workflows/ci.yml` + `make secret-scan`),
+**actionlint in the local gate** (`make actionlint` + CI step),
+**action SHA-pinning** (`actions/checkout` → `11d5960a326750d5838078e36cf38b85af677262`,
+`actions/setup-go` → `40f1582b2485089dde7abd97c1529aa768e1baff`,
+both workflows),
+**timeout-minutes** (15 CI / 30 release),
+**`.env*` in `.gitignore`**,
+**`.gitleaks.toml`** and **`.actionlintrc`** config files.
+
+**Owner decision (2026-09-07):** future release tags `v*` will be GPG-signed. Implementation (key setup + signing practice + doc note) is deferred to a follow-up step — this session only ships the P0 code + records the decision.
+**The public-visibility decision stays the owner's call** — the repo
+may now go public at the owner's discretion.
+
+**P1 correctness** ✅ *all resolved* — findings #1–#7, #12, #13 from the
+5-lane read-only audit were fixed in 9 commits on
+`fix/v0.1.1-audit-remediation` (merged to main via PR #6). No remaining
+correctness blockers.
 
 ---
 
