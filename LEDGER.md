@@ -4429,3 +4429,53 @@ cross-build` PASSED (1m11s). `main` now at `ba6e098`, v0.1.1 tag
 
 **Next action**
 - Fresh session: v0.2 scoping. Do not chain here.
+
+### 2026-09-07 — v0.2 scope definition (DONE)
+**Milestone:** v0.2 scoping (owner-assigned) · **Result:** done — v0.2 scoped by
+owner selection in chat; recorded in PLAN §10 (V2a–V2d gates) + §12; committed
+via PR flow (two stale unpushed ledger commits from the previous session rode
+along).
+
+**Work done**
+- Surveyed the repo's deferred/residual records before proposing scope:
+  `docs/run-command-containment.md` (sandbox precondition for command
+  execution), `internal/session` (append-only markdown transcripts, no reload
+  path), CHANGELOG `[Unreleased]`, M0a/M6 residuals (landscape geometry,
+  post-reconnect probe block), risk #3 (agent breadth).
+- Owner selected v0.2 scope via chat questionnaire: **chat session resume** +
+  **sandboxed command execution** + **agent breadth**; release shape = **small
+  focused release**. Mobile residuals explicitly not selected (excluded).
+- PLAN §10 gained the v0.2 roadmap: sequential gates **V2a** (chat session
+  resume) → **V2b** (sandbox spike GATE, per the containment threat model) →
+  **V2c** (sandboxed `run_command`, only on V2b GO) → **V2d** (agent breadth,
+  cut decided at session start); v0.2 tags when the set lands, owner may cut
+  earlier. §12 records the scope + exclusions + the remaining owner click.
+
+**Commands + exit codes**
+- Survey: `bat docs/run-command-containment.md` `0` · `ls internal/session` +
+  head `0` · `sed -n '1,60p' CHANGELOG.md` `0` · `git log --oneline
+  v0.1.1..HEAD` `0` · `rg` residuals `0` (batch)
+- `git status --short --branch` `0` (main ahead 2 — stale ledger commits from
+  the previous session, folded into this session's PR)
+- `git checkout -b v02-scoping` + commit + push `0` · `gh pr create` `0` (PR
+  recorded below at merge time) · `gh run watch --exit-status` `0` ·
+  `gh pr merge --merge` `0` · `git pull --ff-only` `0`
+
+**Decisions / lines to respect**
+- Sandboxed command execution **requires the V2b spike gate first** — cwd +
+  argv filtering is not an OS sandbox (`docs/run-command-containment.md`);
+  NO-GO is an acceptable outcome and stays recorded.
+- One gate per session (binding rule); v0.2 tags after the owner-selected set
+  lands or earlier at owner discretion.
+- Scope recorded verbatim from owner selection; mobile residuals are the
+  recorded exclusion.
+- Direct push to `main` is blocked (branch protection) — ledger-only commits
+  still go through the PR flow (PR #7 precedent).
+
+**Blockers / open decisions (carry to next session)**
+- None. Owner-optional click: upload the GPG public key at
+  github.com/settings/keys (Verified badge).
+
+**Next action**
+- Fresh session: **V2a — chat session resume** (reload a saved transcript into
+  a live Agent conversation). Do not chain here.

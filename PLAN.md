@@ -517,6 +517,33 @@ Slash menu grew to six
 commands (menu cap 6). Goldens 19 frames; `make check` + `go test -race`
 green. *Still next: v0.1 (tag + release notes).*
 
+**v0.2 roadmap — scoped 2026-09-07 (owner-selected, small focused release).**
+Sequential ship gates, one per session per the binding session rule; the v0.2
+tag cuts when the owner-selected set lands (owner may cut earlier).
+
+**V2a — Chat session resume.** Reload a saved per-process transcript
+(`internal/session` markdown under `$XDG_STATE_HOME/selftui/sessions/`) into a
+live Agent conversation: picker over saved sessions, safe import (tool-armed
+runner state, context budgeting re-applied on load), meta/model handling,
+tests. ✅ *Exit: a saved chat resumes live at both canonical geometries.*
+
+**V2b — GATE: sandbox spike.** Evaluate a real OS/container sandbox for
+command execution on the release host (candidates: bubblewrap, `systemd-run`
+slices, rootless containers) against the threat model in
+`docs/run-command-containment.md`; go/no-go before any `run_command` return.
+✅ *Exit: evidence doc + verdict GO (→ V2c) or NO-GO (sandboxed execution
+stays out of v0.2, decision recorded).*
+
+**V2c — Sandboxed run_command (only on V2b GO).** Reinstate command execution
+behind the V2b sandbox + the deferred containment design (argv allowlist, no
+shell/interpreter, scrubbed env, limits, process-group kill, per-call
+confirm). ✅ *Exit: agent runs allowed commands inside the sandbox, all
+gated + tested.*
+
+**V2d — Agent breadth.** Git-awareness / multi-file edits / project indexing
+(risk #3); the exact cut is decided at that session's start after V2a–V2c.
+✅ *Exit: per its own scoped exit criteria.*
+
 ---
 
 ## 11. Risks & open questions
@@ -691,4 +718,13 @@ github.com/settings/keys for the green Verified badge.
 local gate, the signed-tag decision~~ (all on `main` as of 2026-09-07; the
 workflows pin action SHAs, not `@v` majors). **The public-visibility decision
 stays the owner's call** — the repo may now go public at the owner's
-discretion. **Remaining: v0.2 scope definition.**
+discretion.
+
+**v0.2 scope (2026-09-07, owner-selected via chat):** **chat session resume**,
+**sandboxed command execution** (requires the V2b sandbox spike gate first),
+and **agent breadth** — sequenced as V2a→V2b→V2c→V2d (§10) as a **small
+focused release** (one gate per session; v0.2 tags when the set lands).
+**Excluded from v0.2 (not owner-selected):** mobile residuals (landscape/
+rotation geometry measurement, post-reconnect probe block `m6-live-1b`).
+Remaining owner click: upload the GPG public key at github.com/settings/keys
+for the green Verified badge.
