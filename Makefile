@@ -7,7 +7,8 @@ BIN     := bin/selftui
 VERSION ?= dev
 
 .PHONY: build test race vuln lint vet fmt run check clean probe probe-build probe-raw probe-local \
-	release-check build-linux-amd64 build-linux-arm64 smoke smoke-model smoke-reconnect audit-pack
+	release-check build-linux-amd64 build-linux-arm64 smoke smoke-model smoke-reconnect audit-pack \
+	secret-scan actionlint gitleaks
 
 build: ## compile the self-tui binary
 	$(GO) build -o $(BIN) ./cmd/self-tui
@@ -55,6 +56,17 @@ probe-local: probe-build ## local pty-based measurement at several sizes + mid-r
 	bash scripts/probe-local.sh
 
 check: build test lint ## canonical pre-commit gate
+
+# --- supply-chain security (P0) ---
+secret-scan: ## run gitleaks against the working tree and history
+	@echo "== gitleaks secret scan =="
+	gitleaks detect --config .gitleaks.toml --redact --verbose
+
+actionlint: ## lint GitHub Actions workflows
+	@echo "== actionlint =="
+	actionlint .github/workflows/*.yml
+
+gitleaks: secret-scan ## alias for gitleaks scan
 
 # --- v0.1 release tooling --------------------------------------------------
 # Static, CGO-disabled Linux release binaries stamped with $(VERSION), plus

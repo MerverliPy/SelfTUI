@@ -22,8 +22,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # Current official stable Go release at phase-8 time (2026-09-04). The
-  # local release gate is run with the same toolchain so local == CI.
+  # Current official stable Go release at phase-8 time (2026-09-04).
+  # The local release gate is run with the same toolchain so local == CI.
   GO_VERSION: "1.27.1"
   # golang.org/x/vuln release pinned for reproducibility.
   GOVULNCHECK_VERSION: "v1.7.0"
@@ -39,12 +39,17 @@ jobs:
     # check context for branch protection, so it must not drift with the
     # pinned Go version above.
     name: Go fmt · vet · test · race · vuln · cross-build
+    # Stuck runs are auto-cancelled.
+    timeout-minutes: 15
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      # Pinned SHA (not mutable @v ref) — supply-chain audit item.
+      # actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
       - name: Set up Go ${{ env.GO_VERSION }}
-        uses: actions/setup-go@v5
+        # actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
@@ -74,3 +79,20 @@ jobs:
 
       - name: CGO-disabled Linux builds (make build-linux-amd64 build-linux-arm64)
         run: make build-linux-amd64 build-linux-arm64
+
+      # --- supply-chain secret scanning (P0) ---
+      - name: Install gitleaks
+        run: |
+          go install github.com/zricethezav/gitleaks@latest
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: gitleaks secret scan (make secret-scan)
+        run: make secret-scan
+
+      - name: Install actionlint
+        run: |
+          go install github.com/rhysd/actionlint/cmd/actionlint@latest
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: actionlint (make actionlint)
+        run: make actionlint

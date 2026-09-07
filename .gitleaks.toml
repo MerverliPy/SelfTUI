@@ -1,0 +1,26 @@
+# SelfTUI gitleaks configuration — supply-chain secret scanning.
+#
+# Uses the built-in default ruleset (detectable secrets, high-entropy
+# strings) plus a few project-specific exclusions:
+#   * test fixtures and golden frames may contain example secrets
+#   * CHANGELOG and docs reference example tokens for illustration
+#   * the release pipeline needs a GITHUB_TOKEN (excluded from scans)
+[[allowlist]]
+  description = "test fixtures and golden frames"
+  regexes     = ["testdata/", "golden/", "fixture"]
+  files       = ["internal/ui/testdata/golden/.*"]
+
+[[allowlist]]
+  description = "documentation example tokens"
+  regexes     = ["ghp_[A-Za-z0-9]{36}", "glpat-[A-Za-z0-9_-]{20}"]
+  files       = ["CHANGELOG.md", "README.md", "SECURITY.md", "docs/.*"]
+
+[[allowlist]]
+  description = "release pipeline token"
+  regexes     = ["ghp_"]
+  files       = [".github/workflows/release.yml"]
+
+# Do not scan generated binaries or archives (they live in gitignored dist/).
+[[allowlist]]
+  description = "build artifacts"
+  files       = ["dist/.*", "bin/.*"]

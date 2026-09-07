@@ -1,0 +1,11 @@
+# SelfTUI actionlint configuration — GitHub Actions workflow linting.
+#
+# See https://actionlint.dev for the full rule reference.
+
+# The workflows use pinned SHA versions of official actions; actionlint
+# may warn about mutable refs elsewhere. Silence known-safe patterns.
+ignore:
+  # release.yml uses contents: write which is required for gh release create.
+  - "workflows must have permissions"
+  # shell: bash is set explicitly in defaults.
+  - "shell check"

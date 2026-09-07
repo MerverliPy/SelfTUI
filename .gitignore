@@ -30,3 +30,7 @@ __pycache__/
 # Local runtime
 config.toml
 *.log
+
+# Secrets — never commit credentials
+.env
+.env.*
