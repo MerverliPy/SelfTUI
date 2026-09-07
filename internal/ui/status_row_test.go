@@ -140,7 +140,15 @@ func TestStatusBarObservabilitySegments(t *testing.T) {
 	// segments with absent data stay absent — pre-N4 identity plus, at most,
 	// the 0% meter the composer header already shows for the default system
 	// prompt payload.
-	fresh := updateTab(t, newTestApp(t), tea.WindowSizeMsg{Width: 120, Height: 40})
+	fresh := updateTab(t, func() App {
+		// Pin the workspace root to a short fixed path (the golden-test
+		// pattern) so the identity string is environment-independent: a deep
+		// CI checkout cwd would make the workspace label long enough to trip
+		// the width-pressure shedding and drop the workspace segment.
+		cfg := config.Default()
+		cfg.WorkspaceRoot = "/tmp"
+		return New(&cfg, NewStyles(cfg.Theme), ollama.New(cfg.Host, cfg.AuthToken))
+	}(), tea.WindowSizeMsg{Width: 120, Height: 40})
 	freshOut := view(t, fresh)
 	for _, banned := range []string{"tok/s", "qwen3:8b", "⇣"} {
 		if strings.Contains(freshOut, banned) {
