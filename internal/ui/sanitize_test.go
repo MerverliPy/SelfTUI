@@ -85,12 +85,12 @@ func TestAgentHistoryRawCacheGapSanitized(t *testing.T) {
 	// that fallback must also be sanitized (H-05).
 	v := testAgent(t, nil)
 	v, _ = v.Update(agentModelsLoadedMsg{models: sampleModels()})
-	v.history = []ollama.ChatMessage{
-		{Role: ollama.RoleUser, Content: "hi"},
-		{Role: ollama.RoleAssistant, Content: "answer \x1b]52;c;evil\x07 here\x1b[2J"},
+	v.turns = []turn{
+		{msg: ollama.ChatMessage{Role: ollama.RoleUser, Content: "hi"}},
+		{msg: ollama.ChatMessage{Role: ollama.RoleAssistant, Content: "answer \x1b]52;c;evil\x07 here\x1b[2J"},
+			model: "qwen3:8b"},
 	}
-	v.turnModel = []string{"qwen3:8b", "qwen3:8b"}
-	// Leave v.render empty on purpose: chatLines must not emit raw history.
+	// Leave the render cache empty on purpose: chatLines must not emit raw history.
 	assertCleanOutput(t, v.View(), "answer", "here")
 	if strings.Contains(strings.Join(v.chatLines(), "\n"), "\x1b]52") {
 		t.Error("chatLines emitted the raw OSC 52 payload")
@@ -124,14 +124,14 @@ func TestAgentChatSanitizesControlSequencesStreamAndCommit(t *testing.T) {
 	assertCleanOutput(t, v.View(), "hello", "world")
 
 	// Commit the turn; the cached block must stay clean.
-	v, _ = v.Update(agentDoneMsg{err: "", reason: "stop"})
+	v, _ = v.Update(agent.AgentDoneMsg{Err: "", Reason: "stop"})
 	assertCleanOutput(t, v.View(), "hello", "world")
-	if len(v.history) < 2 {
-		t.Fatalf("history len = %d, want committed assistant turn", len(v.history))
+	if len(v.turns) < 2 {
+		t.Fatalf("turns len = %d, want committed assistant turn", len(v.turns))
 	}
 	// The committed render cache (what View shows) is clean even though the
-	// raw history copy is intentionally unsanitized (it mirrors the model).
-	assertCleanOutput(t, strings.Join(v.render, "\n"))
+	// raw message copy is intentionally unsanitized (it mirrors the model).
+	assertCleanOutput(t, v.turns[len(v.turns)-1].render)
 }
 
 func TestAgentCommittedFallbackMarkdownSanitized(t *testing.T) {
@@ -188,11 +188,11 @@ func TestAgentDoneReasonAndErrorSanitized(t *testing.T) {
 	// A hostile Ollama done_reason lands on the assistant header's right side.
 	v.streamText = "answer"
 	v.turnStart = time.Now().Add(-500 * time.Millisecond)
-	v, _ = v.Update(agentDoneMsg{err: "", reason: "stop\x1b[2J\x1b]52;c;x\x07"})
+	v, _ = v.Update(agent.AgentDoneMsg{Err: "", Reason: "stop\x1b[2J\x1b]52;c;x\x07"})
 	assertCleanOutput(t, v.View(), "answer", "stop")
 
 	// A hostile error body lands in the statusline.
-	v, _ = v.Update(agentDoneMsg{err: "boom \x1b]52;c;evil\x07 \x1b[2Jfailed", reason: ""})
+	v, _ = v.Update(agent.AgentDoneMsg{Err: "boom \x1b]52;c;evil\x07 \x1b[2Jfailed", Reason: ""})
 	if v.chatErr == "" {
 		t.Fatal("chatErr should be set")
 	}

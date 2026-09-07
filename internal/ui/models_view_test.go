@@ -1201,6 +1201,72 @@ func TestModelsViewApplyClientRejectsOldHostShow(t *testing.T) {
 	}
 }
 
+func TestModelsViewApplyClientCancelsPull(t *testing.T) {
+	// Host A streams one progress line, then stalls until its request
+	// context is cancelled.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		fmt.Fprintln(w, `{"status":"pulling manifest"}`)
+		w.(http.Flusher).Flush()
+		<-r.Context().Done()
+	}))
+	t.Cleanup(srv.Close)
+
+	v := testModels(t, ollama.New(srv.URL, ""))
+	v, _ = v.Update(modelsLoadedMsg{list: sampleModels()})
+	v, _ = v.Update(tea.KeyPressMsg{Text: "p"})
+	v, _ = v.Update(tea.KeyPressMsg{Text: "qwen3:big"})
+	v, _ = v.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if !v.pulling {
+		t.Fatal("enter: pull should start")
+	}
+
+	// The owner saves a new host while the old host's pull is in flight:
+	// ApplyClient must cancel the in-flight pull before the client swap so
+	// the old host's goroutine cannot keep streaming into the new host's
+	// view (D2).
+	newClient, _ := tagsServer(t, "new-host-model")
+	v, cmd := v.ApplyClient(newClient)
+	if cmd == nil {
+		t.Fatal("ApplyClient: expected a reload command")
+	}
+
+	// The pull goroutine must terminate: its stream reports cancellation
+	// and closes, exactly as after esc.
+	steps := 0
+	for v.pulling {
+		select {
+		case msg := <-v.pullCh:
+			steps++
+			if steps > 100 {
+				t.Fatal("pull did not finish after ApplyClient")
+			}
+			v, _ = v.Update(msg)
+		case <-time.After(2 * time.Second):
+			t.Fatal("pull stream did not finish after ApplyClient")
+		}
+	}
+	if v.pullCancel != nil {
+		t.Error("pullCancel not cleared after ApplyClient cancellation")
+	}
+	if v.pullErr == "" || !strings.Contains(v.pullErr, "context canceled") {
+		t.Errorf("pullErr = %q, want the surfaced cancellation error", v.pullErr)
+	}
+
+	// The cancellation error is transient: the new host's reload clears it.
+	// The reload carries the new client's generation, so it must be applied
+	// via the command's real result (a hand-built msg would be gen-gated).
+	freshEv := cmd()
+	freshList, ok := freshEv.(modelsEventMsg).msg.(modelsLoadedMsg)
+	if !ok {
+		t.Fatalf("ApplyClient reload produced %T, want modelsLoadedMsg", freshEv)
+	}
+	v, _ = v.Update(freshList)
+	if v.pullErr != "" {
+		t.Error("new-host reload should clear the pull error")
+	}
+}
+
 func modelNames(models []ollama.Model) []string {
 	names := make([]string, len(models))
 	for i, m := range models {

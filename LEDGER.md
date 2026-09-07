@@ -4651,3 +4651,295 @@ exists and was validated end-to-end on the release host; V2c may reinstate
 - Fresh session: **V2c — sandboxed run_command** (only on V2b GO — GO recorded;
   bwrap default engine + full mitigation stack per the conditions above). Do not
   chain here.
+
+---
+
+## 2026-09-07 — Conclave: architecture critique (front end, back end, TUI, visual layout)
+
+**Work done**
+- Bounded conclave per `~/.agents/skills/conclave/SKILL.md`: 3 read-only fresh-context
+  advisors (`council-architect` grok-4.6, `council-skeptic` gpt-5.6-sol,
+  `council-operator` glm-5.3-flash), pass cap 2 (independent reports → true cross-exam
+  resumes). No blind lane (whole-repo subject, not a diff). Repo untouched (read-only lanes).
+- Verdict (converged 3/3): **keep layering `ui→agent→ollama`; fit for v0.1.x; do not
+  refactor for scale.** One recommended cleanup session for `internal/ui/agent_view.go`:
+  collapse 4 parallel slices into one turn struct; extract selector/slash/resume handlers;
+  move scroll mutation out of `View()`; Recorder as concrete composition-root dependency;
+  delete legacy `agentTokenMsg`/`agentDoneMsg` after test migration; TabBar comment fix.
+- Disputes settled by evidence: Client interface rejected (skeptic withdrew); port-split
+  rejected as premature; stale-client HIGH withdrawn (children correlate via clientGen;
+  residual: in-flight pull uncanceled in `ApplyClient` — optional one-line hardening);
+  0×0 renders chrome by design (boundedness untested → add test); shutdown 3s loss = low,
+  intentional, tested. Full memo in session transcript.
+
+**Commands + exit codes**
+- Advisor passes: pass 1 arch `d2fefdf5` / skep `ee9977a9` / oper `7b3bd2e7`; pass 2
+  resumes arch `393bbdf5` / skep `d6e72ec1` / oper `51fff1a5` — all exit 0, structured.
+- Gate incident: 3 blocked operator launches (completion-guard false positive; task word
+  "refactor" + council-* outside reviewer-style list, per
+  `pi-subagents/src/runs/shared/task-intent.ts`); fixed via guard's read-only vocabulary
+  ("review only / return findings only"), verified with `bun -e` classifier check `0`.
+- No repo commands run beyond `ls`/`rg`/`fd` recon and this append.
+
+**Decisions / lines to respect**
+- Framework stays (Bubble Tea v2); no Client interface until second backend; no Bubble Tea
+  sub-model tree; `BreakpointFor` is the shared breakpoint policy point.
+- Owner decisions open: approve agent_view cleanup session; pullCancel() hardening;
+  document `looksLikeEmbeddedJSON` tradeoff; schedule 100× transcript measurement.
+
+**Blockers / open decisions (carry to next session)**
+- None blocking. Tests-for-verifications list in memo (0×0 boundedness, turn-slice
+  desync, pullCancel, mid-stream ApplyConfig, TabBar width boundary).
+
+**Next action**
+- Fresh session: owner picks up the four owner decisions; recommended next step is the
+  single agent_view.go code-motion cleanup session. Do not chain here.
+
+---
+
+## 2026-09-07 — Owner decisions collected (post-conclave, all 4 approved)
+
+**Work done**
+- DIRECT-path expertise report on the four open owner decisions, evidence-checked
+  against code (agent_view.go:1590-1723, models_view.go:370/676/699-702,
+  runner.go:225/514-517, chatLines O(total) per frame). Owner approved all four
+  recommended options via structured questionnaire:
+  1. **D1 — agent_view.go cleanup: APPROVED, full scope.** Turn struct (collapse 4
+     parallel slices), selector/slash/resume handler extraction, scroll mutation
+     moved out of View(), Recorder as concrete composition-root dep, delete
+     legacy agentTokenMsg/agentDoneMsg + test migration (~6 call sites in
+     sanitize_test/truncate_test/routing_regression_test), TabBar comment fix.
+  2. **D2 — pullCancel() hardening: APPROVED, one-line fix + regression test.**
+     Cancel in-flight pull in ApplyClient before client swap (~15 lines incl. test;
+     context.CancelFunc is idempotent, Esc double-cancel safe).
+  3. **D3 — looksLikeEmbeddedJSON: APPROVED, doc comment + pinning test.** Pin:
+     JSON-prefix held back, fenced prose held back (whole-turn holdback tradeoff),
+     plain prose streams (runner.go:514).
+  4. **D4 — 100× transcript measurement: APPROVED as go test -bench benchmark**
+     on renderChatPane/chatLines at ~100× transcript size + 0×0 boundedness test
+     (chatLines iterates all history per frame, agent_view.go:1590-1608; windowing
+     is O(visible) but line rebuild is O(total cached lines)).
+
+**Commands + exit codes**
+- Evidence recon: fd/rg/sed reads only, no repo mutations beyond this append.
+- No build/test run (no code changed).
+
+**Decisions / lines to respect**
+- Next session executes D1 full scope as THE step (conclave's recommended next step).
+- D2+D3 are small (~45 lines combined) — schedule as a follow-up hardening session;
+  do NOT fold into D1 (review separation: code motion vs concurrency fix vs doc/test).
+- D4 benchmark can ride any session with slack, or its own; never chain.
+
+**Blockers / open decisions (carry to next session)**
+- None. All four owner decisions are closed.
+
+**Next action**
+- Fresh session: execute D1 — agent_view.go full-scope code-motion cleanup, green
+  make check, golden/routing/seam tests must stay green. Do not chain here.
+
+---
+
+## 2026-09-07 — D1 landed: agent_view.go full-scope code-motion cleanup
+
+**Work done**
+- Orchestrator triage: DIRECT (zero implementation agents) — scope already adjudicated
+  by conclave + owner; one concern, one file + bounded test migration; one targeted
+  read-only `reviewer` pass on the final diff (verdict: clean, no findings).
+- `internal/ui/agent_view.go`:
+  1. **Turn struct**: `history`/`turnModel`/`turnMeta`/`render` → one `turns []turn`
+     (msg/model/meta/render). Commit sites (sendInput, onChatDone), import
+     (applySessionLoaded), /clear, render cache rebuild, headerFor, chatLines,
+     payloadMessages, and startChat's request copy all migrated. The parallel-slice
+     desync guard in chatLines collapses to an empty-render fallback (kept sanitized).
+  2. **Handler extraction**: inline mutation-approval and slash-draft key switches
+     pulled out of handleKey into `confirmKey` / `slashDraftKey` (handled flag keeps
+     fall-through). selector/resume/clear handlers were already methods.
+  3. **Pure render**: `renderChatPane` no longer writes `v.scroll` — the effective
+     offset is computed locally (follow → tail anchor; else clamped). clampScroll
+     stays on the key paths; clampScroll comment updated.
+  4. **Recorder composition-root**: `WithSessionDir` constructs the concrete
+     `*session.Recorder` eagerly (closes a prior one first; Close idempotent);
+     `enqueueSessionTurn` no longer constructs on the update loop and is now a
+     pointer receiver so accepted-turn/first-failure state lands on the caller (the
+     old value receiver silently dropped those writes on discard-style callers —
+     latent bug the migration surfaced). New `recorded` flag preserves
+     "/export → nothing recorded yet" nil-command behavior.
+  5. **Legacy deletion**: `agentTokenMsg`/`agentDoneMsg` types + Update cases removed;
+     `onChatDone` now takes `agent.AgentDoneMsg` directly; ~6 legacy test call sites
+     migrated (sanitize/truncate/routing + agent_view_test).
+  6. **TabBar comment fix** (components.go): Render never wrapped and Width is unused
+     in rendering — comment now says so (no code change).
+- Callers migrated: palette.go (`len(a.agent.turns)`), 9 test files
+  (agent_view/routing/sanitize/truncate/m7/golden/small_terminal/cancellation/
+  resume_ui/session_ui). Test seeds build `[]turn` literals; injected-recorder tests
+  `Close()` the eager recorder before swapping in their fake (4 sites).
+
+**Commands + exit codes**
+- `go build ./...` → 0 (after each stage; intermediate errors fixed: 2 missed
+  history refs, pointer-receiver returns, truncate_test import).
+- `go vet ./...` → 0.
+- `make check` (build + `go test -count=1 ./...` + vet) → 0; all packages ok,
+  internal/ui 5.9s (one failure during migration: enqueueSessionTurn value-receiver
+  dropped `recorded` on the direct-call test — fixed by pointer receiver).
+- `go test -race -count=1 ./...` → 0 (all packages ok, internal/ui 11.2s).
+- Reviewer lane: verdict clean / merge OK, 0 findings (run meta did not surface the
+  executed model; lane completed without fallback error).
+
+**Decisions / lines to respect**
+- Behavior preserved by design: golden fixtures byte-identical (no -update run),
+  routing/seam tests green unchanged, /export notice + nil-command pre-empt kept via
+  `recorded`, render never mutates state.
+- D2 (pullCancel hardening), D3 (looksLikeEmbeddedJSON doc+pinning test),
+  D4 (100× benchmark + 0×0 boundedness test) remain separate follow-ups — do not
+  fold into any other session.
+
+**Blockers / open decisions (carry to next session)**
+- None.
+
+**Next action**
+- Fresh session: owner picks the next step — D2 hardening session is the queued
+  follow-up (one-line fix + regression test). Do not chain here.
+
+---
+
+## 2026-09-07 — D2 landed: ApplyClient cancels in-flight pull (one-line hardening + regression test)
+
+**Work done**
+- Orchestrator triage: DIRECT (zero agents) — one-line fix + one test, existing
+  Esc-cancel test pattern mirrored; canonical checks owned by parent.
+- `internal/ui/models_view.go` ApplyClient: cancel the in-flight pull
+  (`v.pullCancel != nil` → `v.pullCancel()`) before the client swap, with a
+  comment noting CancelFunc idempotence (Esc double-cancel safe). Closes the
+  owner-approved D2 finding: without this, an old-host pull goroutine kept
+  streaming progress into the new host's view and would surface the old host's
+  result on completion.
+- `internal/ui/models_view_test.go`: new `TestModelsViewApplyClientCancelsPull`
+  — pull starts against a stalling host A, ApplyClient swaps to a tags host B;
+  asserts the pull goroutine terminates (stream closes, view leaves `pulling`),
+  `pullCancel` cleared, "context canceled" surfaced, and the new-host reload
+  (executed via the real command, so the gen-gate applies) clears the error.
+  First draft failed one assertion (hand-built `modelsLoadedMsg` gen=0 was
+  dropped by the M-03 gen-gate) — fixed by applying the command's real result.
+
+**Commands + exit codes**
+- `go build ./...` → 0.
+- `go test -count=1 ./internal/ui -run 'TestModelsViewApplyClient|TestModelsViewPull' -v`
+  → first run 1 FAIL (gen-gate), fixed; final run all PASS, exit 0.
+- `make check` (build + `go test -count=1 ./...` + vet) → 0, all packages ok.
+- `go test -race -count=1 ./internal/ui` → 0 (10.99s).
+
+**Decisions / lines to respect**
+- Minimal-scope hardening per owner decision 4df7146: cancel-only; the canceled
+  goroutine's done message performs the normal onPullDone cleanup, and the
+  surfaced "context canceled" error is cleared by the new-host reload (same UX
+  contract as the esc path).
+- Pull events themselves remain non-gen-gated — no scope expansion beyond the
+  approved one-line fix + test.
+
+**Blockers / open decisions (carry to next session)**
+- None.
+
+**Next action**
+- Fresh session: owner picks — D3 (looksLikeEmbeddedJSON doc comment + pinning
+  test, runner.go:514) is the queued follow-up; D4 (100× render benchmark +
+  0×0 boundedness test) can ride any session with slack. Do not chain here.
+
+---
+
+## 2026-09-07 — D3 landed: looksLikeEmbeddedJSON doc comment + pinning test
+
+**Work done**
+- Orchestrator triage: DIRECT (zero agents) — doc comment on one pure predicate
+  + one pinning test; owner decision from 4df7146 fixed the exact contract.
+- `internal/agent/runner.go` (looksLikeEmbeddedJSON): full doc comment stating
+  the predicate contract (prefix-only after trim: `{`, `[`, ` ``` `), the
+  accepted **whole-turn holdback tradeoff** (ordinary fenced code / bare
+  JSON-object / top-level call-array prose is withheld for the entire turn and
+  flushed only on the no-calls flush), why that cost is deliberate (flashing a
+  tool envelope into the transcript is worse than delaying fence/JSON-shaped
+  prose), and that mid-turn JSON (`here is the JSON: {...}`) is outside the
+  predicate and always streams.
+- `internal/agent/runner_test.go`: new `TestLooksLikeEmbeddedJSONPinned` —
+  12-case table pinning: plain prose streams (incl. after blank lines), JSON
+  object/array prefix held back, fenced envelope held back, ordinary fenced
+  code held back (the tradeoff, explicitly named in the case), whitespace-
+  prefixed JSON/fence held back, mid-text JSON and post-word brace are prose,
+  bare fence alone held back. Header comment warns that changing the
+  predicate changes mid-stream UX and must be a conscious tradeoff.
+
+**Commands + exit codes**
+- `gofmt -l .` → empty; `go build ./...` → 0.
+- `go test -count=1 ./internal/agent -run TestLooksLikeEmbeddedJSONPinned -v`
+  → 12/12 PASS, exit 0.
+- `make check` (build + `go test -count=1 ./...` + vet) → 0, all packages ok.
+- `go test -race -count=1 ./internal/agent` → 0 (1.29s).
+
+**Decisions / lines to respect**
+- Doc+test only; the predicate itself is unchanged (owner decision 4df7146:
+  doc + pin, no behavior change). D4 (100× render benchmark + 0×0 boundedness
+  test) remains a separate follow-up — do not fold into any other session.
+
+**Blockers / open decisions (carry to next session)**
+- None.
+
+**Next action**
+- Fresh session: owner picks — D4 (100× transcript benchmark on
+  renderChatPane/chatLines + 0×0 boundedness test) is the last queued
+  follow-up. Do not chain here.
+
+## 2026-09-07 — D4 landed: 100× transcript benchmark + 0×0 boundedness test
+
+**Work done**
+- Orchestrator triage: DIRECT (zero agents) — benchmark + test only, no
+  production code changes; exact scope fixed by the 2026-09-07 owner decision
+  (D4: go test -bench on renderChatPane/chatLines at ~100× transcript size +
+  0×0 boundedness test).
+- `internal/ui/agent_view_bench_test.go` (new): 100× transcript baseline
+  defined as 2,000 turns (100 × a 20-turn session) at the 88×40 test
+  geometry; setup pre-renders a small set of distinct markdown bodies once
+  and copies the cached strings, mirroring the commit path's per-turn render
+  cache. Benchmarks: `BenchmarkChatPane100x/{tail,scrolled-up,streaming}` and
+  `BenchmarkChatLines100x` (isolates the O(total cached lines) rebuild named
+  in the owner decision). chatH computed the same way View() does.
+- `internal/ui/small_terminal_test.go`: `TestZeroSizeAgentFrameStaysBounded`
+  pins the conclave finding that 0×0 renders chrome by design — with 400
+  turns + a live stream armed, the frame stays ≤10 rows and ≤40 columns of
+  chrome, leaks no transcript content ("user turn"/"assistant line"/
+  "streaming now"/"❯ you"; model chip strings excluded as legit composer
+  chrome), and is byte-identical with an empty transcript (history cannot
+  affect layout). Also pins renderChatPane's h<2 guard (returns "" for h=0/1)
+  and that chatLines still computes the full 400-turn history safely.
+
+**Measured baseline (i7-9700K, go1.x, -benchtime default)**
+- ChatPane100x/tail 1.52 ms/op · scrolled-up 1.48 ms/op · streaming 1.65 ms/op
+  (~1.7 MB, ~14k allocs/op — lipgloss styling of ~30 visible rows dominates).
+- ChatLines100x 0.87 ms/op (1.39 MB, 2,018 allocs/op).
+- tail ≈ scrolled-up cost confirms the O(total) chatLines rebuild dominates
+  per-frame cost independent of window position — the baseline any future
+  windowing/caching work must beat.
+
+**Commands + exit codes**
+- `gofmt -l .` → empty; `go vet ./...` → 0.
+- `go test ./internal/ui -run TestZeroSizeAgentFrameStaysBounded -v -count=1`
+  → PASS, exit 0.
+- `go test ./internal/ui -bench Benchmark -run '^$' -count=1` → all 4 PASS,
+  exit 0 (numbers above).
+- `make check` (build + `go test -count=1 ./...` + vet) → 0, all packages ok.
+- `go test -race -count=1 ./internal/ui` → 0 (11.3s).
+
+**Decisions / lines to respect**
+- Benchmark seeding reuses cached render strings across turns — per-frame
+  cost depends on line counts, not body uniqueness (glamour output is cached
+  per turn in production); document this in the file header.
+- 0×0 assertions pin observed-by-design behavior probed before writing the
+  test (8-row chrome, 38-col pane, transcript never reaches the frame).
+- No production code touched; windowing work remains future scope with this
+  benchmark as its baseline.
+
+**Blockers / open decisions (carry to next session)**
+- None.
+
+**Next action**
+- Fresh session: owner picks. All four owner decisions (D1–D4) are now
+  landed; conclave tests-for-verifications list is exhausted. Do not chain
+  here.

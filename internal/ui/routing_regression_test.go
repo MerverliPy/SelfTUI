@@ -107,8 +107,8 @@ func TestAppRoutingShowsMutationConfirm(t *testing.T) {
 	if m.agent.chatErr != "" {
 		t.Errorf("chatErr = %q", m.agent.chatErr)
 	}
-	if len(m.agent.history) != 2 || !strings.Contains(m.agent.history[1].Content, "wrote the 10s timer") {
-		t.Errorf("history = %+v, want committed final reply", m.agent.history)
+	if len(m.agent.turns) != 2 || !strings.Contains(m.agent.turns[1].msg.Content, "wrote the 10s timer") {
+		t.Errorf("turns = %+v, want committed final reply", m.agent.turns)
 	}
 	if calls != 2 {
 		t.Errorf("chat calls = %d, want 2 (tool turn + final)", calls)
@@ -162,8 +162,8 @@ func TestAppRoutingDeclineSkipsWrite(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, "no.sh")); !os.IsNotExist(err) {
 		t.Fatalf("declined write created the file: %v", err)
 	}
-	if !strings.Contains(m.agent.history[len(m.agent.history)-1].Content, "not writing it") {
-		t.Errorf("final reply missing after decline: %+v", m.agent.history)
+	if !strings.Contains(m.agent.turns[len(m.agent.turns)-1].msg.Content, "not writing it") {
+		t.Errorf("final reply missing after decline: %+v", m.agent.turns)
 	}
 }
 
@@ -231,13 +231,6 @@ func TestAppEnvelopeRoutingTable(t *testing.T) {
 					}
 					return nil
 				}},
-			{"agentTokenMsg (legacy delta)", envAgent, agentTokenMsg{text: "legacy delta"}, streaming,
-				func(m App) error {
-					if m.agent.streamText != "legacy delta" {
-						return errf("streamText = %q, want the delta appended", m.agent.streamText)
-					}
-					return nil
-				}},
 			{"agent.TokenMsg (delta)", envAgent, agent.TokenMsg{Text: "token delta"}, streaming,
 				func(m App) error {
 					if m.agent.streamText != "token delta" {
@@ -270,13 +263,6 @@ func TestAppEnvelopeRoutingTable(t *testing.T) {
 				func(m App) error {
 					if m.agent.notice != "plain chat fallback" {
 						return errf("notice = %q, want fallback reason", m.agent.notice)
-					}
-					return nil
-				}},
-			{"agentDoneMsg (legacy done)", envAgent, agentDoneMsg{err: "", reason: "length"}, streaming,
-				func(m App) error {
-					if m.agent.streaming || m.agent.stopCancel != nil {
-						return errf("streaming=%v stopCancel!=nil after done", m.agent.streaming)
 					}
 					return nil
 				}},
@@ -564,7 +550,7 @@ func TestModalOwnsTabAndShiftTabWhileOpen(t *testing.T) {
 		m := tabTestApp(t, agentTab)
 		// /clear only asks when there is a conversation; seed one turn (no
 		// server traffic needed to open the confirm dialog itself).
-		m.agent.history = []ollama.ChatMessage{{Role: ollama.RoleUser, Content: "hi"}}
+		m.agent.turns = []turn{{msg: ollama.ChatMessage{Role: ollama.RoleUser, Content: "hi"}}}
 		m = typeKeys(t, m, "/clear")
 		m = updateTab(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 		if !m.agent.clearConfirm {
@@ -644,11 +630,11 @@ func TestAppRoutingChatCompletesTurn(t *testing.T) {
 	if m.agent.chatErr != "" {
 		t.Fatalf("chatErr = %q, want clean completion", m.agent.chatErr)
 	}
-	if n := len(m.agent.history); n != 2 {
-		t.Fatalf("history len = %d, want 2 (user + committed assistant)", n)
+	if n := len(m.agent.turns); n != 2 {
+		t.Fatalf("turns len = %d, want 2 (user + committed assistant)", n)
 	}
-	if !strings.Contains(m.agent.history[1].Content, "func main()") {
-		t.Errorf("committed assistant reply = %+v, want the streamed answer", m.agent.history[1])
+	if !strings.Contains(m.agent.turns[1].msg.Content, "func main()") {
+		t.Errorf("committed assistant reply = %+v, want the streamed answer", m.agent.turns[1])
 	}
 	if out := stripANSI(m.View().Content); !strings.Contains(out, "func main()") {
 		t.Errorf("committed reply missing from the rendered transcript:\n%s", out)
@@ -737,8 +723,8 @@ func TestAppRoutingChatErrorSurfaced(t *testing.T) {
 	if !strings.Contains(m.agent.chatErr, "model 'ghost:tag' not found") {
 		t.Errorf("chatErr = %q, want the server error surfaced", m.agent.chatErr)
 	}
-	if n := len(m.agent.history); n != 1 || m.agent.history[0].Content != "ping" {
-		t.Errorf("history = %+v, want the user message kept for retry", m.agent.history)
+	if n := len(m.agent.turns); n != 1 || m.agent.turns[0].msg.Content != "ping" {
+		t.Errorf("turns = %+v, want the user message kept for retry", m.agent.turns)
 	}
 	if out := stripANSI(m.View().Content); !strings.Contains(out, "not found") {
 		t.Errorf("error missing from the rendered Agent view:\n%s", out)

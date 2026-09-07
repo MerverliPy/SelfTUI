@@ -141,9 +141,9 @@ func TestAgentViewParentCancellationStopsChat(t *testing.T) {
 		t.Errorf("chatErr = %q, want a context-canceled error (no fabricated success)", v.chatErr)
 	}
 	var assistant []string
-	for _, m := range v.history {
-		if m.Role == ollama.RoleAssistant {
-			assistant = append(assistant, m.Content)
+	for _, t := range v.turns {
+		if t.msg.Role == ollama.RoleAssistant {
+			assistant = append(assistant, t.msg.Content)
 		}
 	}
 	if len(assistant) != 1 || assistant[0] != "one" {

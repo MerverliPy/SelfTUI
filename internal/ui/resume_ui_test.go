@@ -76,24 +76,25 @@ func TestAgentViewResumeImport(t *testing.T) {
 	}
 	runCmd(t, &v, cmd) // the load command
 
-	// Imported state: history + parallel slices + render cache, in order.
-	if len(v.history) != 2 {
-		t.Fatalf("history = %d turns, want 2", len(v.history))
+	// Imported state: messages, model chips, footer meta, and the render
+	// cache land together, in order.
+	if len(v.turns) != 2 {
+		t.Fatalf("turns = %d, want 2", len(v.turns))
 	}
-	if v.history[0].Role != ollama.RoleUser || v.history[0].Content != "explain this repo" {
-		t.Errorf("turn 0 = %+v", v.history[0])
+	if v.turns[0].msg.Role != ollama.RoleUser || v.turns[0].msg.Content != "explain this repo" {
+		t.Errorf("turn 0 = %+v", v.turns[0])
 	}
-	if v.history[1].Role != ollama.RoleAssistant || v.history[1].Content != "It is a terminal UI." {
-		t.Errorf("turn 1 = %+v", v.history[1])
+	if v.turns[1].msg.Role != ollama.RoleAssistant || v.turns[1].msg.Content != "It is a terminal UI." {
+		t.Errorf("turn 1 = %+v", v.turns[1])
 	}
-	if len(v.turnModel) != 2 || v.turnModel[0] != "qwen3:8b" || v.turnModel[1] != "qwen3:8b" {
-		t.Errorf("turnModel = %v", v.turnModel)
+	if v.turns[0].model != "qwen3:8b" || v.turns[1].model != "qwen3:8b" {
+		t.Errorf("turn models = %q/%q, want qwen3:8b", v.turns[0].model, v.turns[1].model)
 	}
-	if len(v.turnMeta) != 2 || v.turnMeta[1] != "0.4s · stop" {
-		t.Errorf("turnMeta = %v", v.turnMeta)
+	if v.turns[1].meta != "0.4s · stop" {
+		t.Errorf("turn meta = %q", v.turns[1].meta)
 	}
-	if len(v.render) != 2 || v.render[0] == "" || v.render[1] == "" {
-		t.Errorf("render cache not rebuilt: %v", v.render)
+	if v.turns[0].render == "" || v.turns[1].render == "" {
+		t.Errorf("render cache not rebuilt: %+v", v.turns)
 	}
 	if !v.follow || v.scroll != 0 || v.truncated {
 		t.Errorf("follow/scroll/truncated = %v/%d/%v, want true/0/false", v.follow, v.scroll, v.truncated)
@@ -136,8 +137,10 @@ func TestAgentViewResumeOverwriteConfirm(t *testing.T) {
 	v = v.WithSessionDir(dir, "")
 	v, _ = v.Update(agentModelsLoadedMsg{models: sampleModels()})
 	// A live conversation exists: picking must ask first.
-	v.history = append(v.history, ollama.ChatMessage{Role: ollama.RoleUser, Content: "live turn"})
-	v.render = append(v.render, "x")
+	v.turns = append(v.turns, turn{
+		msg:    ollama.ChatMessage{Role: ollama.RoleUser, Content: "live turn"},
+		render: "x",
+	})
 
 	typeText(t, &v, "/resume")
 	v, cmd := v.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -157,8 +160,8 @@ func TestAgentViewResumeOverwriteConfirm(t *testing.T) {
 	if v.notice != "resume cancelled" {
 		t.Errorf("notice = %q", v.notice)
 	}
-	if len(v.history) != 1 || v.history[0].Content != "live turn" {
-		t.Fatalf("decline must keep the live conversation: %+v", v.history)
+	if len(v.turns) != 1 || v.turns[0].msg.Content != "live turn" {
+		t.Fatalf("decline must keep the live conversation: %+v", v.turns)
 	}
 	_ = cmd
 
@@ -172,8 +175,8 @@ func TestAgentViewResumeOverwriteConfirm(t *testing.T) {
 	}
 	v, cmd = v.Update(tea.KeyPressMsg{Text: "y"})
 	runCmd(t, &v, cmd)
-	if len(v.history) != 2 || v.history[0].Content != "explain this repo" {
-		t.Errorf("confirm did not import the transcript: %+v", v.history)
+	if len(v.turns) != 2 || v.turns[0].msg.Content != "explain this repo" {
+		t.Errorf("confirm did not import the transcript: %+v", v.turns)
 	}
 }
 
@@ -235,8 +238,8 @@ func TestAgentViewResumePendingBlocksSend(t *testing.T) {
 	// A send while the load is in flight is refused, not queued.
 	typeText(t, &v, "new conversation")
 	v, _ = v.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if len(v.history) != 0 {
-		t.Fatalf("send during a pending load must not append: %+v", v.history)
+	if len(v.turns) != 0 {
+		t.Fatalf("send during a pending load must not append: %+v", v.turns)
 	}
 	if len(*sent) != 0 {
 		t.Fatalf("send during a pending load must not stream (sent=%d)", len(*sent))
@@ -257,8 +260,8 @@ func TestAgentViewResumePendingBlocksSend(t *testing.T) {
 	if v.resumePending {
 		t.Fatal("landing the load must clear the pending window")
 	}
-	if len(v.history) != 2 {
-		t.Fatalf("import landed %d turns, want 2", len(v.history))
+	if len(v.turns) != 2 {
+		t.Fatalf("import landed %d turns, want 2", len(v.turns))
 	}
 	// The preserved draft is still there; sending it now goes through.
 	if v.input.Value() != "new conversation" {
@@ -281,8 +284,10 @@ func TestAgentViewResumeOverwritePendingBlocksSend(t *testing.T) {
 	v := testAgent(t, client)
 	v = v.WithSessionDir(dir, "")
 	v, _ = v.Update(agentModelsLoadedMsg{models: sampleModels()})
-	v.history = append(v.history, ollama.ChatMessage{Role: ollama.RoleUser, Content: "live turn"})
-	v.render = append(v.render, "x")
+	v.turns = append(v.turns, turn{
+		msg:    ollama.ChatMessage{Role: ollama.RoleUser, Content: "live turn"},
+		render: "x",
+	})
 
 	typeText(t, &v, "/resume")
 	v, cmd := v.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -294,15 +299,15 @@ func TestAgentViewResumeOverwritePendingBlocksSend(t *testing.T) {
 	}
 	typeText(t, &v, "raced")
 	v, _ = v.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if len(*sent) != 0 || len(v.history) != 1 || v.history[0].Content != "live turn" {
-		t.Errorf("send during a confirmed import must be refused: sent=%d history=%+v", len(*sent), v.history)
+	if len(*sent) != 0 || len(v.turns) != 1 || v.turns[0].msg.Content != "live turn" {
+		t.Errorf("send during a confirmed import must be refused: sent=%d turns=%+v", len(*sent), v.turns)
 	}
 	runCmd(t, &v, func() tea.Msg {
 		turns, err := session.Load(path)
 		return agentEventMsg{msg: sessionLoadedMsg{path: path, turns: turns, err: err}}
 	})
-	if len(v.history) != 2 || v.history[0].Content != "explain this repo" {
-		t.Fatalf("confirmed import must land: %+v", v.history)
+	if len(v.turns) != 2 || v.turns[0].msg.Content != "explain this repo" {
+		t.Fatalf("confirmed import must land: %+v", v.turns)
 	}
 }
 
@@ -344,17 +349,17 @@ func TestAgentViewResumeImportSanitizesMetadata(t *testing.T) {
 	}
 	hostile := "/tmp/selftui/chat-\x1b]52;c;p\x07evil.md"
 	v = v.applySessionLoaded(sessionLoadedMsg{path: hostile, turns: turns})
-	if strings.ContainsAny(v.turnModel[1], "\x1b\x07") {
-		t.Errorf("imported model kept control bytes: %q", v.turnModel[1])
+	if strings.ContainsAny(v.turns[1].model, "\x1b\x07") {
+		t.Errorf("imported model kept control bytes: %q", v.turns[1].model)
 	}
-	if strings.ContainsAny(v.turnMeta[1], "\x1b\x07") {
-		t.Errorf("imported meta kept control bytes: %q", v.turnMeta[1])
+	if strings.ContainsAny(v.turns[1].meta, "\x1b\x07") {
+		t.Errorf("imported meta kept control bytes: %q", v.turns[1].meta)
 	}
 	if strings.ContainsAny(v.notice, "\x1b\x07") {
 		t.Errorf("resume notice kept control bytes: %q", v.notice)
 	}
-	if len(v.history) != 2 || v.history[1].Content != "" {
-		t.Errorf("history = %+v", v.history)
+	if len(v.turns) != 2 || v.turns[1].msg.Content != "" {
+		t.Errorf("turns = %+v", v.turns)
 	}
 }
 
@@ -387,13 +392,13 @@ func TestAgentViewResumeErrorsSurfaceOnce(t *testing.T) {
 	// conversation intact.
 	v = testAgent(t, client)
 	v, _ = v.Update(agentModelsLoadedMsg{models: sampleModels()})
-	v.history = append(v.history, ollama.ChatMessage{Role: ollama.RoleUser, Content: "live turn"})
+	v.turns = append(v.turns, turn{msg: ollama.ChatMessage{Role: ollama.RoleUser, Content: "live turn"}})
 	v = v.applySessionLoaded(sessionLoadedMsg{path: "/gone/chat-x.md", err: os.ErrNotExist})
 	if !strings.Contains(v.notice, "resume failed") {
 		t.Errorf("notice = %q", v.notice)
 	}
-	if len(v.history) != 1 || v.history[0].Content != "live turn" {
-		t.Errorf("failed import must keep the live conversation: %+v", v.history)
+	if len(v.turns) != 1 || v.turns[0].msg.Content != "live turn" {
+		t.Errorf("failed import must keep the live conversation: %+v", v.turns)
 	}
 }
 

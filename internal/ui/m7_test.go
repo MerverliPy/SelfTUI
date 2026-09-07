@@ -32,14 +32,11 @@ func seedTranscript(v *AgentView, lines int) {
 		fmt.Fprintf(&body, "line %03d\n", i)
 	}
 	body.WriteString("```\n")
-	v.history = append(v.history,
-		ollama.ChatMessage{Role: ollama.RoleUser, Content: "make a long answer"},
-		ollama.ChatMessage{Role: ollama.RoleAssistant, Content: body.String()},
-	)
-	v.turnModel = []string{"qwen3:8b", "qwen3:8b"}
-	v.render = []string{
-		v.renderBlock(v.userHeader(), "make a long answer"),
-		v.renderBlock(v.assistantHeader("qwen3:8b"), body.String()),
+	v.turns = []turn{
+		{msg: ollama.ChatMessage{Role: ollama.RoleUser, Content: "make a long answer"},
+			render: v.renderBlock(v.userHeader(), "make a long answer")},
+		{msg: ollama.ChatMessage{Role: ollama.RoleAssistant, Content: body.String()}, model: "qwen3:8b",
+			render: v.renderBlock(v.assistantHeader("qwen3:8b"), body.String())},
 	}
 }
 
@@ -115,8 +112,8 @@ func TestAgentViewSlashClearAsksThenWipes(t *testing.T) {
 
 	// n/esc cancels: history stays.
 	v, _ = v.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
-	if v.clearConfirm || len(v.history) != 2 {
-		t.Fatalf("esc should cancel the clear (confirm=%v history=%d)", v.clearConfirm, len(v.history))
+	if v.clearConfirm || len(v.turns) != 2 {
+		t.Fatalf("esc should cancel the clear (confirm=%v turns=%d)", v.clearConfirm, len(v.turns))
 	}
 	if v.notice != "clear cancelled" {
 		t.Errorf("notice = %q, want clear cancelled", v.notice)
@@ -126,8 +123,8 @@ func TestAgentViewSlashClearAsksThenWipes(t *testing.T) {
 	typeText(t, &v, "/clear")
 	v, _ = v.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	v, _ = v.Update(tea.KeyPressMsg{Text: "y"})
-	if v.clearConfirm || len(v.history) != 0 || len(v.turnMeta) != 0 {
-		t.Fatalf("y should wipe the conversation (confirm=%v history=%d)", v.clearConfirm, len(v.history))
+	if v.clearConfirm || len(v.turns) != 0 {
+		t.Fatalf("y should wipe the conversation (confirm=%v turns=%d)", v.clearConfirm, len(v.turns))
 	}
 	if v.notice != "conversation cleared" {
 		t.Errorf("notice = %q, want conversation cleared", v.notice)
@@ -388,11 +385,11 @@ func TestTurnFooterShowsElapsedAndStopReason(t *testing.T) {
 	v, _ = v.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	drainChat(t, &v)
 
-	// turnMeta parallels history (a user placeholder at 0, the footer at 1).
-	if len(v.turnMeta) != 2 {
-		t.Fatalf("turnMeta = %v, want [placeholder footer]", v.turnMeta)
+	// The footer meta rides the committed assistant turn (user turns have none).
+	if len(v.turns) != 2 {
+		t.Fatalf("turns = %+v, want user + assistant", v.turns)
 	}
-	if meta := v.turnMeta[1]; !strings.Contains(meta, "s · stop") {
+	if meta := v.turns[1].meta; !strings.Contains(meta, "s · stop") {
 		t.Errorf("footer = %q, want elapsed + stop reason", meta)
 	}
 	out := stripANSI(v.View())
@@ -515,9 +512,11 @@ func TestTruncationMarkerAndCtxFull(t *testing.T) {
 	v.numCtx = 80 // tiny budget: limit = 60 tokens
 	big := strings.Repeat("a very long line of prose that eats the budget fast ", 6)
 
-	v.history = append(v.history, ollama.ChatMessage{Role: ollama.RoleUser, Content: big})
-	v.turnModel = append(v.turnModel, v.model)
-	v.render = append(v.render, v.renderBlock(v.userHeader(), big))
+	v.turns = append(v.turns, turn{
+		msg:    ollama.ChatMessage{Role: ollama.RoleUser, Content: big},
+		model:  v.model,
+		render: v.renderBlock(v.userHeader(), big),
+	})
 	v.checkContextBudget()
 
 	if !v.truncated {

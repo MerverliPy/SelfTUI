@@ -48,19 +48,9 @@ type AgentView struct {
 	// one belongs to an obsolete host and is dropped (M-03).
 	clientGen uint64
 
-	// Conversation state. history holds committed user/assistant messages;
-	// turnModel records the model each committed message belongs to (the
-	// assistant header shows it); render is the glamour-rendered block
-	// (header + content) for each history message, cached per width.
-	history   []ollama.ChatMessage
-	turnModel []string
-	render    []string
-
-	// Transcript meta (M7-B): per committed assistant message, a footer row
-	// with the turn's elapsed time and terminal reason ("3.4s · stop"). It is
-	// a separate parallel slice so geometry-change re-renders of render never
-	// lose it; cleared with the conversation.
-	turnMeta  []string
+	// Conversation state: one committed turn per entry (message + the model it
+	// belongs to + the assistant footer meta + the width-cached render block).
+	turns     []turn
 	turnStart time.Time // when the current turn started (elapsed footer)
 
 	// Context budget (M7-C): systemPrompt is kept on the view so the meter and
@@ -107,6 +97,7 @@ type AgentView struct {
 	sessionDir  string
 	sessionHost string // recorded in the transcript header (best effort)
 	recorder    *session.Recorder
+	recorded    bool // a turn was accepted by the recorder (/export pre-empt)
 	sessionErr  bool
 	// sessionErrMsg retains the one surfaced recorder failure so later
 	// surfaces (e.g. /export) can echo the real cause instead of giving
@@ -160,6 +151,19 @@ type AgentView struct {
 
 	chatChOnce bool
 	w, h       int
+}
+
+// turn is one committed conversation entry: the message sent to/from the
+// model, the model the turn belongs to (assistant header chip), the turn's
+// footer meta ("3.4s · stop"; empty for user turns), and the glamour-rendered
+// block (header + content) cached per width so geometry-change re-renders
+// never lose it. One struct keeps the four views of a turn in lockstep —
+// there is no parallel slice to desync.
+type turn struct {
+	msg    ollama.ChatMessage
+	model  string
+	meta   string
+	render string
 }
 
 // NewAgentView builds the Agent tab using the current directory as its
@@ -236,12 +240,6 @@ type agentModelsErrMsg struct {
 	gen uint64
 	err string
 }
-type agentTokenMsg struct{ text string }
-
-type agentDoneMsg struct {
-	err    string
-	reason string // terminal ollama done_reason of the final stream (stop/length)
-}
 
 // sessionAppendMsg reports one committed turn's recorder outcome. err is nil
 // on success (which never round-trips — the ack command returns nil instead);
@@ -277,8 +275,8 @@ type sessionLoadedMsg struct {
 // (agentModelsLoadedMsg/agentModelsErrMsg), the recorder outcomes
 // (sessionAppendMsg/sessionExportMsg), and every event the chat activity
 // channel delivers (agent.TokenMsg, agent.ToolStartMsg, agent.ToolResultMsg,
-// agent.ToolConfirmMsg, agent.FallbackMsg, agent.AgentDoneMsg, plus the
-// legacy agentTokenMsg/agentDoneMsg). App.Update has exactly one routing case
+// agent.ToolConfirmMsg, agent.FallbackMsg, agent.AgentDoneMsg). App.Update
+// has exactly one routing case
 // per child and unwraps before delegating, so any payload that is produced is
 // routed by construction — a newly added async result can no longer be
 // dropped at the shell (the 2026-09-06 ToolConfirmMsg routing bug).
@@ -365,14 +363,17 @@ func (v AgentView) startChat() (AgentView, tea.Cmd) {
 	v.turnStart = time.Now()
 
 	model := v.model
-	history := append([]ollama.ChatMessage(nil), v.history...)
+	msgs := make([]ollama.ChatMessage, 0, len(v.turns))
+	for _, t := range v.turns {
+		msgs = append(msgs, t.msg)
+	}
 
 	go func() {
 		defer close(done)
 		defer close(ch)
 		defer cancel()
 		v.runner.Run(ctx, agent.Request{
-			Model: model, Messages: history,
+			Model: model, Messages: msgs,
 			Temperature: v.temperature, TopP: v.topP, NumCtx: v.numCtx,
 		}, func(msg agent.Msg) {
 			emitEvent(ctx, ch, agentEventMsg{msg: msg})
@@ -461,13 +462,6 @@ func (v AgentView) Update(msg tea.Msg) (AgentView, tea.Cmd) {
 		v.modelsErr = sanitizeTerminalText(msg.err)
 		return v, nil
 
-	case agentTokenMsg: // retained for focused M2/UI tests
-		if v.streaming {
-			v.streamText += msg.text
-			v.follow = true
-		}
-		return v, v.waitChatCmd()
-
 	case agent.TokenMsg:
 		if v.streaming {
 			v.streamText += msg.Text
@@ -507,11 +501,8 @@ func (v AgentView) Update(msg tea.Msg) (AgentView, tea.Cmd) {
 		v.notice = sanitizeTerminalText(msg.Reason)
 		return v, v.waitChatCmd()
 
-	case agentDoneMsg:
-		return v.onChatDone(msg)
-
 	case agent.AgentDoneMsg:
-		return v.onChatDone(agentDoneMsg{err: msg.Err, reason: msg.Reason})
+		return v.onChatDone(msg)
 
 	case tea.KeyMsg:
 		v, cmd = v.handleKey(msg)
@@ -572,7 +563,7 @@ func (v AgentView) onModelsLoaded(models []ollama.Model) (AgentView, tea.Cmd) {
 // message whose header carries elapsed + terminal reason right-aligned
 // (M7-B/opencode-style), then surfaces an error unless the user stopped the
 // stream with esc (a stop is not an error).
-func (v AgentView) onChatDone(m agentDoneMsg) (AgentView, tea.Cmd) {
+func (v AgentView) onChatDone(m agent.AgentDoneMsg) (AgentView, tea.Cmd) {
 	v.streaming = false
 	v.stopCancel = nil
 	v.stopArmed = false
@@ -586,11 +577,13 @@ func (v AgentView) onChatDone(m agentDoneMsg) (AgentView, tea.Cmd) {
 	if v.streamText != "" {
 		// The Ollama done_reason on the done event is remote text rendered on
 		// the assistant header; sanitize it before it becomes turn meta.
-		meta := turnFooter(v.turnStart, sanitizeTerminalText(m.reason), v.stopRequest)
-		v.history = append(v.history, ollama.ChatMessage{Role: ollama.RoleAssistant, Content: v.streamText})
-		v.turnModel = append(v.turnModel, v.model)
-		v.turnMeta = append(v.turnMeta, meta)
-		v.render = append(v.render, v.renderBlock(v.assistantHeaderRow(v.model, meta), v.streamText))
+		meta := turnFooter(v.turnStart, sanitizeTerminalText(m.Reason), v.stopRequest)
+		v.turns = append(v.turns, turn{
+			msg:    ollama.ChatMessage{Role: ollama.RoleAssistant, Content: v.streamText},
+			model:  v.model,
+			meta:   meta,
+			render: v.renderBlock(v.assistantHeaderRow(v.model, meta), v.streamText),
+		})
 		v, recCmd = v.enqueueSessionTurn("assistant", v.model, v.streamText, meta, time.Now())
 		v.streamText = ""
 	}
@@ -598,10 +591,10 @@ func (v AgentView) onChatDone(m agentDoneMsg) (AgentView, tea.Cmd) {
 	switch {
 	case v.stopRequest:
 		v.notice = "stopped" // esc asked to stop, even if the stream just finished
-	case m.err != "":
+	case m.Err != "":
 		// The error body can come from the remote host; sanitize before the
 		// statusline renders it (H-05).
-		v.chatErr = sanitizeTerminalText(m.err)
+		v.chatErr = sanitizeTerminalText(m.Err)
 	default:
 		v.notice = ""
 	}
@@ -621,17 +614,7 @@ func (v AgentView) handleKey(msg tea.KeyMsg) (AgentView, tea.Cmd) {
 	// Hard modals own every key: a pending mutation approval, the model
 	// selector, the /clear confirmation, and the /help overlay.
 	if v.confirmation != nil {
-		switch {
-		case k.Text == "y" || k.Code == tea.KeyEnter:
-			v.confirmation.Respond(true)
-			v.notice = "approved " + v.confirmation.Name
-			v.confirmation = nil
-		case k.Text == "n" || k.Code == tea.KeyEsc:
-			v.confirmation.Respond(false)
-			v.notice = "declined " + v.confirmation.Name
-			v.confirmation = nil
-		}
-		return v, nil
+		return v.confirmKey(k)
 	}
 	if v.selectorOpen {
 		return v.selectorKey(k)
@@ -652,37 +635,14 @@ func (v AgentView) handleKey(msg tea.KeyMsg) (AgentView, tea.Cmd) {
 		return v, nil
 	}
 
-	// While a slash draft is showing, arrows steer the highlighted row, enter
-	// runs it, and esc drops the whole draft. Every other key keeps editing
-	// the draft, so the menu filters live as characters land (backspace too).
+	// While a slash draft is showing, the draft's keys steer the menu
+	// (slashDraftKey); every other key keeps editing the draft below.
 	if v.slashMenu() {
-		switch {
-		case k.Code == tea.KeyEsc:
-			ti := v.input
-			ti.Reset()
-			v.input = ti
-			v.slashQuery = ""
-			v.slashIdx = 0
-			return v.fitComposer(), nil
-		case k.Code == tea.KeyEnter && !k.Mod.Contains(tea.ModShift):
-			return v.runSlashCommand()
-		case k.Code == tea.KeyUp:
-			if v.slashIdx > 0 {
-				v.slashIdx--
-			}
-			return v, nil
-		case k.Code == tea.KeyDown:
-			if n := len(v.slashMatches()); v.slashIdx < n-1 {
-				v.slashIdx++
-			}
-			return v, nil
+		av, handled, cmd := v.slashDraftKey(k)
+		if handled {
+			return av, cmd
 		}
-		// Draft text changed: reset the highlight to the top row unless the
-		// filter still selects the same command (keep it simple: top row).
-		if q := v.slashQueryOf(); q != v.slashQuery {
-			v.slashQuery = q
-			v.slashIdx = 0
-		}
+		v = av
 	}
 
 	switch {
@@ -761,6 +721,59 @@ func (v AgentView) handleKey(msg tea.KeyMsg) (AgentView, tea.Cmd) {
 	ta, cmd := v.input.Update(msg)
 	v.input = ta
 	return v.fitComposer(), cmd
+}
+
+// confirmKey owns the mutation-approval dialog's keys: y or enter approves,
+// n or esc declines, and any other key is swallowed (the dialog has no
+// default affirmative key). The runner is unblocked either way.
+func (v AgentView) confirmKey(k tea.Key) (AgentView, tea.Cmd) {
+	switch {
+	case k.Text == "y" || k.Code == tea.KeyEnter:
+		v.confirmation.Respond(true)
+		v.notice = "approved " + v.confirmation.Name
+		v.confirmation = nil
+	case k.Text == "n" || k.Code == tea.KeyEsc:
+		v.confirmation.Respond(false)
+		v.notice = "declined " + v.confirmation.Name
+		v.confirmation = nil
+	}
+	return v, nil
+}
+
+// slashDraftKey owns the composer keys while the "/" command menu is
+// showing: arrows steer the highlighted row, enter runs it, and esc drops
+// the whole draft. Every other key keeps editing the draft (handled=false),
+// so the menu filters live as characters land (backspace too).
+func (v AgentView) slashDraftKey(k tea.Key) (AgentView, bool, tea.Cmd) {
+	switch {
+	case k.Code == tea.KeyEsc:
+		ti := v.input
+		ti.Reset()
+		v.input = ti
+		v.slashQuery = ""
+		v.slashIdx = 0
+		return v.fitComposer(), true, nil
+	case k.Code == tea.KeyEnter && !k.Mod.Contains(tea.ModShift):
+		av, cmd := v.runSlashCommand()
+		return av, true, cmd
+	case k.Code == tea.KeyUp:
+		if v.slashIdx > 0 {
+			v.slashIdx--
+		}
+		return v, true, nil
+	case k.Code == tea.KeyDown:
+		if n := len(v.slashMatches()); v.slashIdx < n-1 {
+			v.slashIdx++
+		}
+		return v, true, nil
+	}
+	// Draft text changed: reset the highlight to the top row unless the
+	// filter still selects the same command (keep it simple: top row).
+	if q := v.slashQueryOf(); q != v.slashQuery {
+		v.slashQuery = q
+		v.slashIdx = 0
+	}
+	return v, false, nil
 }
 
 // fitComposer re-sizes the prompt textarea to the current width and content
@@ -854,10 +867,11 @@ func (v AgentView) sendInput() (AgentView, tea.Cmd) {
 	v.input = ti
 	v = v.fitComposer()
 
-	v.history = append(v.history, ollama.ChatMessage{Role: ollama.RoleUser, Content: text})
-	v.turnModel = append(v.turnModel, v.model)
-	v.turnMeta = append(v.turnMeta, "") // placeholder keeps turnMeta aligned with history
-	v.render = append(v.render, v.renderBlock(v.userHeader(), text))
+	v.turns = append(v.turns, turn{
+		msg:    ollama.ChatMessage{Role: ollama.RoleUser, Content: text},
+		model:  v.model,
+		render: v.renderBlock(v.userHeader(), text),
+	})
 	v.checkContextBudget()
 	v, recCmd := v.enqueueSessionTurn("user", v.model, text, "", time.Now())
 	av, chatCmd := v.startChat()
@@ -865,18 +879,17 @@ func (v AgentView) sendInput() (AgentView, tea.Cmd) {
 }
 
 // enqueueSessionTurn mirrors one committed turn onto the ordered background
-// recorder (started lazily on the first recorded message). The update loop
+// recorder (constructed once at composition-root wiring in WithSessionDir).
+// It takes a pointer receiver so the recorder outcome (accepted turn, first
+// failure) lands on the calling view, not a discarded copy. The update loop
 // only enqueues immutable work and arms the ack command; Open/Append/Flush/
 // Close all happen on the recorder worker, so a slow or stalled transcript
 // directory can never block Update (M-04). On the first failure the ack
 // disables the log once and one notice tells the user where it failed — a
 // transcript is never worth breaking the chat for.
-func (v AgentView) enqueueSessionTurn(role, model, content, meta string, at time.Time) (AgentView, tea.Cmd) {
-	if v.sessionDir == "" || v.sessionErr {
-		return v, nil
-	}
-	if v.recorder == nil {
-		v.recorder = session.NewRecorder(v.sessionDir, v.sessionHost)
+func (v *AgentView) enqueueSessionTurn(role, model, content, meta string, at time.Time) (AgentView, tea.Cmd) {
+	if v.sessionDir == "" || v.sessionErr || v.recorder == nil {
+		return *v, nil
 	}
 	// The transcript mirrors what the terminal shows, so committed content
 	// is sanitized the same way (the file can otherwise be re-opened in a
@@ -887,9 +900,10 @@ func (v AgentView) enqueueSessionTurn(role, model, content, meta string, at time
 		v.sessionErr = true
 		v.sessionErrMsg = err.Error()
 		v.notice = "session log: " + err.Error()
-		return v, nil
+		return *v, nil
 	}
-	return v, func() tea.Msg {
+	v.recorded = true
+	return *v, func() tea.Msg {
 		res := <-done
 		if res.Err == nil {
 			return nil // a successful append needs no UI round-trip
@@ -899,15 +913,24 @@ func (v AgentView) enqueueSessionTurn(role, model, content, meta string, at time
 }
 
 // WithSessionDir enables transcript persistence under dir with host recorded
-// in the file header (called by the root App; empty dir disables). The
-// recorder itself is created lazily on the first recorded turn (nothing runs
-// for a disabled or silent session).
+// in the file header (the composition root — main via App — wires it once at
+// startup; empty dir disables). The concrete recorder is constructed here,
+// not lazily on the update loop: a committed turn only ever enqueues work
+// onto the existing dependency. Re-wiring closes the previous recorder first
+// (Close is idempotent), so repeated calls never strand a worker.
 func (v AgentView) WithSessionDir(dir, host string) AgentView {
+	if v.recorder != nil {
+		v.recorder.Close()
+	}
 	v.sessionDir = dir
 	v.sessionHost = host
 	v.recorder = nil
+	v.recorded = false
 	v.sessionErr = false
 	v.sessionErrMsg = ""
+	if dir != "" {
+		v.recorder = session.NewRecorder(dir, host)
+	}
 	return v
 }
 
@@ -939,7 +962,9 @@ func (v AgentView) exportSession() (AgentView, tea.Cmd) {
 		// failure instead (P1-5).
 		v.notice = "session recording failed: " + v.sessionErrMsg
 		return v, nil
-	case v.recorder == nil:
+	case v.recorder == nil || !v.recorded:
+		// The composition root wires the recorder eagerly; "no recorder" can
+		// only mean recording never accepted a turn — same advice either way.
 		v.notice = "nothing recorded yet — send a message first"
 		return v, nil
 	}
@@ -1035,7 +1060,7 @@ func (v AgentView) resumeKey(k tea.Key) (AgentView, tea.Cmd) {
 	case k.Code == tea.KeyEnter:
 		if len(v.resumeList) > 0 && v.resumeIdx >= 0 && v.resumeIdx < len(v.resumeList) {
 			path := v.resumeList[v.resumeIdx].Path
-			if len(v.history) > 0 || v.streamText != "" {
+			if len(v.turns) > 0 || v.streamText != "" {
 				v.resumePick = path
 				v.resumeConfirm = true
 				return v, nil
@@ -1115,10 +1140,7 @@ func (v AgentView) applySessionLoaded(m sessionLoadedMsg) AgentView {
 		v.notice = "resume failed: " + m.err.Error()
 		return v
 	}
-	v.history = v.history[:0]
-	v.turnModel = v.turnModel[:0]
-	v.turnMeta = v.turnMeta[:0]
-	v.render = v.render[:0]
+	v.turns = v.turns[:0]
 	for _, t := range m.turns {
 		role := ollama.RoleUser
 		if t.Role == "assistant" {
@@ -1129,14 +1151,16 @@ func (v AgentView) applySessionLoaded(m sessionLoadedMsg) AgentView {
 		// tokens and model names).
 		model := sanitizeTerminalText(t.Model)
 		meta := sanitizeTerminalText(t.Meta)
-		v.history = append(v.history, ollama.ChatMessage{Role: role, Content: t.Content})
-		v.turnModel = append(v.turnModel, model)
-		v.turnMeta = append(v.turnMeta, meta)
 		header := v.userHeader()
 		if role == ollama.RoleAssistant {
 			header = v.assistantHeaderRow(model, meta)
 		}
-		v.render = append(v.render, v.renderBlock(header, t.Content))
+		v.turns = append(v.turns, turn{
+			msg:    ollama.ChatMessage{Role: role, Content: t.Content},
+			model:  model,
+			meta:   meta,
+			render: v.renderBlock(header, t.Content),
+		})
 	}
 	// Budget recompute on import (mirrors a normal commit's
 	// checkContextBudget): an over-budget transcript must surface the
@@ -1223,7 +1247,7 @@ func (v AgentView) runSlashCommand() (AgentView, tea.Cmd) {
 
 	switch name {
 	case "clear":
-		if len(v.history) == 0 && v.streamText == "" {
+		if len(v.turns) == 0 && v.streamText == "" {
 			v.notice = "nothing to clear"
 			return v, nil
 		}
@@ -1351,10 +1375,7 @@ func (v AgentView) clearConfirmKey(k tea.Key) (AgentView, tea.Cmd) {
 	case k.Text == "y" || k.Code == tea.KeyEnter:
 		v.clearConfirm = false
 		v.notice = "conversation cleared"
-		v.history = nil
-		v.turnModel = nil
-		v.turnMeta = nil
-		v.render = nil
+		v.turns = nil
 		v.scroll = 0
 		v.follow = true
 		v.truncated = false
@@ -1376,7 +1397,9 @@ func (v AgentView) payloadMessages() []ollama.ChatMessage {
 	if v.systemPrompt != "" {
 		msgs = append(msgs, ollama.ChatMessage{Role: ollama.RoleSystem, Content: v.systemPrompt})
 	}
-	msgs = append(msgs, v.history...)
+	for i := range v.turns {
+		msgs = append(msgs, v.turns[i].msg)
+	}
 	if v.streaming && v.streamText != "" {
 		msgs = append(msgs, ollama.ChatMessage{Role: ollama.RoleAssistant, Content: v.streamText})
 	}
@@ -1533,25 +1556,18 @@ func (v *AgentView) rebuildRenderCache() {
 	if v.renderW != maxInt(v.w-2, 1) {
 		return // renderer is stale; ensureRenderer on next renderBlock fixes it
 	}
-	for i := range v.history {
-		v.render[i] = v.renderBlock(v.headerFor(i), v.history[i].Content)
+	for i := range v.turns {
+		v.turns[i].render = v.renderBlock(v.headerFor(i), v.turns[i].msg.Content)
 	}
 }
 
-// headerFor returns the role header line for a committed message index.
+// headerFor returns the role header line for a committed turn index.
 // Assistant rows carry their model chip (and right-aligned meta when the
 // turn recorded one); user rows keep the plain "❯ you" marker.
 func (v AgentView) headerFor(i int) string {
-	model := ""
-	if i < len(v.turnModel) {
-		model = v.turnModel[i]
-	}
-	if v.history[i].Role == ollama.RoleAssistant {
-		meta := ""
-		if i < len(v.turnMeta) {
-			meta = v.turnMeta[i]
-		}
-		return v.assistantHeaderRow(model, meta)
+	t := v.turns[i]
+	if t.msg.Role == ollama.RoleAssistant {
+		return v.assistantHeaderRow(t.model, t.meta)
 	}
 	return v.userHeader()
 }
@@ -1595,16 +1611,15 @@ func (v AgentView) chatLines() []string {
 		lines = append(lines, v.styles.mutedText().Render("… "+agent.TruncationNotice))
 		lines = append(lines, "")
 	}
-	for i := range v.history {
-		block := v.history[i].Content
-		if i < len(v.render) && v.render[i] != "" {
-			block = v.render[i]
-		} else {
+	for i := range v.turns {
+		t := v.turns[i]
+		block := t.render
+		if block == "" {
 			// H-05: never let raw (unsanitized) history reach the transcript.
-			// Production keeps the render cache in parallel with history, so
-			// this branch is a belt-and-suspenders guard for a cache gap; the
-			// cached branch was already sanitized by renderBlock.
-			block = sanitizeTerminalText(block)
+			// The cached branch was sanitized by renderBlock; this fallback
+			// covers an empty cache entry (belt-and-suspenders for a render
+			// gap, e.g. a hand-built transcript in tests).
+			block = sanitizeTerminalText(t.msg.Content)
 		}
 		if block == "" {
 			continue
@@ -1706,14 +1721,18 @@ func (v AgentView) renderChatPane(h int) string {
 	}
 	lines := v.chatLines()
 	contentH := h - 2
-	if v.follow {
-		v.scroll = 0 // anchored to the tail while auto-following
+	// Rendering never mutates state: the effective offset is computed
+	// locally. Follow anchors to the tail (offset 0); otherwise the stored
+	// offset clamps to the current content, so a shrink never shows past
+	// the head.
+	scroll := 0
+	if !v.follow {
+		scroll = clampInt(v.scroll, 0, maxInt(0, len(lines)-contentH))
 	}
-	v.scroll = clampInt(v.scroll, 0, maxInt(0, len(lines)-contentH))
 
 	// Window honors the scroll offset: scroll 0 shows the tail; scrolling
 	// up shifts the window toward the head.
-	end := len(lines) - v.scroll
+	end := len(lines) - scroll
 	start := maxInt(0, end-contentH)
 	window := lines[start:end]
 	pane := v.styles.Pane.Width(v.w).Height(h)
@@ -2207,7 +2226,9 @@ func (v AgentView) renderOverlayTitle(bodyH int, title string, lines []string) s
 }
 
 // clampScroll bounds the stored scroll offset by the currently visible window
-// (composer height is dynamic — same accounting as View()).
+// (composer height is dynamic — same accounting as renderChatPane). It runs
+// on the key paths that change scroll; rendering computes its effective
+// offset locally and never writes state.
 func (v *AgentView) clampScroll() {
 	bodyH := maxInt(v.h-2, 1)
 	chatH := maxInt(bodyH-v.composerRows()-3-1, 1)
