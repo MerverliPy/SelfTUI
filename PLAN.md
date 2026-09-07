@@ -753,8 +753,9 @@ V2a→V2b→V2c→V2d (§10) as a **small focused release** (one gate per sessio
 V2a, V2b, and V2c are landed; v0.2 tags when the set lands).
 **Excluded from v0.2 (not owner-selected):** mobile residuals (landscape/
 rotation geometry measurement, post-reconnect probe block `m6-live-1b`).
-Remaining owner click: upload the GPG public key at github.com/settings/keys
-for the green Verified badge.
+**v0.2.0 tagged 2026-09-07** (signed annotated tag after the V2d session
+landed the set; see LEDGER). Remaining owner click: upload the GPG public
+key at github.com/settings/keys for the green Verified badge.
 
 ## 12. Next-level TUI plan — performance · usability · visibility (PROPOSAL, planning-only, 2026-09-07)
 
