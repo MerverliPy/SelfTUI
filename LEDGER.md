@@ -5095,3 +5095,68 @@ exists and was validated end-to-end on the release host; V2c may reinstate
 - v0.2 set (V2a–V2d) is complete: owner may tag the v0.2 release. Next
   development work (e.g. PLAN §12 N-series) starts in a fresh session at
   `/home/calvin/SelfTUI`. Do not chain here.
+
+## 2026-09-07 — v0.2.0 tagged, published, and verified (owner-instructed in-chat)
+
+**Scope:** tag the v0.2.0 release after the V2d session completed the
+owner-selected v0.2 set (V2a–V2d). DIRECT execution, zero agents.
+
+**Work done**
+- CHANGELOG `Unreleased` cut to `[0.2.0] - 2026-09-07`; PLAN §12 records the
+  tag; committed and landed via **PR #16** (`release/v0.2.0` → main, required
+  check pass 1m03s, merge `ebd6bb0`) — `main` is branch-protected, direct
+  pushes are declined.
+- Local release gate `VERSION=v0.2.0 make release-check` **PASSED** (needed
+  the pinned toolchain on PATH first: go1.27.1 distribution bin dir +
+  `~/go/bin`; installed pinned `govulncheck@v1.7.0` — not previously on
+  PATH). Gate: mod verify, gofmt, vet, uncached tests, race, govulncheck
+  (0 vulnerabilities in code), cross-builds, stamp check (`selftui v0.2.0`
+  both binaries), deterministic archives + flat `SHA256SUMS`.
+- Signed annotated tag `v0.2.0` created (`git tag -s`, Ed25519 key
+  `5F74A36F7B5C1670`, `git verify-tag` good).
+- **First tag push failed** (run 34156039028, 8s): `git verify-tag` in CI
+  said "cannot verify a non-tag object of type commit". Root cause verified
+  from run logs: actions/checkout (pinned SHA, fetch-depth:1, fetch-tags:
+  false) fetches the triggering commit and writes its SHA directly into
+  `refs/tags/v0.2.0` — the runner repo never has the annotated tag object.
+  This was a latent bug in the signed-tag step (it never ran green on a
+  pushed signed tag; v0.1.1's release run predates the verify step). Nothing
+  was built or published by the failed run.
+- Fixed `release.yml` (re-fetch the exact tag ref, assert the ref is a tag
+  object, then verify); landed via **PR #17** (`fix/release-tag-verify` →
+  main, check pass 1m09s, merge `761d331`). Local reproduction confirmed a
+  force re-fetch yields the tag object + good signature.
+- Tag moved: deleted the 5-minute-old failed-run tag ref (remote + local)
+  and re-created the signed tag on `761d331`; pushed → release run
+  **34156259375 succeeded**.
+- Independent verification: `gh release download v0.2.0` +
+  `sha256sum -c SHA256SUMS` → both archives **OK**; extracted amd64 binary
+  reports `selftui v0.2.0`. Release is published, not draft, 3 assets.
+
+**Commands + exit codes**
+- `VERSION=v0.2.0 make release-check` → 2 twice (pinned-gofmt PATH; missing
+  govulncheck), then **0** with the pinned toolchain on PATH.
+- `make actionlint` → 127 (actionlint not on PATH), rerun with `~/go/bin` on
+  PATH → 0.
+- `git push origin main` → rejected GH006 (branch protection) → PR path.
+- `gh pr merge 16 --merge` / `gh pr merge 17 --merge` → merged.
+- `gh run watch 34156259375 --exit-status` → 0.
+- `sha256sum -c SHA256SUMS` (downloaded assets) → OK; `./selftui -version` →
+  `selftui v0.2.0`.
+
+**Decisions / lines to respect**
+- Tag deletion + re-creation happened before anything was published; the
+  moved tag targets the same release content plus the one-file release.yml
+  fix (archive checksums differ from the pre-fix local build as expected —
+  the tree changed).
+- Branches kept for audit: `release/v0.2.0`, `fix/release-tag-verify` (same
+  practice as `hardening/v0.1`, `fix/v0.1.1-audit-remediation`).
+- Still owner-optional: upload the GPG public key at
+  github.com/settings/keys for the green Verified badge.
+
+**Blockers / open decisions (carry to next session)**
+- None.
+
+**Next action**
+- Fresh session at `/home/calvin/SelfTUI`; owner picks next work (e.g. PLAN
+  §12 N-series, N1 first). Do not chain here.
