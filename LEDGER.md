@@ -5393,3 +5393,27 @@ owner-selected v0.2 set (V2a–V2d). DIRECT execution, zero agents.
 - Fresh session at `/home/calvin/SelfTUI`; next N-item per the §12
   sequencing sketch: N6 (composer upgrades), or N5 (debug drawer) if the
   owner reorders.
+
+---
+
+## Session — 2026-09-07 (late): owner push of N4+N2 → origin (orchestrator run)
+
+**Work done**
+- Owner-instructed push task, triaged DIRECT (zero agents). Direct `git push origin main` was rejected: `main` is protected (PR + required status check `Go fmt · vet · test · race · vuln · cross-build`). Routed through the repo's established PR pattern (matching #19/#20).
+- CI first run FAILED: `TestStatusBarObservabilitySegments` — environment-dependent test fixture, not a renderer bug. The no-data identity assertion derived the workspace label from cwd; CI's deep checkout path (`/home/runner/work/SelfTUI/SelfTUI/internal/ui`, 55 chars) tripped the N4 width-pressure shedding, which drops the workspace segment (per spec — see `TestStatusBarWidthPressure`).
+- Fix (parent-local, smallest change): pinned the fixture's `WorkspaceRoot` to `/tmp` (the golden-test pattern) in `internal/ui/status_row_test.go`, so the identity string is environment-independent.
+
+**Commands + exit codes**
+- `git push origin main` → exit 1 (protected-branch hook GH006).
+- `git push -u origin perf/n4-n2` → 0; PR #21 opened.
+- Local verification: `gofmt -l .` → empty; targeted `go test ./internal/ui/ -run 'TestStatusBar|TestCtxMeter'` → PASS; `make check` → 0; `go test -race -count=1 ./...` → 0.
+- CI after fix: required check PASS (1m06s, run 34171441278); `gh pr merge 21 --merge --delete-branch` → 0.
+
+**Decisions / lines to respect**
+- The width-pressure shedding order is confirmed contract (workspace sheds before the identity floor); test fixtures must pin `WorkspaceRoot` to a short fixed path when asserting full identity strings — future status-row tests should follow the golden-test pattern.
+
+**Blockers / open decisions**
+- LEDGER commit on `main` is local-only (protected branch); it rides the next PR branch.
+
+**Next action**
+- Fresh session at `/home/calvin/SelfTUI`; next N-item per §12: **N6 — composer upgrades** (`@`-file fuzzy reference; `/details` + `/thinking` toggles; no leader key — palette stays the discoverable path).
