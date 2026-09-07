@@ -649,3 +649,22 @@ Never chain a second step in the same session. Session-start ritual: `AGENTS.md`
 `PLAN.md` §10+§11 → tail of `LEDGER.md` → choose exactly one step. Session-end ritual:
 complete it → append `LEDGER.md` → tick the `§10` exit → commit → **stop**. The full rule
 and the self-hosted tooling reality notes are in `AGENTS.md`.
+
+**v0.1.1 published (2026-09-07):** annotated tag `v0.1.1` created at `eacb522`;
+`release.yml` ran successfully (run `34070705981`, 1m15s); 3 assets published (amd64/arm64
+archives + SHA256SUMS); independently downloaded and verified (`sha256sum -c` OK). The
+503 error observed was a transient GitHub API blip at asset-upload time, not a repo defect.
+
+**fix/v0.1.1-audit-remediation merged to main via PR #6 (2026-09-07):**
+`gh pr merge 6 --merge` → merge commit `ba6e098`. Branch protection enforced
+(required check `Go fmt · vet · test · race · vuln · cross-build` PASSED, 1m11s).
+`main` now at `ba6e098`; v0.1.1 tag (`eacb522`) is reachable from `main`. Branch
+`fix/v0.1.1-audit-remediation` kept (auditable history, same as `hardening/v0.1`).
+
+**Queued, not started** — none of this has landed yet: **gitleaks-in-CI**
+(recommended; see LEDGER step-6 entry), **actionlint in the local gate**, and
+**the signed-tag decision**. The workflows already pin Node-20 majors
+(`actions/checkout@v4`, `actions/setup-go@v5`), so no Node action bump
+remains. **The public-visibility decision stays the owner's call** — the repo
+may now go public at the owner's discretion. **Remaining: P0 supply-chain items
+and P1 correctness findings from the 5-lane read-only audit.**
