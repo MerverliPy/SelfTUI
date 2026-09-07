@@ -63,7 +63,6 @@ func run() error {
 	// --- flags (highest config priority) ---
 	flagConfig := flag.String("config", "", "config file path (default: $XDG_CONFIG_HOME/selftui/config.toml)")
 	flagHost := flag.String("host", "", "Ollama base URL (overrides env + config file)")
-	flagAuthToken := flag.String("auth-token", "", "auth token (compatibility only — prefer SELFTUI_AUTH_TOKEN or the 0600 config file; argv secrets appear in process listings and shell history)")
 	flagTheme := flag.String("theme", "", "theme: dark (default) or light")
 	flagDefaultModel := flag.String("default-model", "", "default model for new sessions")
 	flagWorkspaceRoot := flag.String("workspace-root", "", "agent workspace root")
@@ -84,9 +83,6 @@ func run() error {
 	ov := config.Overrides{ConfigPath: configPathOverride(flagConfig)}
 	if *flagHost != "" {
 		ov.Host = flagHost
-	}
-	if *flagAuthToken != "" {
-		ov.AuthToken = flagAuthToken
 	}
 	if *flagTheme != "" {
 		ov.Theme = flagTheme

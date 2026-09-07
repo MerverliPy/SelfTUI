@@ -239,9 +239,8 @@ Resolution order: **flags > env > config file > defaults**.
 
 **Secrets (auth token):** set the token via `SELFTUI_AUTH_TOKEN` or put
 `auth_token` in the config file (written 0600, directory 0700) — the Settings →
-Connection form does this for you. The `-auth-token` flag is retained only for
-compatibility with older invocations; prefer the env var or config file, since a
-command-line secret shows up in process listings and shell history. A token is
+Connection form does this for you. There is deliberately no `-auth-token` flag:
+a command-line secret shows up in process listings and shell history. A token is
 only sent over `https://` unless the host is loopback
 (`localhost`, `127.0.0.1`, `::1`) — a non-loopback host with a token must use
 `https://`.
