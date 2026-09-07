@@ -4370,3 +4370,25 @@ cross-build` PASSED (1m11s). `main` now at `ba6e098`, v0.1.1 tag
 **Next action**
 - Fresh session: public-visibility flip or v0.2 scoping per owner priority.
   Do not chain here.
+
+### 2026-09-07 — Showcase pass: README hook + badges + preview (DONE)
+**Milestone:** owner-assigned showcase pass · **Result:** done — README opens with a tagline + self-updating badges, stale v0.1.1 status fixed, Features + Preview sections added from golden fixtures. No code touched.
+
+**Work done**
+- README head: CI/release/Go-version/license badge row (all self-updating; CI badge is first-party, rest shields.io over public repo data) + one-line tagline hook.
+- Fixed stale `Status: v0.1.1 hardening in progress` → `v0.1.1 released 2026-09-07` with signed-tag note.
+- New `## Features` (4 bullets) and `## Preview` (two golden-fixture renders: models wide-inspect, agent turn) + compact-phone pointer to the iPhone guide.
+
+**Commands + exit codes**
+- `git diff --check` `0` · `git diff --stat` `0` (README-only, 48+/3-)
+
+**Decisions / lines to respect**
+- Preview blocks are trimmed golden-fixture excerpts, not live screenshots — a real demo GIF/cast is still a future owner step.
+- Badges resolve only once the repo is public; harmless while private.
+
+**Blockers / open decisions (carry to next session)**
+- Owner UI clicks (not commits): About description, topics, social preview image (1280×640).
+- Public-visibility call; v0.2 scope definition.
+
+**Next action**
+- Fresh session: public-visibility flip or v0.2 scoping per owner priority. Do not chain here.
