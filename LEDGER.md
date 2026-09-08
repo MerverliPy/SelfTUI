@@ -5911,3 +5911,43 @@ also green — attribution clean)
 **Next action**
 - Owner lands the branch (PR recommended per repo rhythm), then: N1 glamour
   width-bucketing micro-item or the next owner-assigned step; N7 stays continuous watch.
+
+### 2026-09-07 — PR #24 Codex review round: P2 docs qualification patched (owner-assigned follow-up)
+**Milestone:** owner-assigned step in the F1 session chat — monitor PR #24 and debug + patch
+all reviewer comments · **Result:** done — Codex posted 1 finding (P2), triaged, patched,
+pushed, re-review clean ("Didn't find any major issues. Bravo."). No §10 roadmap row (PR
+review round on the open fix branch).
+
+**Work done**
+- Automated Codex review (round 1, `chatgpt-codex-connector` @ 03:53Z, reviewed commit
+  `6c8ace34`) posted 1 inline finding — **P2 on `docs/device-acceptance-2026-09-07.md`**: the
+  summary and verdict claim all 26 scenarios passed/exercised while the table marks
+  SC-25 (clean quit) "not exercised" and SC-26 (drop + reattach) "not re-exercised" —
+  the claim overstated the pass's coverage.
+- **Patch (docs-only, commit `7884f86`):** qualified both claims — scenario summary now
+  reads "24 of the 26 scenarios were exercised live with PASS…" with SC-25/SC-26
+  exclusions stated inline (SC-26 already verified live in M6, `docs/reconnect.md`), and
+  the verdict reads "OVERALL PASS **for the exercised surface** (SC-01…SC-24, plus SC-26
+  carried from its live M6 verification); SC-25… excluded from this pass's verdict".
+- Pushed to `fix/f1-fallback-marker`; re-review triggered via "@codex review" comment;
+  **round 2** (`chatgpt-codex-connector` @ 04:02Z, reviewed commit `7884f86`) →
+  "Codex Review: Didn't find any major issues. Bravo." — no new findings.
+
+**Commands + exit codes**
+- `gh api repos/MerverliPy/SelfTUI/pulls/24/comments` → 1 inline finding (P2); `gh pr comment 24` (address note + `@codex review`) → rc 0.
+- `git commit` + `git push origin fix/f1-fallback-marker` → rc 0 (6c8ace3..7884f86).
+- `gh pr checks 24` → **pass** (Go fmt·vet·test·race·vuln·cross-build, 1m1s) on head `7884f86`; PR `MERGEABLE`, `OPEN`.
+- Monitor poll loop (gh api comments/reviews/reactions) — bounded ~15 min total; aborted once at the 8-min mark by the round-2 verdict landing.
+
+**Decisions / lines to respect**
+- Fix-forward on the PR branch — the acceptance doc rides the carried commits; per the
+  repo's append-only discipline the historical doc gets a corrective commit, not a
+  history rewrite.
+- The round-1 inline thread stays open on GitHub (no thread-resolve endpoint via REST);
+  the addressed state is evidenced by the fix commit + the clean round-2 review.
+- The P2 was on the carried acceptance doc (pre-F1-session content), not on the F1
+  code/README changes — the F1 surface itself drew no findings across both rounds.
+
+**Blockers / open decisions**
+- None. **Next:** owner merges PR #24 (or requests further changes); the N1 glamour
+  width-bucketing micro-item remains queued; N7 stays continuous watch.
