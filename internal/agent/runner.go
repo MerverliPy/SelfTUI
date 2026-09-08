@@ -53,6 +53,14 @@ var (
 type Msg interface{}
 
 type TokenMsg struct{ Text string }
+
+// ThinkingMsg relays one reasoning delta from a thinking model (qwen3). The
+// runner never interprets it and never feeds it to a tool parser or the
+// model context; it exists so the UI can store reasoning per turn and render
+// it behind the /thinking toggle (PLAN.md §12 N6). Delivery is unconditional:
+// the gating is display-only in the AgentView, so toggling reveals past
+// turns' reasoning without a replay.
+type ThinkingMsg struct{ Text string }
 type ToolStartMsg struct {
 	Name  string
 	Input string
@@ -239,8 +247,13 @@ func (r *Runner) run(ctx context.Context, req Request, emit func(Msg), reasonOut
 		err := r.client.ChatStream(ctx, ollama.ChatRequest{
 			Model: req.Model, Messages: BudgetMessages(messages, req.NumCtx), Stream: true, Tools: tools, Options: options,
 		}, func(ev ollama.ChatEvent) {
-			// Thinking is intentionally consumed and discarded. It is neither
-			// user-visible output nor a valid tool-call transport.
+			// Thinking is relayed to the UI as opaque deltas (N6). It is still
+			// never user-visible output by default and never a valid tool-call
+			// transport; the AgentView stores it and shows it only behind the
+			// /thinking toggle.
+			if delta := thinkingDelta(ev); delta != "" {
+				emit(ThinkingMsg{Text: delta})
+			}
 			if ev.Message.Content != "" {
 				content.WriteString(ev.Message.Content)
 				// Content-embedded tool JSON is held back so it never flashes
@@ -357,6 +370,9 @@ func (r *Runner) runPlainChat(ctx context.Context, req Request, messages []ollam
 		// (M6 context-truncation edge).
 		Model: req.Model, Messages: BudgetMessages(messages, numCtx), Stream: true, Options: options,
 	}, func(ev ollama.ChatEvent) {
+		if delta := thinkingDelta(ev); delta != "" {
+			emit(ThinkingMsg{Text: delta})
+		}
 		if ev.Message.Content != "" {
 			emit(TokenMsg{Text: ev.Message.Content})
 		}
@@ -387,6 +403,17 @@ func (r *Runner) authorizePath(path string) error {
 		return nil
 	}
 	return r.policy.AuthorizePath(path)
+}
+
+// Root returns the canonical workspace root the runner was built with (the
+// same root its jailed tools resolve against). The composer's @-file picker
+// and attachment expansion use it so user-initiated references land inside
+// exactly the jail the tools use (PLAN.md §12 N6).
+func (r *Runner) Root() string {
+	if r == nil {
+		return ""
+	}
+	return r.workspaceRoot
 }
 
 func (r *Runner) executeTool(ctx context.Context, call ollama.ToolCall, emit func(Msg)) (string, error) {
@@ -564,6 +591,17 @@ func (r *Runner) confirm(ctx context.Context, call ollama.ToolCall, seconds int,
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+// thinkingDelta extracts one event's reasoning delta. Ollama has carried
+// thinking under message.thinking and (older shapes) a top-level thinking
+// field; the two are treated as alternatives — never concatenated — so a
+// relay can never double a delta that arrived in both places.
+func thinkingDelta(ev ollama.ChatEvent) string {
+	if ev.Message.Thinking != "" {
+		return ev.Message.Thinking
+	}
+	return ev.Thinking
 }
 
 // looksLikeEmbeddedJSON reports whether accumulated stream content should be

@@ -66,6 +66,76 @@ func WorkspaceContext(ctx context.Context, root string) string {
 	return out
 }
 
+// workspaceFilesMaxResults bounds the picker listing so a huge checkout
+// degrades to a truncated list instead of an unbounded slice.
+const workspaceFilesMaxResults = 512
+
+// WorkspaceFiles lists the workspace's regular files as workspace-relative
+// paths for the composer's @-file picker (PLAN.md §12 N6). It shares the
+// workspaceTree walk discipline: symlinks are never followed (WalkDir), .git
+// is pruned, depth is capped at maxTreeDepth, and entries are capped so a
+// huge checkout degrades to a truncated list. The paths are exactly what
+// securePath will re-verify when the reference is expanded, so nothing here
+// is an authority — it is a convenience listing inside the same jail.
+func WorkspaceFiles(ctx context.Context, root string) []string {
+	realRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return nil
+	}
+	info, err := os.Stat(realRoot)
+	if err != nil || !info.IsDir() {
+		return nil
+	}
+	var files []string
+	err = filepath.WalkDir(realRoot, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			if path == realRoot {
+				return walkErr // unreadable root: no listing at all
+			}
+			return nil // unreadable child: skip, keep listing the rest
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		rel, relErr := filepath.Rel(realRoot, path)
+		if relErr != nil {
+			return nil
+		}
+		if rel == "." {
+			return nil
+		}
+		if d.Name() == ".git" {
+			return filepath.SkipDir
+		}
+		depth := strings.Count(rel, string(filepath.Separator))
+		if d.IsDir() && depth >= maxTreeDepth {
+			return filepath.SkipDir
+		}
+		if len(files) >= workspaceFilesMaxResults {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return fs.SkipAll
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if !d.Type().IsRegular() {
+			return nil // sockets/devices/symlinks: never offered
+		}
+		files = append(files, rel)
+		return nil
+	})
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil // canceled: offer nothing rather than a partial list
+		}
+		// A real traversal error with partial content keeps what was read;
+		// the listing is advisory, not a correctness surface.
+	}
+	return files
+}
+
 // gitContext runs the fixed read-only git probes. Any failure (no git binary,
 // not a repository, canceled context) returns "" and the block simply omits
 // the git section — a non-git workspace is a supported shape, not an error.

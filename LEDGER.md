@@ -5393,3 +5393,76 @@ owner-selected v0.2 set (V2a–V2d). DIRECT execution, zero agents.
 - Fresh session at `/home/calvin/SelfTUI`; next N-item per the §12
   sequencing sketch: N6 (composer upgrades), or N5 (debug drawer) if the
   owner reorders.
+
+---
+
+## Session — 2026-09-07 (late): owner push of N4+N2 → origin (orchestrator run)
+
+**Work done**
+- Owner-instructed push task, triaged DIRECT (zero agents). Direct `git push origin main` was rejected: `main` is protected (PR + required status check `Go fmt · vet · test · race · vuln · cross-build`). Routed through the repo's established PR pattern (matching #19/#20).
+- CI first run FAILED: `TestStatusBarObservabilitySegments` — environment-dependent test fixture, not a renderer bug. The no-data identity assertion derived the workspace label from cwd; CI's deep checkout path (`/home/runner/work/SelfTUI/SelfTUI/internal/ui`, 55 chars) tripped the N4 width-pressure shedding, which drops the workspace segment (per spec — see `TestStatusBarWidthPressure`).
+- Fix (parent-local, smallest change): pinned the fixture's `WorkspaceRoot` to `/tmp` (the golden-test pattern) in `internal/ui/status_row_test.go`, so the identity string is environment-independent.
+
+**Commands + exit codes**
+- `git push origin main` → exit 1 (protected-branch hook GH006).
+- `git push -u origin perf/n4-n2` → 0; PR #21 opened.
+- Local verification: `gofmt -l .` → empty; targeted `go test ./internal/ui/ -run 'TestStatusBar|TestCtxMeter'` → PASS; `make check` → 0; `go test -race -count=1 ./...` → 0.
+- CI after fix: required check PASS (1m06s, run 34171441278); `gh pr merge 21 --merge --delete-branch` → 0.
+
+**Decisions / lines to respect**
+- The width-pressure shedding order is confirmed contract (workspace sheds before the identity floor); test fixtures must pin `WorkspaceRoot` to a short fixed path when asserting full identity strings — future status-row tests should follow the golden-test pattern.
+
+**Blockers / open decisions**
+- LEDGER commit on `main` is local-only (protected branch); it rides the next PR branch.
+
+**Next action**
+- Fresh session at `/home/calvin/SelfTUI`; next N-item per §12: **N6 — composer upgrades** (`@`-file fuzzy reference; `/details` + `/thinking` toggles; no leader key — palette stays the discoverable path).
+
+## Session — 2026-09-07 (N6): composer upgrades (orchestrator run)
+
+**Work done**
+- N6 per PLAN §12: `@`-file fuzzy reference, `/details` + `/thinking` toggles,
+  no leader key (spec). Delegation note: single implementation lane
+  `developer-tooling-engineer` (mission 7547d0ca, fork context); no commits by
+  the child. Parent verified, ticked PLAN §12 N6, committed.
+- Implementation: `internal/agent/runner.go` (thinking relay → new
+  `agent.ThinkingMsg`; message-level `thinking` preferred, top-level fallback,
+  never concatenated), `internal/agent/workspace.go` (`WorkspaceFiles()`
+  jail-bounded picker listing: WalkDir, no symlink follow, `.git` pruned,
+  depth/entry caps, ≤512 results), `internal/agent/attach.go` (new —
+  `FileRefTokens`/`ExpandFileRefs` send-path expansion through jailed
+  `ReadFile`; missing = prose untouched; escape/oversize = visible
+  `[file: … — unavailable: …]` note), `internal/ui/agent_view.go`
+  (`/details` + `/thinking` session toggles default OFF; `@`-picker armed on
+  fresh `@`, filter derived from draft tail after last `@`; per-turn
+  `turn.thinking`/`turn.tools` stored always, rendered only behind toggles;
+  reasoning/tool deltas batch through the existing 60 ms tick; `turn.wire`
+  carries expanded content to runner + ctx meter; remote-host warning when
+  attachments go to a non-loopback host). No leader key; palette unchanged.
+
+**Commands + exit codes**
+- Parent verification (fresh, after child): `gofmt -l .` → empty (rc 0);
+  `go vet ./...` → clean; `make check` → 0; `go test -race -count=1 ./...` → 0
+  (all pkgs ok; ui 16.1s). 13 new tests (6 agent + 7 ui).
+- Goldens: only `agent-help-*` + `agent-slash-*` regenerated (command set grew
+  5→7 + help rows); `agent-turn-*`/`agent-compact`/`agent-wide`/transcript
+  frames byte-identical — toggles default OFF.
+
+**Decisions / lines to respect**
+- N2 contract held: `pendingStream` remains the only delta queue; additive
+  batching of thinking/tool extras; final-chunk immediate flush untouched.
+- Toggles are **session-scoped** by design (no config.toml/Settings surface —
+  would widen scope beyond N6's three items); default OFF.
+- Attachment expansion is synchronous at send, bounded ≤256 KB/file, so the
+  ctx meter budgets the true payload; transcript renders the draft, not the
+  expansion.
+- Error turns that produced no content still commit nothing (pre-N6 semantics).
+
+**Blockers / open decisions**
+- Local `main` is ahead of `origin/main` (N6 + carried ledger commit). Main is
+  protected — push must ride a PR branch (pattern: PR #21). Awaiting owner
+  push (or owner-instructed push session).
+
+**Next action**
+- Fresh session at `/home/calvin/SelfTUI`; next N-item per §12 sequencing:
+  **N5 — debug/log drawer** (`charmbracelet/log`, keybind-toggled, redacted).
