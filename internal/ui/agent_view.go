@@ -117,6 +117,16 @@ type AgentView struct {
 	toolStatus   string                // latest agent-tool activity for the hint row
 	confirmation *agent.ToolConfirmMsg // pending mutation approval; blocks input/tab jumps
 
+	// plainChatReason is the sanitized plain-chat fallback reason of the
+	// in-flight turn (F1): set when agent.FallbackMsg lands and cleared when
+	// the turn commits. Its commit appends a persistent "no tool ran" note to
+	// the assistant turn's content, so the caveat renders inline, survives
+	// the committed-turn render cache (rebuildRenderCache re-renders from
+	// msg.Content), and reaches the /export transcript and a later /resume
+	// reload. Before F1 the only caveat was the transient statusline notice,
+	// so a fallback turn could export a narrated tool claim with no marker.
+	plainChatReason string
+
 	// Chat parameters (from config until M4).
 	temperature float64
 	topP        float64
@@ -500,6 +510,7 @@ func (v AgentView) startChat() (AgentView, tea.Cmd) {
 	_ = pendingThinking
 	v.pendingThinking = ""
 	v.streamTools = nil
+	v.plainChatReason = "" // F1: a stale fallback must never mark a later turn
 	v.resetStreamRender()
 	v.stopRequest = false
 	v.stopArmed = false
@@ -795,6 +806,10 @@ func (v AgentView) Update(msg tea.Msg) (AgentView, tea.Cmd) {
 
 	case agent.FallbackMsg:
 		v.notice = sanitizeTerminalText(msg.Reason)
+		// F1: remember the fallback for the in-flight turn so its commit
+		// carries the persistent caveat (render + transcript + resume), not
+		// just this transient statusline notice.
+		v.plainChatReason = sanitizeTerminalText(msg.Reason)
 		return v, v.waitChatCmd()
 
 	case agent.AgentDoneMsg:
@@ -899,6 +914,18 @@ func (v AgentView) reasoningBlock(thinking string) string {
 	return v.styles.mutedText().Render("· reasoning\n" + thinking)
 }
 
+// plainChatFallbackNote is the persistent F1 caveat appended to a
+// plain-chat-fallback assistant turn. The runner downgraded the turn before
+// any tool executed, so a narrated tool claim ("I wrote file X") is not
+// real; the note says so inline and in the exported/resumed transcript. It
+// is a markdown blockquote, so the raw transcript file and the rendered
+// terminal agree. reason is runner-supplied display text, sanitized when it
+// entered state and again here (idempotent) before it joins the markdown
+// body.
+func plainChatFallbackNote(reason string) string {
+	return "\n\n> ⚠ **plain chat** — no tool ran this turn: " + sanitizeTerminalText(reason)
+}
+
 // onChatDone finalizes a turn: commits the streamed text as an assistant
 // message whose header carries elapsed + terminal reason right-aligned
 // (M7-B/opencode-style), then surfaces an error unless the user stopped the
@@ -944,15 +971,26 @@ func (v AgentView) onChatDone(m agent.AgentDoneMsg) (AgentView, tea.Cmd) {
 		// lines) commit with the content; a turn that produced no content
 		// (error mid-loop) commits nothing, exactly as before N6.
 		meta := turnFooter(v.turnStart, sanitizeTerminalText(m.Reason), v.stopRequest, turnTokPerSec(m.Metrics))
+		// F1: a plain-chat fallback (agent.FallbackMsg) means the runner
+		// downgraded this turn before any tool executed — a tool claim the
+		// reply narrates is not real. Append the persistent caveat to the
+		// committed content once, so the in-memory turn, its render cache,
+		// the /export transcript, and a later /resume reload all carry it
+		// (the transcript mirrors what the terminal shows).
+		content := v.streamText
+		if v.plainChatReason != "" {
+			content += plainChatFallbackNote(v.plainChatReason)
+			v.plainChatReason = ""
+		}
 		v.turns = append(v.turns, turn{
-			msg:      ollama.ChatMessage{Role: ollama.RoleAssistant, Content: v.streamText},
+			msg:      ollama.ChatMessage{Role: ollama.RoleAssistant, Content: content},
 			model:    v.model,
 			meta:     meta,
-			render:   v.renderBlock(v.assistantHeaderRow(v.model, meta), v.streamText),
+			render:   v.renderBlock(v.assistantHeaderRow(v.model, meta), content),
 			thinking: v.thinkingText,
 			tools:    v.streamTools,
 		})
-		v, recCmd = v.enqueueSessionTurn("assistant", v.model, v.streamText, meta, time.Now())
+		v, recCmd = v.enqueueSessionTurn("assistant", v.model, content, meta, time.Now())
 		v.streamText = ""
 		v.thinkingText = "" // N6: the turn's extras committed with it
 		v.streamTools = nil

@@ -5618,3 +5618,336 @@ owner-selected v0.2 set (V2a–V2d). DIRECT execution, zero agents.
 - Fresh session at `/home/calvin/SelfTUI`; per owner's plan sequencing: push
   N5 + these PR #22 review fixes via a PR branch, then N7 upstream tracking
   (no code) / owner's V2d call / N8 device spike.
+
+## Session — 2026-09-07 (push N5 + PR #22 fixes): PR #23 opened (orchestrator run)
+
+**Work done**
+- Owner-assigned next step executed: pushed local `main`'s ahead-content via a
+  PR branch (main is protected). Branch `feat/n5-pr22-review-fixes` carries all
+  4 ahead commits (N5 code `003043a`, review-fix code `842ffca`, 2 carried
+  ledger docs `e295115`/`7325287`) — matching the ledger's "push must ride a PR
+  branch" note and keeping history identical so a merge-commit merge fast-forwards
+  local main cleanly (no cherry-pick duplication/reconciliation).
+- Opened https://github.com/MerverliPy/SelfTUI/pull/23 — MERGEABLE, 4 commits,
+  body documents the 7/7 finding map + verification.
+
+**Commands + exit codes**
+- `git checkout -b feat/n5-pr22-review-fixes main` → 0; `make build` → 0;
+  `git push -u origin feat/n5-pr22-review-fixes` → 0 (new branch);
+  `gh pr create …` → https://github.com/MerverliPy/SelfTUI/pull/23 (rc 0);
+  `gh pr view 23` → OPEN / MERGEABLE / 4 commits (rc 0). Back on `main`.
+
+**Decisions / lines to respect**
+- PR carries the ledger docs commits too (repo rhythm: docs ride the push;
+  they cannot reach origin any other way while main is protected).
+- Triage for this step: DIRECT (git/gh operations only, no agents).
+
+**Blockers / open decisions**
+- PR #23 awaits the owner's merge. After a merge-commit merge, local `main`
+  fast-forwards via `git pull`.
+- **N7**: no-code continuous upstream tracking — nothing new to record (bubbletea
+  v2.0.9 still pinned; scroll-optimized flush #1725/#1761 + event-driven
+  rendering #1776 not yet shipped as of today).
+- **V2d**: already landed (PLAN §10 ✅ 2026-09-07, git-awareness + project
+  indexing) — the ledger's "owner's V2d call" phrasing is stale; no pending
+  owner decision.
+- **N8**: owner-run on-device iPhone SSH spike (Blink/Termius scrollback
+  behavior) — not executable from a dev box; awaiting owner's device test.
+
+**Next action**
+- Owner: merge PR #23 (merge commit), then `git pull` on local main. Next
+  code-worthy item per §12 sequencing is N8 (owner device spike) or the N1
+  glamour width-bucketing micro-item; N7 stays continuous.
+
+## Session — 2026-09-08 (owner merge of PR #23): PR #23 merged + local pull (orchestrator run)
+
+**Work done**
+- Owner-assigned step executed: merged PR #23 as a **merge commit**
+  (`gh pr merge 23 --merge`). GitHub created `63f589d` — parents `19f4b93`
+  (old origin/main) + `7325287` (PR head `feat/n5-pr22-review-fixes`),
+  GitHub-signed; tree **byte-identical** to the PR head that had already
+  passed CI (verified `63f589d^{tree} == 7325287^{tree}`).
+- Branch-protection check on the merge commit (`Go fmt · vet · test · race ·
+  vuln · cross-build`) ran green on `origin/main` (run 34177645477, polled
+  to completion).
+- `git pull` on local `main` (owner instruction) → ort merge `7925341`
+  (parents `fa75b71` + `63f589d`), no conflicts, working tree clean. N5
+  debug/log drawer + the 7/7 PR #22 Codex review fixes are now on
+  `origin/main`.
+- Local `main` stays ahead of `origin/main` by the carried docs commits only
+  (`fa75b71` LEDGER +40 lines; the `7925341` merge) — they ride the next
+  feature PR per repo rhythm (main is protected). Branch
+  `feat/n5-pr22-review-fixes` kept on origin (auditable history, same as
+  prior PRs).
+
+**Commands + exit codes**
+- `gh pr merge 23 --merge` → rc 0 (silent stdout; verified via REST:
+  merged=true, merge_commit_sha=`63f589d`).
+- `git pull --no-edit` → rc 0 ("Merge made by the 'ort' strategy").
+- Verification: `git cat-file -p 63f589d` → 2 parents; tree-equality check →
+  true; `git status -sb` → clean (`## main...origin/main [ahead 2]`);
+  `gh api .../commits/63f589d/check-runs` → success.
+
+**Decisions / lines to respect**
+- Merge-commit merge per owner instruction (preserves the PR's commit
+  history; same pattern as the PR #6 merge record in PLAN's tail log).
+- No `--delete-branch` (repo convention keeps merged branches for audit).
+- Triage for this step: DIRECT (git/gh operations only, zero agents).
+
+**Blockers / open decisions**
+- None for this step. N7 continuous upstream watch: nothing new (bubbletea
+  v2.0.9 still pinned; scroll-optimized flush #1725/#1761 + event-driven
+  rendering #1776 not yet shipped). N8 remains an owner-run on-device iPhone
+  SSH spike (not executable from a dev box). N1 glamour width-bucketing
+  (round width to 5 cols so resize jitter doesn't rebuild the renderer) is
+  the cheap code-worthy micro-item.
+- Standing owner click (unchanged): upload the GPG public key at
+  github.com/settings/keys for the green Verified badge.
+
+**Next action**
+- Fresh session: N8 (owner device test) or the N1 glamour width-bucketing
+  micro-item; N7 stays continuous watch. Local `main` carries 2 docs commits
+  (incl. this handoff) to ride the next feature PR.
+
+## Session — 2026-09-07 (N8 device spike, owner-run): tea.Println native-scrollback verdict = DECLINE
+
+**Work done**
+- N8 (PLAN §12) executed as an owner-run on-device spike, per the plan's
+  spike-first rule. Built a throwaway instrument `cmd/n8-scrollback-probe`
+  (branch `spike/n8-scrollback`, commit `4fe788e`): it stages the Charm
+  chat-history pattern (bubbletea discussion #1482) — finalized turns printed
+  via `tea.Println` into the terminal's native scrollback with a slim owned
+  live frame — on the pinned bubbletea v2.0.9 with the same no-altscreen
+  posture as `cmd/self-tui/main.go`. Local pty sanity run: boots, 3 turns
+  emitted through the real Println/insertAbove path, clean `q` exit (rc 0).
+- `docs/n8-device-test.md` carries the on-device procedure + 6-row
+  observation sheet (same spike branch).
+- Owner ran the probe on device: **Moshi** client, plain SSH session (no
+  tmux). Observations: **scroll was dead** (the native scroll gesture did
+  nothing — no usable history to pan) and the **live frame repainted
+  repeatedly/rapidly** through the session. The repaint signature matches
+  the raw stream captured during the local run: `tea.Println` (renderer
+  `insertAbove`) scrolls the buffer and then the frame re-renders with
+  erase bursts (dozens of `ESC[J` per frame) — over SSH to a phone that is
+  a visible full-region flash on every turn-land.
+- **Verdict: N8 declined.** The naive `tea.Println` native-scrollback pattern
+  does not hold up on the owner's client. SelfTUI stays in its current
+  renderer; the plan's cheap alternative holds — N1 windowing (landed) already
+  bounds per-frame cost. The probe stays throwaway on `spike/n8-scrollback`
+  and never merges to `main` as-is. Recorded as a positive negative: the
+  spike answered the pre-commitment question at near-zero cost.
+
+**Commands + exit codes**
+- `git checkout -b spike/n8-scrollback` → 0; probe commit `4fe788e` → 0;
+  `gofmt -l` clean; `go vet ./cmd/n8-scrollback-probe` → 0;
+  `go build ./...` → 0.
+- Local pty smoke: `(sleep 15; printf q) | timeout 22 script -qec '…go run
+  ./cmd/n8-scrollback-probe…'` → rc 0, 3 `── turn` separators captured.
+- Device run: owner-executed `/tmp/n8-probe` on Moshi (plain SSH); verdict
+  from the owner's in-person observations, not host tooling.
+
+**Decisions / lines to respect**
+- N8 = declined (owner device evidence). This handoff + the PLAN §12 tick land
+  on local `main` per repo rhythm (they ride the next feature PR); the probe
+  code stays quarantined on `spike/n8-scrollback`.
+- Date note: this entry is stamped 2026-09-07 (host clock, matching git
+  stamps); the earlier "2026-09-08" header on the PR #23-merge entry is
+  prose-ahead of git and is left uncorrected (history is append-only).
+
+**Blockers / open decisions**
+- Fate of `spike/n8-scrollback`: kept for audit per repo convention; safe to
+  delete once N8 is closed out — owner's call.
+- N7 continuous watch: unchanged (bubbletea v2.0.9 pinned; #1725/#1761/#1776
+  not yet shipped).
+- Standing owner click (unchanged): upload the GPG public key at
+  github.com/settings/keys for the green Verified badge.
+
+**Next action**
+- N8 row ticked in PLAN §12. **Owner decision (2026-09-07): the next fresh
+  session runs a device acceptance pass of current `main` on Moshi** — the
+  first live on-device validation of the real SelfTUI since the M6-era
+  session, covering the M7 / v0.2 (V2a resume, V2c sandboxed run_command,
+  V2d workspace context) / N-series (N1 windowing, N2 streaming cadence,
+  N4 status row, N5 log drawer, N6 composer) surface at 72×30. No code;
+  scenario checklist to be written at that session's start. The **N1 glamour
+  width-bucketing micro-item** (round width to 5 cols so resize jitter
+  doesn't rebuild the renderer) remains the fallback headless step; N7 stays
+  continuous watch. Local `main` now carries 3 docs commits (incl. this
+  handoff) to ride the next feature PR.
+
+## Session — 2026-09-07 (device acceptance pass on Moshi): OVERALL PASS — first live validation of current `main` since M6 (orchestrator run, owner-executed walk)
+
+**Work done**
+- Owner ran the device acceptance pass of current `main` (`selftui dev` @
+  HEAD `4053190`) on the **Moshi** client (iPhone 16 Pro SSH) at the measured
+  **72×30** compact geometry, inside a pre-started `tmux` session `accept` on
+  the host. Scenario checklist SC-01…SC-26 (written at this session's start,
+  owner + orchestrator) walked the **M7 / v0.2 (V2a resume, V2c sandboxed
+  run_command, V2d workspace context) / N-series (N1 windowing, N2 streaming
+  cadence, N4 status row, N5 log drawer, N6 composer)** surface. **OVERALL
+  PASS**: all scenarios resolved; nothing clipped, no repaint bursts, no
+  decision row pushed off-screen at 72×30. Evidence doc:
+  `docs/device-acceptance-2026-09-07.md`.
+- Host-side readiness + recording by this session (DIRECT, zero agents — the
+  walk itself is owner-run by nature; N8 precedent: on-device verdicts come
+  from the owner's in-person observations, not host tooling). `make check` and
+  `go test -race` green on the tested tree before the pass.
+- Artifact-verified highlights: N3 metrics landed in **every** exported turn
+  header (`· 16.1–48.4s · stop · 56–61 tok/s`); V2d workspace context answered
+  the real branch state (main, ahead of origin/main by 5, clean) and the
+  project index named real `scripts/*.py`; the V2c jail enforced live — `echo`,
+  `seq`, and a non-allowlisted git subcommand (`push`) refused with precise
+  allowlist errors and the agent recovered gracefully; `/export` transcript +
+  `/resume` reload exercised (owner); approve dialog appeared and a decline
+  with `n` worked; Settings save wrote the config live (0600,
+  `tools_enabled=true`, workspace_root=SelfTUI); log redaction clean (0
+  bearer/secret markers).
+- **Finding F1 (medium):** the 22:12 plain-chat-fallback turn narrated a
+  completed `write_file` (`count_to_300.txt`) that **never executed** — no tool
+  event in the log, no file on disk; the on-screen caveat is a transient notice
+  only and the transcript export records the claim uncaveated. Candidate
+  micro-fix (separate session): persist/inline the plain-chat fallback marker.
+- **README staleness discovered (docs fix queued):** README still says
+  transcripts are "not resumable … no import/reload path", contradicting the
+  landed V2a `/resume` flow.
+
+**Commands + exit codes**
+- `make check` → rc 0 (build + tests + vet + fmt); `go test -race -count=1 ./...` → rc 0.
+- `tmux new-session -d -s accept` + launch `./bin/selftui` → rc 0 (app pid
+  3324589; log confirmed clean boot, `version=dev host=localhost:11434`).
+- Evidence reads (transcript/log/config/fs) → rc 0.
+- Session-end commit (docs + LEDGER + PLAN) → rc 0 (see below).
+
+**Decisions / lines to respect**
+- The acceptance record is dated 2026-09-07 (host clock, matching git + fs
+  stamps; same convention as the N8 note — prose is not ahead of git).
+- No code changed by the pass; the doc + this handoff + the PLAN §12 tick ride
+  local `main` (now 4 carried docs commits) to the next feature PR per repo
+  rhythm.
+- Triage for this step: DIRECT host prep/record + owner-executed device walk.
+
+**Blockers / open decisions**
+- **F1** fallback-claim fidelity fix — queued micro-item, owner to schedule.
+- README V2a staleness correction — queued docs fix.
+- N7 continuous watch: unchanged (bubbletea v2.0.9 pinned; #1725 still open).
+- N1 glamour width-bucketing micro-item remains the headless fallback step.
+- Fate of `spike/n8-scrollback`: still the owner's call (safe to delete).
+- Standing owner click: upload the GPG public key
+  (`docs/release-signing-key.asc`, keyid `5F74A36F7B5C1670`) at
+  github.com/settings/keys for the green Verified badge.
+
+**Next action**
+- Fresh session: F1 marker fix or the README V2a docs correction or the N1
+  glamour width-bucketing micro-item; N7 stays continuous watch. The device
+  acceptance next-action (from the N8 session) is now **closed**.
+
+### 2026-09-07 — F1 fallback-marker fix + README V2a staleness correction (device-acceptance follow-up, owner-assigned)
+**Milestone:** owner-assigned step — the two queued micro-items from the device
+acceptance pass, executed together in one session per the owner's message — on branch
+`fix/f1-fallback-marker` off local `main` (`5dee61a`, 6 commits ahead of origin/main;
+carried docs commits ride this branch per repo rhythm). · **Result:** done — both fixes
+implemented, tested, and parent-verified green (implementer + orchestrator pass). No §10
+roadmap row to tick (owner-assigned micro-step); the PLAN §10 acceptance note is
+annotated with the resolution. **No push / PR created — the landing (PR vs main) is the
+owner's call** (see Next action).
+
+**Work done**
+- **F1 fallback-claim fidelity (code + tests):** a plain-chat-fallback turn (runner
+  `agent.FallbackMsg`, only ever emitted at iteration 0 of a tool-armed loop — no tool
+  can have executed in that turn) now commits its assistant content with a persistent
+  inline caveat — `> ⚠ **plain chat** — no tool ran this turn: <reason>` — so the note
+  renders in the conversation, survives the committed-turn render cache, and rides the
+  same content into the `/export` transcript and a later `/resume` reload. The transient
+  statusline notice is preserved. Marker is a markdown blockquote on the content body:
+  no `internal/session` format/parser change. Reason is sanitized (`sanitizeTerminalText`)
+  before it joins the content. Flag lifecycle: set on `FallbackMsg`, consumed at commit,
+  cleared at every `startChat` (no cross-turn leak). Implemented in
+  `internal/ui/agent_view.go` (`plainChatReason` field + `plainChatFallbackNote` helper);
+  +4 tests: `agent_view_test.go` (commit marker + inline render; stale flag cleared at
+  next turn start), `sanitize_test.go` (hostile-reason sanitization), `session_ui_test.go`
+  (end-to-end round trip — real runner fallback over a fake NDJSON stream → in-memory
+  turn → transcript file → `session.Load` reparse; reproduces the `count_to_300.txt`
+  claim).
+- **README V2a staleness correction (docs):** all four "not resumable / no import-reload
+  path" passages corrected to the landed V2a `/resume` flow, honestly v0.1-vs-v0.2
+  scoped (v0.1 shipped no reload path; V2a/v0.2 added `/resume`); `/resume` added to the
+  two slash-command inventories; the plain-SSH drop section now points at `/resume` to
+  reload the dead process's transcript. Every new prose claim (newest-first picker,
+  asks-first on non-empty history, sends refused while loading, fresh per-process
+  transcript, exact "session recording is off — nothing to resume" notice) was verified
+  against code (`agent_view.go` openResume/resumeKey/importSession/applySessionLoaded,
+  `session.ListSessions` ordering) before it landed.
+
+**Commands + exit codes** (final tree, `fix/f1-fallback-marker`; baseline at `5dee61a`
+also green — attribution clean)
+- Baseline: `make check` → rc 0; `go test -race -count=1 ./...` → rc 0.
+- `make check` → rc 0 (build + uncached full suite + vet + gofmt).
+- `go test -race -count=1 ./...` → rc 0.
+- Targeted: `go test ./internal/ui -count=1 -run 'TestAgentFallbackMarker|TestAgentViewFallbackMarkerTranscriptRoundTrip' -v` → 4/4 PASS; `go test ./internal/agent -count=1 -run Fallback -v` → 2/2 PASS.
+- Golden fixtures: **no regeneration needed** — no fallback turn is seeded in goldens;
+  no `internal/ui/testdata/` diffs on the branch.
+
+**Decisions / lines to respect**
+- Marker rides the turn's content body (blockquote), not the header meta — content is
+  what renders, exports, and round-trips through the reader; this avoided any
+  session-format or parser churn.
+- The marker is truthful by construction: both runner `FallbackMsg` sites are guarded by
+  `iteration == 0` (tool-unsupported downgrade; or zero tool calls before any
+  `executeTool`), so "no tool ran this turn" is never emitted for a turn that ran a
+  tool. Tools-off plain chat (no policy) never emits `FallbackMsg` → no fabricated
+  markers on ordinary chats.
+- Fix-forward only: pre-existing transcripts on disk are not retroactively marked
+  (append-only model). A resumed conversation feeds the marker text back to the model as
+  ordinary history — truthful context, accepted (a few tokens).
+- Both queued items shipped in one session per the owner's message; the N1 glamour
+  width-bucketing micro-item stays queued (out of this session's scope).
+
+**Blockers / open decisions**
+- None in the work itself. **Landing is the owner's call:** push `fix/f1-fallback-marker`
+  and open a PR (repo rhythm for code: feature branch → PR, owner merges; the 6 carried
+  docs commits on local main will ride with it) vs commit/push to local main directly.
+- N7 continuous watch unchanged; N1 width-bucketing remains the next queued micro-item.
+
+**Next action**
+- Owner lands the branch (PR recommended per repo rhythm), then: N1 glamour
+  width-bucketing micro-item or the next owner-assigned step; N7 stays continuous watch.
+
+### 2026-09-07 — PR #24 Codex review round: P2 docs qualification patched (owner-assigned follow-up)
+**Milestone:** owner-assigned step in the F1 session chat — monitor PR #24 and debug + patch
+all reviewer comments · **Result:** done — Codex posted 1 finding (P2), triaged, patched,
+pushed, re-review clean ("Didn't find any major issues. Bravo."). No §10 roadmap row (PR
+review round on the open fix branch).
+
+**Work done**
+- Automated Codex review (round 1, `chatgpt-codex-connector` @ 03:53Z, reviewed commit
+  `6c8ace34`) posted 1 inline finding — **P2 on `docs/device-acceptance-2026-09-07.md`**: the
+  summary and verdict claim all 26 scenarios passed/exercised while the table marks
+  SC-25 (clean quit) "not exercised" and SC-26 (drop + reattach) "not re-exercised" —
+  the claim overstated the pass's coverage.
+- **Patch (docs-only, commit `7884f86`):** qualified both claims — scenario summary now
+  reads "24 of the 26 scenarios were exercised live with PASS…" with SC-25/SC-26
+  exclusions stated inline (SC-26 already verified live in M6, `docs/reconnect.md`), and
+  the verdict reads "OVERALL PASS **for the exercised surface** (SC-01…SC-24, plus SC-26
+  carried from its live M6 verification); SC-25… excluded from this pass's verdict".
+- Pushed to `fix/f1-fallback-marker`; re-review triggered via "@codex review" comment;
+  **round 2** (`chatgpt-codex-connector` @ 04:02Z, reviewed commit `7884f86`) →
+  "Codex Review: Didn't find any major issues. Bravo." — no new findings.
+
+**Commands + exit codes**
+- `gh api repos/MerverliPy/SelfTUI/pulls/24/comments` → 1 inline finding (P2); `gh pr comment 24` (address note + `@codex review`) → rc 0.
+- `git commit` + `git push origin fix/f1-fallback-marker` → rc 0 (6c8ace3..7884f86).
+- `gh pr checks 24` → **pass** (Go fmt·vet·test·race·vuln·cross-build, 1m1s) on head `7884f86`; PR `MERGEABLE`, `OPEN`.
+- Monitor poll loop (gh api comments/reviews/reactions) — bounded ~15 min total; aborted once at the 8-min mark by the round-2 verdict landing.
+
+**Decisions / lines to respect**
+- Fix-forward on the PR branch — the acceptance doc rides the carried commits; per the
+  repo's append-only discipline the historical doc gets a corrective commit, not a
+  history rewrite.
+- The round-1 inline thread stays open on GitHub (no thread-resolve endpoint via REST);
+  the addressed state is evidenced by the fix commit + the clean round-2 review.
+- The P2 was on the carried acceptance doc (pre-F1-session content), not on the F1
+  code/README changes — the F1 surface itself drew no findings across both rounds.
+
+**Blockers / open decisions**
+- None. **Next:** owner merges PR #24 (or requests further changes); the N1 glamour
+  width-bucketing micro-item remains queued; N7 stays continuous watch.

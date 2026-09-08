@@ -757,6 +757,14 @@ rotation geometry measurement, post-reconnect probe block `m6-live-1b`).
 landed the set; see LEDGER). Remaining owner click: upload the GPG public
 key at github.com/settings/keys for the green Verified badge.
 
+**PR #23 merged to main (2026-09-08):** `gh pr merge 23 --merge` → merge
+commit `63f589d` (parents `19f4b93` + `7325287`). Branch-protection check
+(`Go fmt · vet · test · race · vuln · cross-build`) PASSED on the merge
+commit; N5 debug/log drawer + the 7/7 PR #22 Codex review fixes are now on
+`origin/main`. Local `main` pulled cleanly (ort merge `7925341`); carried
+docs commits remain local to ride the next PR. Branch
+`feat/n5-pr22-review-fixes` kept (auditable history).
+
 ## 12. Next-level TUI plan — performance · usability · visibility (PROPOSAL, planning-only, 2026-09-07)
 
 Status: **proposal, not committed scope.** Owner-selected v0.2 (V2a–V2d) stays
@@ -896,6 +904,35 @@ TUI owns only input + streaming area. Biggest open trade-off: iPhone SSH clients
 (Blink/Termius) may capture gestures / behave oddly with native scrollback —
 **on-device spike before any commitment**. Cheap alternative if N1 windowing lands:
 stay in altscreen; N8 is optional.
+
+> **SPIKED 2026-09-07 (owner device test on Moshi) — DECLINED.** The naive
+> `tea.Println` native-scrollback pattern does not hold up on the owner's client:
+> the native scroll gesture was **dead** (no usable history to pan) and the frame
+> **repainted in visible bursts** on every turn-land (`insertAbove` buffer scroll
+> + per-tick erase/redraw over SSH). SelfTUI stays in its current renderer; N1
+> windowing (landed) is the plan's cheap alternative and already bounds frame
+> cost. Evidence: throwaway probe `cmd/n8-scrollback-probe` + `docs/n8-device-test.md`
+> on branch `spike/n8-scrollback`; LEDGER 2026-09-07.
+
+> **Device acceptance pass (2026-09-07) — OVERALL PASS ✅.** First live
+> on-device validation of current `main` since the M6 era, walked on the
+> owner's Moshi client (iPhone 16 Pro SSH) at the measured **72×30** over the
+> M7 / v0.2 (V2a·V2c·V2d) / N-series (N1·N2·N4·N5·N6) surface; scenario
+> checklist SC-01…SC-26 all resolved. Evidence:
+> `docs/device-acceptance-2026-09-07.md`. V2c jail enforced live (`echo`/`seq`/
+> git-`push` refused with allowlist errors; agent recovered gracefully); V2d
+> context answered the real branch state; N3 tok/s in every exported turn
+> header. **Finding F1 (medium):** a plain-chat-fallback turn narrated a
+> completed `write_file` that never executed — on-screen caveat is a transient
+> notice only and the export records the claim uncaveated → candidate micro-fix
+> (persist/inline the fallback marker). README's "not resumable" prose is stale
+> vs landed V2a `/resume` (docs fix queued).
+> **Follow-up (2026-09-07, done):** both queued items fixed on
+> `fix/f1-fallback-marker` — F1's persistent fallback marker (content blockquote on
+> plain-chat-fallback turns, round-trips export → `/resume`) and the README V2a
+> `/resume` corrections (4 stale passages + command inventories). Implementer + parent
+> gates green (`make check`, `go test -race -count=1 ./...`). Landing (PR vs main) is
+> the owner's call; LEDGER handoff records the detail.
 
 ### Explicitly rejected / deferred
 - Leader-key two-stroke chords (discoverability at 72×30; palette wins).

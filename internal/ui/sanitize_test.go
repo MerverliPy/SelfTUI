@@ -433,3 +433,23 @@ func TestSanitizeTerminalTextLeavesCleanTextUntouched(t *testing.T) {
 		}
 	}
 }
+
+// TestAgentFallbackMarkerSanitized (F1): the persistent plain-chat note is
+// composed from the fallback reason, which arrives as remote/runner text —
+// a hostile reason must be stripped before it joins the committed markdown
+// body and the rendered conversation.
+func TestAgentFallbackMarkerSanitized(t *testing.T) {
+	v := testAgent(t, nil)
+	v, _ = v.Update(agentModelsLoadedMsg{models: sampleModels()})
+	v.streaming = true
+	v.streamText = "claim"
+	v, _ = v.Update(agent.FallbackMsg{Reason: "plain chat fallback\x1b]52;c;x\x07 \x1b[2J"})
+	v, _ = v.Update(agent.AgentDoneMsg{Err: "", Reason: "stop"})
+	if len(v.turns) != 1 {
+		t.Fatalf("turns = %d, want 1", len(v.turns))
+	}
+	if strings.Contains(v.turns[0].msg.Content, "\x1b") {
+		t.Errorf("hostile fallback reason reached the committed turn content: %q", v.turns[0].msg.Content)
+	}
+	assertCleanOutput(t, v.View(), "plain chat fallback", "no tool ran this turn")
+}

@@ -807,3 +807,85 @@ func TestAgentViewReloadRejectsObsoleteModelList(t *testing.T) {
 			modelNames(v.models), v.model)
 	}
 }
+
+// TestAgentFallbackMarkerCommitsPersistentNote (F1): a plain-chat fallback
+// (agent.FallbackMsg) must not be only a transient statusline notice. The
+// committed assistant turn carries a persistent "no tool ran" caveat inline,
+// so the render, the /export transcript, and a /resume reload of that
+// transcript all surface it — a later reader can never treat a narrated
+// tool claim from a fallback turn as real.
+func TestAgentFallbackMarkerCommitsPersistentNote(t *testing.T) {
+	v := testAgent(t, nil)
+	v, _ = v.Update(agentModelsLoadedMsg{models: sampleModels()})
+
+	// Normal commit (no fallback): content untouched, no marker.
+	v.streaming = true
+	v.streamText = "plain answer"
+	v, _ = v.Update(agent.AgentDoneMsg{Err: "", Reason: "stop"})
+	if len(v.turns) != 1 || v.turns[0].msg.Content != "plain answer" {
+		t.Fatalf("normal commit turn = %+v, want unmarked content", v.turns[0])
+	}
+	if v.plainChatReason != "" {
+		t.Fatal("plainChatReason set without any fallback")
+	}
+
+	// Fallback turn: the caveat rides the committed content.
+	v.streaming = true
+	v.streamText = "I've written the numbers 1 to 300 to count_to_300.txt."
+	v, _ = v.Update(agent.FallbackMsg{Reason: "model returned no tool call; showing plain chat response"})
+	if v.notice == "" {
+		t.Error("fallback should still surface the transient statusline notice")
+	}
+	v, _ = v.Update(agent.AgentDoneMsg{Err: "", Reason: "stop"})
+	if len(v.turns) != 2 {
+		t.Fatalf("turns = %d, want 2", len(v.turns))
+	}
+	got := v.turns[1].msg.Content
+	if !strings.Contains(got, "> ⚠ **plain chat** — no tool ran this turn: model returned no tool call") {
+		t.Errorf("fallback turn content = %q, want the persistent plain-chat note", got)
+	}
+	if !strings.Contains(got, "count_to_300.txt") {
+		t.Errorf("fallback turn content = %q, lost the narrated claim it must caveat", got)
+	}
+	if v.plainChatReason != "" {
+		t.Error("plainChatReason must clear when the turn commits")
+	}
+	// Inline, not a transient statusline: the rendered conversation shows it.
+	out := stripANSI(v.View())
+	if !strings.Contains(out, "no tool ran this turn") {
+		t.Errorf("rendered conversation lacks the marker:\n%s", out)
+	}
+}
+
+// TestAgentFallbackMarkerClearedAtTurnStart (F1): a fallback that produced
+// no content (nothing committed) must not leak its marker into a later
+// turn — startChat resets the in-flight state for every new turn.
+func TestAgentFallbackMarkerClearedAtTurnStart(t *testing.T) {
+	v := testAgent(t, nil)
+	v, _ = v.Update(agentModelsLoadedMsg{models: sampleModels()})
+
+	// Fallback lands but the turn ends with no streamed content: nothing
+	// commits, and the stale reason must not survive into the next turn.
+	v.streaming = true
+	v, _ = v.Update(agent.FallbackMsg{Reason: "model does not support tools; using plain chat"})
+	if v.plainChatReason == "" {
+		t.Fatal("fallback reason not remembered")
+	}
+	v, _ = v.Update(agent.AgentDoneMsg{Err: "boom", Reason: ""})
+	if len(v.turns) != 0 {
+		t.Fatalf("turns = %d, want 0 (empty-content error turn commits nothing)", len(v.turns))
+	}
+	if v.plainChatReason == "" {
+		t.Fatal("empty-content commit must leave the reason for startChat to clear")
+	}
+	// The next turn's startChat resets the in-flight state: the stale reason
+	// must not leak a marker into the new turn's commit. An empty model fails
+	// the runner before any network dial, so the goroutine drains instantly
+	// (model loading above would otherwise have selected the first model).
+	v.model = ""
+	v, _ = v.startChat()
+	drainChat(t, &v)
+	if v.plainChatReason != "" {
+		t.Error("stale plainChatReason survived into the next turn")
+	}
+}
