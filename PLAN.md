@@ -823,7 +823,27 @@ feature — over num_ctx silently truncates). Add background-job pills (pull pro
 queued turns) in Crush style. All content lives in the already-cached status row, so
 frame cost ≈ 0.
 
-### N5 — Debug/log drawer (V)
+### N5 — Debug/log drawer (V) — **LANDED 2026-09-07**
+Landed: new `internal/logsink` package — one redacting shared sink that tees the
+charmbracelet/log output to (a) the file sink and (b) an in-memory ring buffer for the
+UI, so file and drawer can never disagree and `--log-file` cannot bypass redaction
+(registered secret scrubbed first, generic `Bearer <token>` pattern as defense-in-depth
+with a 4-char prose floor; `SetSecret` re-arms when Settings saves a new token).
+`selftui --log-file <path>` flag overrides the XDG `log.txt` default (flags-beat-env
+precedence, flagset-tested). Keybind `ctrl+o` toggles a k9s-style read-only drawer over
+any tab — verified conflict-free across all views; while open it is a modal that owns
+every key (tab/digit-leak regression tests), tail-follows with pgup/pgdn, closes on
+esc/the same key, and `ctrl+p` is blocked over it; a palette *Logs drawer* command is
+the phone-discoverable path. Trace content wired at existing seams: ollama
+request/response (method, path, status, duration, byte size — no bodies) and agent-loop
+decisions (tool call summaries, budget/truncation markers, plain-chat fallback); loggers
+are nil-safe no-ops in tests. 33 new/updated tests (`-race` green). Goldens: drawer
+closed by default → all frames byte-identical (`TestDrawerClosedViewIsByteIdentical`);
+only `palette-compact/wide` grew the one command row (deliberate) + two new
+`agent-logs-drawer-*` fixtures (72×30, 120×40). README documents the flag, keybind, and
+redaction. See LEDGER 2026-09-07.
+
+Spec detail kept for reference:
 Keybind-toggled drawer over `charmbracelet/log`: ollama request/response traces,
 reconnect events, agent loop decisions (tool calls, budget, truncation markers).
 k9s-style pattern; ships with a `selftui --log-file` flag so drawer + file share one

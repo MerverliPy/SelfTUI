@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/log"
+
 	"selftui/internal/ollama"
 )
 
@@ -138,6 +140,71 @@ type Runner struct {
 	// as plain chat. NewRunnerWithPolicy arms the six V2c tools and gates
 	// every requested path with the policy before a tool executes.
 	policy *ToolPolicy
+
+	// logger, when non-nil, receives the N5 debug-drawer traces of the
+	// loop's decisions: plain-chat fallbacks, tool calls (name + bounded
+	// args summary), context budgeting, and budget rejections. It never
+	// carries message bodies, and the shared sink redacts regardless.
+	logger *log.Logger
+}
+
+// WithLogger attaches the shared debug logger (PLAN.md §12 N5). The Agent
+// view re-attaches it after every ApplyConfig runner rebuild, so the
+// drawer keeps following the loop across settings saves. Nil (the
+// default) logs nothing.
+func (r *Runner) WithLogger(l *log.Logger) *Runner {
+	if r != nil {
+		r.logger = l
+	}
+	return r
+}
+
+// logDebug emits one drawer trace line; a nil logger is a no-op.
+func (r *Runner) logDebug(msg string, kv ...any) {
+	if r != nil && r.logger != nil {
+		r.logger.Debug(msg, kv...)
+	}
+}
+
+// logWarn emits one decision-warning line; a nil logger is a no-op.
+func (r *Runner) logWarn(msg string, kv ...any) {
+	if r != nil && r.logger != nil {
+		r.logger.Warn(msg, kv...)
+	}
+}
+
+// budgeted applies the shared context budget and reports the decision to
+// the drawer (N5): a pass that dropped exchanges, shortened content, or
+// inserted the truncation marker is logged with before/after shapes so a
+// silent truncation is never silent in the log.
+func (r *Runner) budgeted(messages []ollama.ChatMessage, numCtx int) []ollama.ChatMessage {
+	out := BudgetMessages(messages, numCtx)
+	if r != nil && r.logger != nil {
+		marked := false
+		for _, m := range out {
+			if m.Content == TruncationNotice {
+				marked = true
+				break
+			}
+		}
+		before, after := approximateTokens(messages), approximateTokens(out)
+		if len(out) != len(messages) || marked || after < before {
+			r.logDebug("agent context budget", "messages_before", len(messages),
+				"messages_after", len(out), "tokens_before", before,
+				"tokens_after", after, "truncated", marked)
+		}
+	}
+	return out
+}
+
+// summarizeToolArgs bounds a tool call's raw arguments for the drawer:
+// full payloads can be 1 MiB, and the log line only needs the shape.
+func summarizeToolArgs(args string) string {
+	const toolArgLogMax = 160
+	if len(args) <= toolArgLogMax {
+		return args
+	}
+	return strings.ToValidUTF8(args[:toolArgLogMax], "\ufffd") + "…"
 }
 
 // NewRunner builds a runner with workspace tools DISABLED. It remains the
@@ -225,7 +292,6 @@ func (r *Runner) run(ctx context.Context, req Request, emit func(Msg), reasonOut
 	if len(tools) == 0 {
 		return r.runPlainChat(ctx, req, messages, req.NumCtx, options, emit, reasonOut, metricsOut)
 	}
-
 	// H-03 run-wide call budget: executedCalls counts every tool executed
 	// across all iterations and is checked per batch before any call runs.
 	executedCalls := 0
@@ -245,7 +311,7 @@ func (r *Runner) run(ctx context.Context, req Request, emit func(Msg), reasonOut
 		streamedLen := 0
 		var lastReason string
 		err := r.client.ChatStream(ctx, ollama.ChatRequest{
-			Model: req.Model, Messages: BudgetMessages(messages, req.NumCtx), Stream: true, Tools: tools, Options: options,
+			Model: req.Model, Messages: r.budgeted(messages, req.NumCtx), Stream: true, Tools: tools, Options: options,
 		}, func(ev ollama.ChatEvent) {
 			// Thinking is relayed to the UI as opaque deltas (N6). It is still
 			// never user-visible output by default and never a valid tool-call
@@ -278,6 +344,7 @@ func (r *Runner) run(ctx context.Context, req Request, emit func(Msg), reasonOut
 		})
 		if err != nil {
 			if iteration == 0 && isToolUnsupported(err) {
+				r.logWarn("agent fallback", "reason", "model does not support tools; using plain chat", "status_error", err.Error())
 				emit(FallbackMsg{Reason: "model does not support tools; using plain chat"})
 				return r.runPlainChat(ctx, req, messages, req.NumCtx, options, emit, reasonOut, metricsOut)
 			}
@@ -292,6 +359,7 @@ func (r *Runner) run(ctx context.Context, req Request, emit func(Msg), reasonOut
 		}
 		if len(calls) == 0 {
 			if iteration == 0 {
+				r.logWarn("agent fallback", "reason", "model returned no tool call; showing plain chat response")
 				emit(FallbackMsg{Reason: "model returned no tool call; showing plain chat response"})
 			}
 			if streamedLen < content.Len() {
@@ -308,10 +376,14 @@ func (r *Runner) run(ctx context.Context, req Request, emit func(Msg), reasonOut
 		// confirmation dialogs or the transcript.
 		for _, call := range calls {
 			if len(call.Function.Arguments) > maxToolArgBytes {
+				r.logWarn("agent tool argument too large", "tool", call.Function.Name,
+					"bytes", len(call.Function.Arguments))
 				return fmt.Errorf("agent: %w", errToolArgumentTooLarge)
 			}
 		}
 		if executedCalls+len(calls) > maxToolCallsPerRun {
+			r.logWarn("agent tool call budget exceeded", "executed", executedCalls,
+				"batch", len(calls), "cap", maxToolCallsPerRun)
 			return fmt.Errorf("agent: %w", errToolCallLimit)
 		}
 		executedCalls += len(calls)
@@ -327,6 +399,9 @@ func (r *Runner) run(ctx context.Context, req Request, emit func(Msg), reasonOut
 			}
 			name := call.Function.Name
 			input := string(call.Function.Arguments)
+			// N5 drawer: the loop's tool-call decision, name + bounded args
+			// summary (the shared sink redacts the configured token).
+			r.logDebug("agent tool call", "tool", name, "args", summarizeToolArgs(input))
 			emit(ToolStartMsg{Name: name, Input: input})
 			result, toolErr := r.executeTool(ctx, call, emit)
 			if toolErr != nil {
@@ -344,6 +419,7 @@ func (r *Runner) run(ctx context.Context, req Request, emit func(Msg), reasonOut
 					return fmt.Errorf("agent: %w", toolErr)
 				}
 				emit(ToolResultMsg{Name: name, OK: false, Summary: toolErr.Error()})
+				r.logWarn("agent tool failed", "tool", name, "err", toolErr.Error())
 				messages = append(messages, ollama.ChatMessage{
 					Role: ollama.RoleTool, ToolName: name,
 					Content: "error: " + toolErr.Error(),
@@ -351,11 +427,13 @@ func (r *Runner) run(ctx context.Context, req Request, emit func(Msg), reasonOut
 				continue
 			}
 			emit(ToolResultMsg{Name: name, OK: true, Summary: result})
+			r.logDebug("agent tool result", "tool", name, "bytes", len(result))
 			messages = append(messages, ollama.ChatMessage{
 				Role: ollama.RoleTool, ToolName: name, Content: result,
 			})
 		}
 	}
+	r.logWarn("agent iteration budget exhausted", "max_iterations", r.maxIterations)
 	return fmt.Errorf("agent: maximum tool iterations (%d) reached", r.maxIterations)
 }
 
@@ -368,7 +446,7 @@ func (r *Runner) runPlainChat(ctx context.Context, req Request, messages []ollam
 		// The plain-chat fallback must honor the same context budget as the
 		// tool loop: a giant first message is truncated, never sent raw
 		// (M6 context-truncation edge).
-		Model: req.Model, Messages: BudgetMessages(messages, numCtx), Stream: true, Options: options,
+		Model: req.Model, Messages: r.budgeted(messages, numCtx), Stream: true, Options: options,
 	}, func(ev ollama.ChatEvent) {
 		if delta := thinkingDelta(ev); delta != "" {
 			emit(ThinkingMsg{Text: delta})

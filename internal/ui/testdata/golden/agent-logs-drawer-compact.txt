@@ -1,0 +1,30 @@
+  Models    Agent    Settings                                           
+╭──────────────────────────────────────────────────────────────────────╮
+│                                                                      │
+│                                                                      │
+│                                                                      │
+│                                                                      │
+│                                                                      │
+│                                                                      │
+│                                                                      │
+│                                                                      │
+│                                                                      │
+│                                                                      │
+│                                                                      │
+│                                                                      │
+│                                                                      │
+│                                                                      │
+│                                                                      │
+│                                                                      │
+│                                                                      │
+ logs — debug (read-only)                                               
+                                                                        
+                                                                        
+                                                                        
+2026-09-07 10:00:00 INF selftui starting version=dev host=http://localh…
+2026-09-07 10:00:01 DEBU ollama request method=GET path=/api/tags statu…
+2026-09-07 10:00:02 DEBU agent tool call tool=grep args="{pattern:needl…
+2026-09-07 10:00:03 DEBU agent context budget messages_before=6 message…
+2026-09-07 10:00:04 WARN ollama request failed method=POST path=/api/ch…
+pgup/pgdn scroll · esc close · ctrl+o toggle                            
+ ⏻ http://localhost:11434 · tools off           Agent · 72x30 · compact 

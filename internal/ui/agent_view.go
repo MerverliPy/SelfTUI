@@ -13,6 +13,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/glamour/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/log"
 
 	"selftui/internal/agent"
 	"selftui/internal/config"
@@ -36,6 +37,11 @@ type AgentView struct {
 	runner *agent.Runner
 	styles Styles
 	dark   bool
+
+	// logger, when non-nil, is the shared debug logger (N5): every runner
+	// rebuild (ApplyConfig) re-attaches it so the drawer keeps following
+	// the loop across settings saves.
+	logger *log.Logger
 
 	// Model selector state (loaded from /api/tags at init; r refreshes).
 	models       []ollama.Model
@@ -310,6 +316,17 @@ func runnerFor(client *ollama.Client, root, systemPrompt string, maxIterations i
 		return agent.NewRunner(client, root, systemPrompt, maxIterations)
 	}
 	return agent.NewRunnerWithPolicy(client, root, systemPrompt, maxIterations, &agent.ToolPolicy{})
+}
+
+// WithLogger attaches the shared debug logger (N5): the current runner is
+// re-armed immediately, and ApplyConfig keeps it across runner rebuilds so
+// the drawer follows the loop across settings saves. Nil clears the trace.
+func (v AgentView) WithLogger(l *log.Logger) AgentView {
+	v.logger = l
+	if v.runner != nil {
+		v.runner = v.runner.WithLogger(l)
+	}
+	return v
 }
 
 // --- messages -------------------------------------------------------------
@@ -3233,6 +3250,9 @@ func (v AgentView) ApplyConfig(cfg config.Config, c *ollama.Client, reload bool)
 	v.host = cfg.Host
 	v.workspace = canonicalWorkspaceLabel(root)
 	v.runner = runnerFor(c, root, cfg.Agent.SystemPrompt, cfg.Agent.MaxToolIterations, cfg.ToolsEnabled)
+	if v.logger != nil {
+		v.runner = v.runner.WithLogger(v.logger)
+	}
 	if !reload {
 		return v, nil
 	}

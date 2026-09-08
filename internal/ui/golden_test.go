@@ -38,6 +38,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"selftui/internal/config"
+	"selftui/internal/logsink"
 	"selftui/internal/ollama"
 	"selftui/internal/session"
 )
@@ -137,12 +138,46 @@ func buildLightFrame(t *testing.T, name string, w, h int) App {
 		return buildAgentResumed(t, w, h)
 	case "palette-compact", "palette-wide":
 		return buildAgentModal(t, w, h, openPalette)
+	case "agent-logs-drawer-compact", "agent-logs-drawer-wide":
+		m := bootLightApp(t, w, h)
+		m = updateTab(t, m, tea.KeyPressMsg{Text: "2"})
+		m = updateTab(t, m, agentEventMsg{msg: agentModelsLoadedMsg{models: sampleModels()}})
+		return seedLogsDrawer(t, m)
 	case "settings-compact", "settings-wide":
 		return buildSettingsEditing(t, w, h)
 	default:
 		t.Fatalf("buildLightFrame: no explicit builder for frame %q — add it before this test can pass", name)
 		return App{}
 	}
+}
+
+// seedLogsDrawer wires a deterministic canned ring into m and opens the
+// logs drawer (ctrl+o): the fixture pins the drawer's render at each
+// geometry. Lines are canned strings shaped like the real entries the N5
+// sink produces (charmbracelet/log text format), written through the sink
+// so they arrive exactly as live entries would.
+func seedLogsDrawer(t *testing.T, m App) App {
+	sink := logsink.New(io.Discard, logsink.NewRing(100), "")
+	for _, l := range []string{
+		"2026-09-07 10:00:00 INF selftui starting version=dev host=http://localhost:11434 theme=dark",
+		"2026-09-07 10:00:01 DEBU ollama request method=GET path=/api/tags status=200 bytes=412 duration_ms=1",
+		"2026-09-07 10:00:02 DEBU agent tool call tool=grep args=\"{pattern:needle,path:x.txt}\"",
+		"2026-09-07 10:00:03 DEBU agent context budget messages_before=6 messages_after=4 truncated=true",
+		"2026-09-07 10:00:04 WARN ollama request failed method=POST path=/api/chat err=\"connection refused\"",
+	} {
+		sink.Write([]byte(l + "\n"))
+	}
+	m = m.WithLog(nil, sink)
+	return updateTab(t, m, tea.KeyPressMsg{Code: 'o', Mod: tea.ModCtrl})
+}
+
+// buildAgentLogsDrawer is the drawer fixture builder: the Agent tab (the
+// every-day surface whose bottom rows the drawer covers) at each geometry.
+func buildAgentLogsDrawer(t *testing.T, w, h int) App {
+	m := bootApp(t, w, h)
+	m = updateTab(t, m, tea.KeyPressMsg{Text: "2"})
+	m = updateTab(t, m, agentEventMsg{msg: agentModelsLoadedMsg{models: sampleModels()}})
+	return seedLogsDrawer(t, m)
 }
 
 func buildModelsCompact(t *testing.T, w, h int) App {
@@ -292,6 +327,7 @@ var goldenFrames = []goldenFrame{
 	{"agent-help-compact", 72, 30, func(t *testing.T, w, h int) App { return buildAgentModal(t, w, h, openHelp) }},
 	{"agent-clear-confirm-compact", 72, 30, func(t *testing.T, w, h int) App { return buildAgentModal(t, w, h, openClearConfirm) }},
 	{"palette-compact", 72, 30, func(t *testing.T, w, h int) App { return buildAgentModal(t, w, h, openPalette) }},
+	{"agent-logs-drawer-compact", 72, 30, buildAgentLogsDrawer},
 	{"settings-compact", 72, 30, buildSettingsEditing},
 	// Wide: PC window.
 	{"models-wide-inspect", 120, 40, buildModelsWideInspect},
@@ -304,6 +340,7 @@ var goldenFrames = []goldenFrame{
 	{"agent-help-wide", 120, 40, func(t *testing.T, w, h int) App { return buildAgentModal(t, w, h, openHelp) }},
 	{"agent-clear-confirm-wide", 120, 40, func(t *testing.T, w, h int) App { return buildAgentModal(t, w, h, openClearConfirm) }},
 	{"palette-wide", 120, 40, func(t *testing.T, w, h int) App { return buildAgentModal(t, w, h, openPalette) }},
+	{"agent-logs-drawer-wide", 120, 40, buildAgentLogsDrawer},
 	{"settings-wide", 120, 40, buildSettingsEditing},
 }
 
@@ -614,6 +651,10 @@ func TestLightThemeRendersEveryTab(t *testing.T) {
 		case "palette-compact", "palette-wide":
 			if !strings.Contains(stripped, "command") && !strings.Contains(stripped, "palette") {
 				t.Errorf("light %s: palette missing command palette content", f.name)
+			}
+		case "agent-logs-drawer-compact", "agent-logs-drawer-wide":
+			if !strings.Contains(stripped, "logs — debug") {
+				t.Errorf("light %s: logs drawer missing the drawer title", f.name)
 			}
 		case "settings-compact", "settings-wide":
 			if !strings.Contains(stripped, "Settings") {

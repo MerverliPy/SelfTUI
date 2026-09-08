@@ -1367,6 +1367,13 @@ func maxInt(a, b int) int {
 	return b
 }
 
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
 // --- M4 live apply: re-theme + client swap --------------------------------
 
 // applyTheme re-tints the Models tab (list chrome, selected-row accent,

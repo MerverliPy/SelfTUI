@@ -5496,3 +5496,55 @@ owner-selected v0.2 set (V2a–V2d). DIRECT execution, zero agents.
 - Fresh session at `/home/calvin/SelfTUI`; next N-item per §12 sequencing:
   **N5 — debug/log drawer** (`charmbracelet/log`, keybind-toggled, shared
   sink via `--log-file`, redact bearer tokens).
+
+## Session — 2026-09-07 (N5): debug/log drawer (orchestrator run)
+
+**Work done**
+- N5 per PLAN §12: `charmbracelet/log` keybind-toggled drawer, `--log-file` shared
+  sink, bearer-token redaction. Delegation note: single implementation lane
+  `developer-tooling-engineer` (mission 5bb7598c, fork context); no VCS actions by
+  the child. Parent independently verified (fresh `gofmt`/`vet`/`make check`/
+  `go test -race`), spot-checked the redaction tests and golden diffs, ticked
+  PLAN §12 N5, committed.
+- Implementation: new `internal/logsink` (redacting tee sink — file writer + ring
+  buffer so file and drawer can never disagree; registered-secret-first redaction +
+  generic `Bearer <tok>` pattern with 4-char prose floor; `SetSecret` re-arms on
+  Settings token change); `--log-file` flag in `cmd/self-tui/main.go` (XDG default
+  unchanged); `ctrl+o` k9s-style read-only drawer in `internal/ui/drawer.go` (modal
+  owns keys, tail-follow, pgup/pgdn, esc/re-toggle closes, `ctrl+p` blocked over it)
+  + palette *Logs drawer* entry as the phone path; nil-safe trace seams in
+  `internal/ollama/client.go`+`stream.go` (method/path/status/duration/bytes, no
+  bodies) and `internal/agent/runner.go` (tool-call summaries, budget/truncation
+  markers, plain-chat fallback) via `WithLogger`/`WithLog` setters; README flag/
+  keybind/redaction docs.
+
+**Commands + exit codes**
+- Parent verification (fresh, after child): `gofmt -l .` → empty (rc 0); `go vet ./...`
+  → clean; `make check` → 0; `go test -race -count=1 ./...` → 0 (all 7 pkgs ok; ui
+  15.0s). 33 new/updated tests (logsink redaction incl. end-to-end "sekrit never in
+  sink", drawer modal/key-leak pins, `--log-file` precedence, ollama/agent traces).
+- Goldens: `palette-compact/wide` grew exactly the one command row (verified via git
+  diff); 2 new `agent-logs-drawer-*` fixtures (72×30, 120×40); all other frames
+  byte-identical, pinned by `TestDrawerClosedViewIsByteIdentical`.
+
+**Decisions / lines to respect**
+- Redaction lives at the single shared sink, not per-consumer — a future second sink
+  or flag cannot leak the token without deliberately bypassing `logsink`.
+- `ctrl+o` chosen (verified conflict-free across app/agent/models/settings; reads as
+  "output"); palette entry preserved as the discoverable phone path per M7 precedent.
+- Drawer is read-only by design: no clearing that would lose file-sink history.
+- N2 contract held: `pendingStream`/60ms tick paths untouched.
+
+**Blockers / open decisions**
+- `make smoke` hits its pre-existing-host guard (harness refuses to delete the
+  already-installed `qwen3:0.6b`); binary built and booted under the pty capture
+  before the guard — no regression signal, same as prior sessions.
+- Local `main` again ahead of `origin/main` (N5 + carried ledger commit). Main is
+  protected — push must ride a PR branch (pattern: PR #22). Awaiting owner push.
+
+**Next action**
+- Fresh session at `/home/calvin/SelfTUI`; next N-item per §12 sequencing:
+  **N7 — upstream tracking** (no code: watch bubbletea v2 for the scroll-optimized
+  flush + event-driven rendering releases, then re-run D4 + scroll benches; glamour
+  width-bucketing micro-item under N1) — continuous/owner-driven; otherwise the
+  owner's pending V2d decision or the N8 on-device spike.

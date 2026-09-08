@@ -5,7 +5,6 @@
                                                                         
                                                                         
                                                                         
-                                                                        
   ╭──────────────────────────────────────────────────────────────────╮  
   │Command palette                                                   │  
   │                                                                  │  
@@ -17,6 +16,7 @@
   │  Clear conversation  wipe the Agent transcript (asks first)      │  
   │  Toggle theme  switch dark ↔ light for this session              │  
   │  Refresh models  reload the model list                           │  
+  │  Logs drawer  toggle the debug log drawer (ctrl+o)               │  
   │  Command list  open the slash-command reference                  │  
   │type to filter · ↑/↓ or j/k move · enter run · esc close          │  
   ╰──────────────────────────────────────────────────────────────────╯  

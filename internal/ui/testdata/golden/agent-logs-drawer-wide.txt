@@ -1,0 +1,40 @@
+  Models    Agent    Settings                                                                                           
+╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+ logs — debug (read-only)                                                                                               
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+2026-09-07 10:00:00 INF selftui starting version=dev host=http://localhost:11434 theme=dark                             
+2026-09-07 10:00:01 DEBU ollama request method=GET path=/api/tags status=200 bytes=412 duration_ms=1                    
+2026-09-07 10:00:02 DEBU agent tool call tool=grep args="{pattern:needle,path:x.txt}"                                   
+2026-09-07 10:00:03 DEBU agent context budget messages_before=6 messages_after=4 truncated=true                         
+2026-09-07 10:00:04 WARN ollama request failed method=POST path=/api/chat err="connection refused"                      
+pgup/pgdn scroll · esc close · ctrl+o toggle                                                                            
+ qwen3:8b · ctx ░░░░░ 0% · ⏻ http://localhost:11434 · tools off · /tmp                            Agent · 120x40 · wide 

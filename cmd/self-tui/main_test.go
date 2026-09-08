@@ -4,11 +4,65 @@ import (
 	"bytes"
 	"errors"
 	"flag"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/adrg/xdg"
 )
+
+// TestLogFilePathPrecedence pins the N5 --log-file contract at the
+// entrypoint boundary, flagset-style (run() owns the process-global set):
+// an explicit --log-file wins verbatim, an empty flag falls back to the XDG
+// state default ($XDG_STATE_HOME/selftui/log.txt), whose parent directory
+// xdg.StateFile creates.
+func TestLogFilePathPrecedence(t *testing.T) {
+	fs := flag.NewFlagSet("selftui-test", flag.ContinueOnError)
+	logFlag := fs.String("log-file", "", "debug log file path")
+	if err := fs.Parse([]string{"-log-file", "/tmp/explicit-selftui.log"}); err != nil {
+		t.Fatalf("parse -log-file: %v", err)
+	}
+	got, err := logFilePath(*logFlag)
+	if err != nil {
+		t.Fatalf("logFilePath(explicit): %v", err)
+	}
+	if got != "/tmp/explicit-selftui.log" {
+		t.Errorf("logFilePath(explicit) = %q, want the flag verbatim", got)
+	}
+
+	// Empty flag value → the XDG state default (config_test's Reload pattern;
+	// the state base has only a home, no dirs).
+	prevHome := xdg.StateHome
+	state := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", state)
+	xdg.StateHome = state
+	xdg.Reload()
+	defer func() {
+		// Reload first (the env still points at the temp dir), then restore
+		// the saved home — the same order config_test's Reload pattern uses.
+		xdg.Reload()
+		xdg.StateHome = prevHome
+	}()
+
+	fs2 := flag.NewFlagSet("selftui-test-default", flag.ContinueOnError)
+	logFlag2 := fs2.String("log-file", "", "debug log file path")
+	if err := fs2.Parse(nil); err != nil {
+		t.Fatalf("parse default: %v", err)
+	}
+	got, err = logFilePath(*logFlag2)
+	if err != nil {
+		t.Fatalf("logFilePath(default): %v", err)
+	}
+	want := filepath.Join(state, "selftui", "log.txt")
+	if got != want {
+		t.Errorf("logFilePath(default) = %q, want %q", got, want)
+	}
+	if _, err := os.Stat(filepath.Dir(want)); err != nil {
+		t.Errorf("log parent dir was not created: %v", err)
+	}
+}
 
 // TestVersionFlagOutputFormat pins the `selftui -version` formatting
 // contract: the printed line is exactly "selftui <Version>\n" whatever
