@@ -6914,3 +6914,7 @@ this session's pre-fix probing).
 
 **Next action**
 - Owner merges PR #36 once CI + Codex re-review are green.
+- **PR #36 re-clearance (2026-09-08, same session):** `@codex review` run on
+  the fix commit — Codex: "Didn't find any major issues. Chef's kiss."
+  (reviewed `dd3a4d6`; 👍 on the PR, evidence comment id 5592562543). CI pass
+  (58s) on the same commit; PR MERGEABLE. Ready for the owner to merge.
