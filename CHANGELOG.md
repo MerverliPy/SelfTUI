@@ -5,6 +5,39 @@ All notable changes to SelfTUI are recorded here. Format follows
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 for tagged releases.
 
+## [0.4.0] - 2026-09-08
+
+### Added
+
+- **Multi-file `write_files` agent tool (V2e)**: the agent can propose a batch
+  of file writes/edits in a single turn, reviewed as an all-or-nothing diff
+  overlay before anything is written — every op is validated at apply time
+  (including a lexical `.git`/sensitive-path refusal that also closes a
+  dialog-only protection gap in the single-file tools), the undo journal entry
+  is written ahead of the changes, and a failed apply triggers compensating
+  rollback. Review overlays stay height-capped at 72×30 and page one file per
+  page (`pgup`/`pgdn`, clamped; page resets on each new review) with the
+  approve decision row always reachable.
+- **Undo/redo journal** (`/undo`, `/redo`): pre-image snapshot per confirmed
+  mutation, aider-style refuse-guards, Claude-Code-style bounds (25 entries,
+  32 MiB total, 8 MiB per file; session-scoped). Undo covers all confirmed
+  mutations; rollback failure stops and retains the entry. Command effects
+  (`run_command`) are never journaled — a documented gap; the refuse-guard
+  names it ("an approved run_command or your own change?").
+- Batch-JSON reliability regression tests pin actionable per-op errors through
+  the `write_files` path (unknown fields, empty ops, wrong kinds, missing
+  per-kind fields, oversized payloads, `.git`/sensitive-path refusals at
+  proposal).
+
+### Fixed
+
+- Batch review paging on mobile (PR #36 Codex review P1): keyboards without
+  PageUp/PageDown — the supported iPhone/SSH path — could not reach files 2..N
+  of a multi-file review. The modal now accepts `↑/↓` or `j`/`k` (the same
+  aliases every other paged view in the repo accepts) and the legend advertises
+  them; `pgup`/`pgdn` remain accepted. One-file batches stay legend-free and
+  key-immune; paging inside the modal cannot leak to tabs or the composer.
+
 ## [0.3.0] - 2026-09-08
 
 ### Changed
