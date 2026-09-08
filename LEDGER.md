@@ -6979,3 +6979,24 @@ Codex re-review was clean ("Didn't find any major issues. Chef's kiss." on
 - Open release PR → CI green → merge → pull main → signed tag `v0.4.0` →
   push → verify `release.yml` SUCCESS + assets (hashes, stamps). Post-tag
   LEDGER addendum + PLAN §12 tick ride the next PR.
+
+**v0.4.0 tagged + published (2026-09-08, same session — post-tag addendum):**
+- `git tag -s v0.4.0 -m "SelfTUI v0.4.0"` on PR #37's merge commit `d11ed63`
+  (tag.gpgsign local config + `user.signingkey 5F74A36F7B5C1670`);
+  `git verify-tag v0.4.0` → **Good signature** (EDDSA); tag pushed.
+- `release.yml` run `34286416628` → **success** (GPG signature verified at the
+  tag, full release gate re-run, version-stamp cross-check tag↔binaries).
+- Release **SelfTUI v0.4.0** published (non-draft, 2026-09-08T22:33:26Z) with
+  `selftui-v0.4.0-linux-amd64.tar.gz`, `selftui-v0.4.0-linux-arm64.tar.gz`,
+  `SHA256SUMS`.
+- Parent verification (fresh download to `/tmp/v040-verify`):
+  `sha256sum -c SHA256SUMS` → both **OK**; extracted amd64 binary
+  `./selftui -version` → `selftui v0.4.0`; release notes body extracted from
+  the CHANGELOG `[0.4.0]` section (release.yml awk extractor).
+- CI on PR #37: required check PASSED (53s). Branch `release/v0.4.0` kept
+  (auditable history, #35/#36 precedent).
+- This PLAN/LEDGER docs commit rides the next PR (branch protection: no direct
+  main pushes).
+- **Next session backlog (owner picks, fresh session):** F-11 cmd coverage
+  (low, optional per AUDIT.md) · §11 risk #5 Ollama job serialization decision
+  · post-release N-series sequencing if the owner prefers feature work.

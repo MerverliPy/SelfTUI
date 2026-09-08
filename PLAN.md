@@ -826,6 +826,19 @@ Local `main` fast-forwarded cleanly (`5dee61a..995f147`); branch
 `fix/f1-fallback-marker` kept (auditable history). N1 glamour width-bucketing
 (round width to 5 cols) remains the queued micro-item under N7.
 
+**v0.4.0 tagged + published (2026-09-08, release-cut session):** owner-selected
+backlog pick (over F-11 cmd coverage and §11 risk #5 serialization, both still
+queued). Content: PR #35 V2e multi-file `write_files` batches + `/undo`//`redo`
+journal; PR #36 residual hardening + Codex P1 mobile-safe paging fix; CHANGELOG
+`[0.4.0]` + release LEDGER entry via PR #37 (CI 53s, merged `d11ed63`). Local
+gate `VERSION=v0.4.0 make release-check` PASSED on the release branch; signed
+tag `v0.4.0` (Ed25519 `5F74A36F…`, `git verify-tag` Good) pushed on the merge
+commit; `release.yml` SUCCESS (signature verified, full gate re-run at the
+tag); release **SelfTUI v0.4.0** published with both archives + `SHA256SUMS` —
+independently downloaded, hashes OK, `selftui v0.4.0` stamp executed. Release
+notes extracted from the CHANGELOG section. Remaining backlog: F-11 (low,
+optional per AUDIT.md) and §11 risk #5 (Ollama job serialization decision).
+
 ## 12. Next-level TUI plan — performance · usability · visibility (PROPOSAL, planning-only, 2026-09-07)
 
 Status: **proposal, not committed scope.** Owner-selected v0.2 (V2a–V2d) stays
