@@ -685,3 +685,57 @@ func TestAtomicWriteRejectsFinalSymlinkSwapAfterValidation(t *testing.T) {
 		t.Errorf("swap symlink was followed or replaced (info=%v, err=%v)", info, lerr)
 	}
 }
+
+// TestUndoRemoveCreatedFileRejectsAncestorSymlinkSwap: /undo of a file the
+// mutation created must not follow an ancestor swapped to a symlink after
+// the journal commit. The refuse-guard reads through the followed path, so
+// an outside copy carrying the recorded post content passes checkPostLocked;
+// the removal itself must fail closed (removeNoFollow) and leave the outside
+// file intact. Mirrors the rollback protection on the same undo primitive.
+func TestUndoRemoveCreatedFileRejectsAncestorSymlinkSwap(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	mustWrite(t, root, "sub/f", "created\n")
+	journal, _ := NewUndoJournal("")
+	e, err := journal.Prepare([]FileRecord{{
+		Requested: "sub/f",
+		Path:      filepath.Join(root, "sub", "f"),
+		Mode:      0o600,
+		Existed:   false,
+		Post:      []byte("created\n"),
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal.Commit(e)
+
+	// Simulate the attacker: move the real sub/ away, point sub/ at the
+	// outside directory, and place an identical-content copy there — the
+	// recorded post content, so the guard alone cannot catch the swap.
+	if err := os.Rename(filepath.Join(root, "sub"), filepath.Join(root, "sub-moved")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "sub")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(outside, "f"), []byte("created\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := journal.Undo(); err == nil {
+		t.Fatal("undo of a created file through a swapped ancestor must be refused")
+	} else if !strings.Contains(err.Error(), "symlink") && !strings.Contains(err.Error(), "not a directory") {
+		// Linux answers O_NOFOLLOW|O_DIRECTORY on a symlink with ENOTDIR;
+		// darwin answers ELOOP. Both must fail closed.
+		t.Fatalf("undo error = %v, want a fail-closed symlink rejection", err)
+	}
+	if got := readFile(t, outside, "f"); got != "created\n" {
+		t.Errorf("undo deleted the outside file through the ancestor swap: %q", got)
+	}
+	if u, _ := journal.Counts(); u != 1 {
+		t.Errorf("undo count = %d, want 1 (refused undo must not pop)", u)
+	}
+	if got := readFile(t, root, "sub-moved/f"); got != "created\n" {
+		t.Errorf("validated created file changed through the swap: %q", got)
+	}
+}
