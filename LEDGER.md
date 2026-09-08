@@ -5774,3 +5774,69 @@ owner-selected v0.2 set (V2a–V2d). DIRECT execution, zero agents.
   doesn't rebuild the renderer) remains the fallback headless step; N7 stays
   continuous watch. Local `main` now carries 3 docs commits (incl. this
   handoff) to ride the next feature PR.
+
+## Session — 2026-09-07 (device acceptance pass on Moshi): OVERALL PASS — first live validation of current `main` since M6 (orchestrator run, owner-executed walk)
+
+**Work done**
+- Owner ran the device acceptance pass of current `main` (`selftui dev` @
+  HEAD `4053190`) on the **Moshi** client (iPhone 16 Pro SSH) at the measured
+  **72×30** compact geometry, inside a pre-started `tmux` session `accept` on
+  the host. Scenario checklist SC-01…SC-26 (written at this session's start,
+  owner + orchestrator) walked the **M7 / v0.2 (V2a resume, V2c sandboxed
+  run_command, V2d workspace context) / N-series (N1 windowing, N2 streaming
+  cadence, N4 status row, N5 log drawer, N6 composer)** surface. **OVERALL
+  PASS**: all scenarios resolved; nothing clipped, no repaint bursts, no
+  decision row pushed off-screen at 72×30. Evidence doc:
+  `docs/device-acceptance-2026-09-07.md`.
+- Host-side readiness + recording by this session (DIRECT, zero agents — the
+  walk itself is owner-run by nature; N8 precedent: on-device verdicts come
+  from the owner's in-person observations, not host tooling). `make check` and
+  `go test -race` green on the tested tree before the pass.
+- Artifact-verified highlights: N3 metrics landed in **every** exported turn
+  header (`· 16.1–48.4s · stop · 56–61 tok/s`); V2d workspace context answered
+  the real branch state (main, ahead of origin/main by 5, clean) and the
+  project index named real `scripts/*.py`; the V2c jail enforced live — `echo`,
+  `seq`, and a non-allowlisted git subcommand (`push`) refused with precise
+  allowlist errors and the agent recovered gracefully; `/export` transcript +
+  `/resume` reload exercised (owner); approve dialog appeared and a decline
+  with `n` worked; Settings save wrote the config live (0600,
+  `tools_enabled=true`, workspace_root=SelfTUI); log redaction clean (0
+  bearer/secret markers).
+- **Finding F1 (medium):** the 22:12 plain-chat-fallback turn narrated a
+  completed `write_file` (`count_to_300.txt`) that **never executed** — no tool
+  event in the log, no file on disk; the on-screen caveat is a transient notice
+  only and the transcript export records the claim uncaveated. Candidate
+  micro-fix (separate session): persist/inline the plain-chat fallback marker.
+- **README staleness discovered (docs fix queued):** README still says
+  transcripts are "not resumable … no import/reload path", contradicting the
+  landed V2a `/resume` flow.
+
+**Commands + exit codes**
+- `make check` → rc 0 (build + tests + vet + fmt); `go test -race -count=1 ./...` → rc 0.
+- `tmux new-session -d -s accept` + launch `./bin/selftui` → rc 0 (app pid
+  3324589; log confirmed clean boot, `version=dev host=localhost:11434`).
+- Evidence reads (transcript/log/config/fs) → rc 0.
+- Session-end commit (docs + LEDGER + PLAN) → rc 0 (see below).
+
+**Decisions / lines to respect**
+- The acceptance record is dated 2026-09-07 (host clock, matching git + fs
+  stamps; same convention as the N8 note — prose is not ahead of git).
+- No code changed by the pass; the doc + this handoff + the PLAN §12 tick ride
+  local `main` (now 4 carried docs commits) to the next feature PR per repo
+  rhythm.
+- Triage for this step: DIRECT host prep/record + owner-executed device walk.
+
+**Blockers / open decisions**
+- **F1** fallback-claim fidelity fix — queued micro-item, owner to schedule.
+- README V2a staleness correction — queued docs fix.
+- N7 continuous watch: unchanged (bubbletea v2.0.9 pinned; #1725 still open).
+- N1 glamour width-bucketing micro-item remains the headless fallback step.
+- Fate of `spike/n8-scrollback`: still the owner's call (safe to delete).
+- Standing owner click: upload the GPG public key
+  (`docs/release-signing-key.asc`, keyid `5F74A36F7B5C1670`) at
+  github.com/settings/keys for the green Verified badge.
+
+**Next action**
+- Fresh session: F1 marker fix or the README V2a docs correction or the N1
+  glamour width-bucketing micro-item; N7 stays continuous watch. The device
+  acceptance next-action (from the N8 session) is now **closed**.

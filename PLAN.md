@@ -914,6 +914,20 @@ stay in altscreen; N8 is optional.
 > cost. Evidence: throwaway probe `cmd/n8-scrollback-probe` + `docs/n8-device-test.md`
 > on branch `spike/n8-scrollback`; LEDGER 2026-09-07.
 
+> **Device acceptance pass (2026-09-07) — OVERALL PASS ✅.** First live
+> on-device validation of current `main` since the M6 era, walked on the
+> owner's Moshi client (iPhone 16 Pro SSH) at the measured **72×30** over the
+> M7 / v0.2 (V2a·V2c·V2d) / N-series (N1·N2·N4·N5·N6) surface; scenario
+> checklist SC-01…SC-26 all resolved. Evidence:
+> `docs/device-acceptance-2026-09-07.md`. V2c jail enforced live (`echo`/`seq`/
+> git-`push` refused with allowlist errors; agent recovered gracefully); V2d
+> context answered the real branch state; N3 tok/s in every exported turn
+> header. **Finding F1 (medium):** a plain-chat-fallback turn narrated a
+> completed `write_file` that never executed — on-screen caveat is a transient
+> notice only and the export records the claim uncaveated → candidate micro-fix
+> (persist/inline the fallback marker). README's "not resumable" prose is stale
+> vs landed V2a `/resume` (docs fix queued).
+
 ### Explicitly rejected / deferred
 - Leader-key two-stroke chords (discoverability at 72×30; palette wins).
 - Mouse capture (keep off; preserve native selection/scroll).
