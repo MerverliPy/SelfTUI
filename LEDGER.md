@@ -5763,8 +5763,14 @@ owner-selected v0.2 set (V2a–V2d). DIRECT execution, zero agents.
   github.com/settings/keys for the green Verified badge.
 
 **Next action**
-- N8 row ticked in PLAN §12. Next code-worthy step: the **N1 glamour
+- N8 row ticked in PLAN §12. **Owner decision (2026-09-07): the next fresh
+  session runs a device acceptance pass of current `main` on Moshi** — the
+  first live on-device validation of the real SelfTUI since the M6-era
+  session, covering the M7 / v0.2 (V2a resume, V2c sandboxed run_command,
+  V2d workspace context) / N-series (N1 windowing, N2 streaming cadence,
+  N4 status row, N5 log drawer, N6 composer) surface at 72×30. No code;
+  scenario checklist to be written at that session's start. The **N1 glamour
   width-bucketing micro-item** (round width to 5 cols so resize jitter
-  doesn't rebuild the renderer) in a fresh session; N7 stays continuous
-  watch. Local `main` now carries 3 docs commits (incl. this handoff) to
-  ride the next feature PR.
+  doesn't rebuild the renderer) remains the fallback headless step; N7 stays
+  continuous watch. Local `main` now carries 3 docs commits (incl. this
+  handoff) to ride the next feature PR.
