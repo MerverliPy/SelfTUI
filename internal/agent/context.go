@@ -53,7 +53,12 @@ func BudgetMessages(messages []ollama.ChatMessage, numCtx int) []ollama.ChatMess
 		return out
 	}
 	limit := numCtx * 3 / 4
-	if approximateTokens(out) <= limit {
+	// total is scanned once and then carried as a running value: eviction
+	// derives every candidate total by subtracting whole dropped exchanges and
+	// boundToLimit adjusts only the message it shortens or compacts, so
+	// re-budgeting a large tool-heavy history never rescan-sums the slice.
+	total := approximateTokens(out)
+	if total <= limit {
 		return out
 	}
 
@@ -87,22 +92,38 @@ func BudgetMessages(messages []ollama.ChatMessage, numCtx int) []ollama.ChatMess
 		// One exchange (or the pinned system alone): there is no older
 		// conversation to omit, so no marker — bound the retained messages in
 		// place instead of ever exceeding the budget.
-		return boundToLimit(out, limit, prefix)
+		return boundToLimit(out, limit, prefix, total)
 	}
 
 	// Drop whole oldest exchanges until the newest suffix fits; the newest
 	// complete exchange is always retained. k is the number of exchanges
-	// dropped; whenever k > 0 the marker is inserted exactly once.
+	// dropped; whenever k > 0 the marker is inserted exactly once. base is the
+	// pinned-prefix token total (walked once); convTail tracks
+	// approximateTokens(out[bounds[k]:]) and is decremented by exactly the one
+	// exchange dropped between candidates, so the whole search is a single
+	// pass over the conversation instead of a full suffix rescan per k.
 	marker := ollama.ChatMessage{Role: ollama.RoleSystem, Content: TruncationNotice}
-	base := approximateTokens(out[:prefix])
+	base := 0
+	for i := 0; i < prefix; i++ {
+		base += tokenOfMessage(out[i])
+	}
+	convTail := total - base // approximateTokens(out[bounds[0]:]) since bounds[0] == prefix
+	markerTokens := tokenOfContent(TruncationNotice)
 	k := 0
 	for ; k < len(bounds); k++ {
-		total := base + approximateTokens(out[bounds[k]:])
+		totalK := base + convTail
 		if k > 0 && !marked {
-			total += tokenOfContent(TruncationNotice)
+			totalK += markerTokens
 		}
-		if total <= limit {
+		if totalK <= limit {
 			break
+		}
+		if k+1 < len(bounds) {
+			// The k-th exchange will be dropped next: subtract its messages
+			// once instead of rescanning the whole remaining suffix.
+			for i := bounds[k]; i < bounds[k+1]; i++ {
+				convTail -= tokenOfMessage(out[i])
+			}
 		}
 	}
 	if k >= len(bounds) {
@@ -110,24 +131,30 @@ func BudgetMessages(messages []ollama.ChatMessage, numCtx int) []ollama.ChatMess
 	}
 	kept := append([]ollama.ChatMessage(nil), out[:prefix]...)
 	convStart := prefix
+	keptTokens := base
 	if k > 0 && !marked {
 		kept = append(kept, marker)
 		convStart++
+		keptTokens += markerTokens
 	}
 	kept = append(kept, out[bounds[k]:]...)
-	if approximateTokens(kept) <= limit {
+	keptTokens += convTail
+	if keptTokens <= limit {
 		return kept
 	}
-	return boundToLimit(kept, limit, convStart)
+	return boundToLimit(kept, limit, convStart, keptTokens)
 }
 
 // boundToLimit deterministically reduces messages that still exceed limit
 // after atomic eviction. messages[:convStart] is the pinned system prefix
 // (the real prompt plus the truncation marker, when one was inserted);
-// messages[convStart:] is the retained newest exchange (or nothing). The
-// caller's slice is never mutated.
-func boundToLimit(messages []ollama.ChatMessage, limit, convStart int) []ollama.ChatMessage {
-	if len(messages) == 0 || approximateTokens(messages) <= limit {
+// messages[convStart:] is the retained newest exchange (or nothing). total is
+// the current approximate-token total of messages; the trimming loop keeps it
+// as a running value, adjusted only where a message is shortened or compacted,
+// so deciding what to shrink never rescan-sums the whole slice. The caller's
+// slice is never mutated.
+func boundToLimit(messages []ollama.ChatMessage, limit, convStart, total int) []ollama.ChatMessage {
+	if len(messages) == 0 || total <= limit {
 		return append([]ollama.ChatMessage(nil), messages...)
 	}
 	work := append([]ollama.ChatMessage(nil), messages...)
@@ -141,23 +168,26 @@ func boundToLimit(messages []ollama.ChatMessage, limit, convStart int) []ollama.
 		return probe
 	}
 
-	for approximateTokens(work) > limit {
+	for total > limit {
 		// (1) Shorten the newest shrinkable conversational Content (user
 		// turns, assistant text, tool results). Newest first, so fresher
 		// content keeps its tail as long as possible.
-		if trimNewestContent(work, limit, convStart, len(work)) {
+		if ok, next := trimNewestContent(work, limit, convStart, len(work), total); ok {
+			total = next
 			continue
 		}
 		// (2) Compact the newest assistant tool-call message whose arguments
 		// exceed the placeholder. Only messages with no Content to trim ever
 		// reach this point (a pure tool_calls message has empty Content).
-		if compactNewestCallArguments(work, convStart) {
+		if ok, next := compactNewestCallArguments(work, convStart, total); ok {
+			total = next
 			continue
 		}
 		// (3) Last resort: shorten the pinned system prompt itself. Its order
 		// is preserved and only an oversized tail gives way; the marker is
 		// never shortened, so the truncation notice stays visible.
-		if trimSystemContent(work, limit, convStart) {
+		if ok, next := trimSystemContent(work, limit, convStart, total); ok {
+			total = next
 			continue
 		}
 		break // genuinely unboundedable at these per-message floors
@@ -185,14 +215,16 @@ func contentTailWithin(content string, maxBytes int) string {
 
 // trimNewestContent shortens the newest message in [lo, hi) whose Content can
 // actually shrink the estimate, using the deterministic "[truncated] " tail
-// convention. It reports whether any message was shortened.
-func trimNewestContent(messages []ollama.ChatMessage, limit, lo, hi int) bool {
+// convention. total is the caller's running approximate-token total of
+// messages. It reports whether any message was shortened and, when it was, the
+// total adjusted by exactly that message's content delta.
+func trimNewestContent(messages []ollama.ChatMessage, limit, lo, hi, total int) (bool, int) {
 	for i := hi - 1; i >= lo; i-- {
 		content := messages[i].Content
 		if content == "" {
 			continue
 		}
-		others := approximateTokens(messages) - tokenOfContent(content)
+		others := total - tokenOfContent(content)
 		room := maxInt(1, limit-others) * 4
 		if len(content) <= room {
 			continue // this message is not the overflow; leave it alone
@@ -203,16 +235,18 @@ func trimNewestContent(messages []ollama.ChatMessage, limit, lo, hi int) bool {
 			continue // no strict decrease at these sizes; try an older message
 		}
 		messages[i].Content = next
-		return true
+		return true, total - tokenOfContent(content) + tokenOfContent(next)
 	}
-	return false
+	return false, total
 }
 
 // compactNewestCallArguments replaces the arguments of the newest assistant
 // tool-call message whose arguments exceed the placeholder, newest first. It
-// reports whether any message was compacted. Call names are preserved so the
-// following role=tool results stay positionally correlated with their calls.
-func compactNewestCallArguments(messages []ollama.ChatMessage, lo int) bool {
+// reports whether any message was compacted and, when it was, the total
+// adjusted by exactly that message's token delta. Call names are preserved so
+// the following role=tool results stay positionally correlated with their
+// calls.
+func compactNewestCallArguments(messages []ollama.ChatMessage, lo, total int) (bool, int) {
 	for i := len(messages) - 1; i >= lo; i-- {
 		msg := messages[i]
 		if len(msg.ToolCalls) == 0 {
@@ -223,21 +257,23 @@ func compactNewestCallArguments(messages []ollama.ChatMessage, lo int) bool {
 			continue // no oversized arguments; nothing to gain
 		}
 		messages[i] = compacted
-		return true
+		return true, total - tokenOfMessage(msg) + tokenOfMessage(compacted)
 	}
-	return false
+	return false, total
 }
 
 // trimSystemContent shortens the newest pinned system message (skipping the
-// truncation marker) whose Content can actually shrink the estimate. It
-// reports whether any message was shortened.
-func trimSystemContent(messages []ollama.ChatMessage, limit, convStart int) bool {
+// truncation marker) whose Content can actually shrink the estimate. total is
+// the caller's running approximate-token total of messages. It reports whether
+// any message was shortened and, when it was, the total adjusted by exactly
+// that message's content delta.
+func trimSystemContent(messages []ollama.ChatMessage, limit, convStart, total int) (bool, int) {
 	for i := convStart - 1; i >= 0; i-- {
 		content := messages[i].Content
 		if content == "" || content == TruncationNotice {
 			continue
 		}
-		others := approximateTokens(messages) - tokenOfContent(content)
+		others := total - tokenOfContent(content)
 		room := maxInt(1, limit-others) * 4
 		if len(content) <= room {
 			continue
@@ -248,9 +284,9 @@ func trimSystemContent(messages []ollama.ChatMessage, limit, convStart int) bool
 			continue
 		}
 		messages[i].Content = next
-		return true
+		return true, total - tokenOfContent(content) + tokenOfContent(next)
 	}
-	return false
+	return false, total
 }
 
 // compactToolCallArguments returns a copy of messages in which every tool-call

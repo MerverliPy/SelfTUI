@@ -505,3 +505,300 @@ func TestTrimTailAlignsToRuneBoundary(t *testing.T) {
 		t.Errorf("tail = %q, want the last 3 full runes %q", got, s[len(s)-9:])
 	}
 }
+
+// --- perf rewrite regression: incremental accounting vs whole-slice rescans
+// (audit concept c1). BudgetMessages used to rescan the whole remaining
+// message slice with approximateTokens for every eviction candidate, and
+// boundToLimit rescan-summed the whole slice on every trimming pass, so
+// re-budgeting a long tool-heavy history was quadratic. The rewrite keeps
+// running totals; the oracle below reimplements the pre-rewrite semantics with
+// full rescans so any behavioral drift in the incremental accounting is
+// caught by direct comparison.
+
+// referenceBudgetMessages reimplements the pre-incremental BudgetMessages
+// semantics exactly: every eviction candidate rescan-sums its whole remaining
+// suffix and the kept suffix is re-summed before the in-place bound. It is
+// intentionally quadratic and exists only as a test oracle.
+func referenceBudgetMessages(messages []ollama.ChatMessage, numCtx int) []ollama.ChatMessage {
+	out := append([]ollama.ChatMessage(nil), messages...)
+	if numCtx <= 0 || len(out) == 0 {
+		return out
+	}
+	limit := numCtx * 3 / 4
+	if approximateTokens(out) <= limit {
+		return out
+	}
+
+	prefix := 0
+	for prefix < len(out) && out[prefix].Role == ollama.RoleSystem {
+		prefix++
+	}
+	marked := prefix > 0 && out[prefix-1].Content == TruncationNotice
+
+	var bounds []int
+	if prefix < len(out) {
+		bounds = append(bounds, prefix)
+	}
+	for i := prefix + 1; i < len(out); i++ {
+		if out[i].Role == ollama.RoleUser {
+			bounds = append(bounds, i)
+		}
+	}
+
+	if len(bounds) <= 1 {
+		return referenceBoundToLimit(out, limit, prefix)
+	}
+
+	marker := ollama.ChatMessage{Role: ollama.RoleSystem, Content: TruncationNotice}
+	base := approximateTokens(out[:prefix])
+	k := 0
+	for ; k < len(bounds); k++ {
+		total := base + approximateTokens(out[bounds[k]:])
+		if k > 0 && !marked {
+			total += tokenOfContent(TruncationNotice)
+		}
+		if total <= limit {
+			break
+		}
+	}
+	if k >= len(bounds) {
+		k = len(bounds) - 1
+	}
+	kept := append([]ollama.ChatMessage(nil), out[:prefix]...)
+	convStart := prefix
+	if k > 0 && !marked {
+		kept = append(kept, marker)
+		convStart++
+	}
+	kept = append(kept, out[bounds[k]:]...)
+	if approximateTokens(kept) <= limit {
+		return kept
+	}
+	return referenceBoundToLimit(kept, limit, convStart)
+}
+
+// referenceBoundToLimit is the pre-incremental boundToLimit: it rescan-sums
+// the whole work slice before every decision and hands each trimming helper a
+// fresh full-slice total (the old helpers recomputed that same value per
+// candidate, since the slice is unchanged during one pass). Trimming
+// decisions and mutations are therefore exactly the old semantics.
+func referenceBoundToLimit(messages []ollama.ChatMessage, limit, convStart int) []ollama.ChatMessage {
+	if len(messages) == 0 || approximateTokens(messages) <= limit {
+		return append([]ollama.ChatMessage(nil), messages...)
+	}
+	work := append([]ollama.ChatMessage(nil), messages...)
+
+	probe := compactToolCallArguments(work)
+	if approximateTokens(probe) <= limit {
+		return probe
+	}
+
+	for approximateTokens(work) > limit {
+		if ok, _ := trimNewestContent(work, limit, convStart, len(work), approximateTokens(work)); ok {
+			continue
+		}
+		if ok, _ := compactNewestCallArguments(work, convStart, approximateTokens(work)); ok {
+			continue
+		}
+		if ok, _ := trimSystemContent(work, limit, convStart, approximateTokens(work)); ok {
+			continue
+		}
+		break
+	}
+	return work
+}
+
+// toolHistoryMessages builds a large tool-heavy conversation: a pinned system
+// message, exchanges whole tool turns (user prompt, assistant read_file call,
+// and its correlated result), then a fresh newest user turn with assistant
+// text. Filler bytes are distinct per exchange and for the newest turn, so
+// dropped content is distinguishable from what the budget must retain.
+func toolHistoryMessages(exchanges, turnBytes int) []ollama.ChatMessage {
+	msgs := []ollama.ChatMessage{sysMsg("pinned system prompt")}
+	for i := 0; i < exchanges; i++ {
+		msgs = append(msgs, toolExchangeMessages(byte('a'+i%26), turnBytes)...)
+	}
+	msgs = append(msgs,
+		userMsg(strings.Repeat("Q", turnBytes/2)),
+		asstMsg(strings.Repeat("Y", turnBytes/4)),
+	)
+	return msgs
+}
+
+// toolExchangeMessages is one user-led tool turn: the user prompt, the
+// assistant tool call, and its correlated role=tool result.
+func toolExchangeMessages(seed byte, turnBytes int) []ollama.ChatMessage {
+	fill := func(b byte, n int) string { return strings.Repeat(string(b), n) }
+	return []ollama.ChatMessage{
+		userMsg(fill(seed, turnBytes)),
+		callToolMsg("read_file", `{"path":"`+fill(seed+1, turnBytes/4)+`"}`),
+		toolResultMsg("read_file", fill(seed+2, turnBytes/2)),
+	}
+}
+
+// checkBudgetMatchesReference fails the test unless BudgetMessages produces
+// exactly what the rescanning reference produces for the same input.
+func checkBudgetMatchesReference(t *testing.T, in []ollama.ChatMessage, numCtx int) []ollama.ChatMessage {
+	t.Helper()
+	got := BudgetMessages(in, numCtx)
+	if want := referenceBudgetMessages(in, numCtx); !reflect.DeepEqual(got, want) {
+		t.Fatalf("BudgetMessages diverged from the rescanning reference:\n got: %+v\nwant: %+v", got, want)
+	}
+	return got
+}
+
+// TestBudgetMessagesMatchesReference locks the incremental-accounting rewrite
+// to the exact pre-rewrite semantics across every phase: under-budget
+// passthrough, zero/negative budgets, whole-exchange eviction (with and
+// without an already-present marker), in-place bounding of a lone oversized
+// exchange, argument compaction and content trimming inside boundToLimit, and
+// large tool-heavy histories.
+func TestBudgetMessagesMatchesReference(t *testing.T) {
+	sys := sysMsg("s")
+	big := func(n int) string { return strings.Repeat("x", n) }
+	bigR := func(n int) string { return strings.Repeat("r", n) }
+
+	hugeNewest := append(toolHistoryMessages(20, 300),
+		userMsg(strings.Repeat("N", 20000)), asstMsg(strings.Repeat("M", 20000)))
+	markedHistory := BudgetMessages(toolHistoryMessages(40, 400), budgetLimitFor(3000))
+
+	cases := []struct {
+		name   string
+		in     []ollama.ChatMessage
+		numCtx int
+	}{
+		{name: "under budget", in: []ollama.ChatMessage{sys, userMsg("hi"), asstMsg("yo")}, numCtx: 4096},
+		{name: "empty history", in: nil, numCtx: 4096},
+		{name: "no budget", in: []ollama.ChatMessage{sys, userMsg(big(10000))}, numCtx: 0},
+		{name: "negative budget", in: []ollama.ChatMessage{sys, userMsg(big(10000))}, numCtx: -8},
+		{name: "single huge user turn", in: []ollama.ChatMessage{sysMsg("short system"), userMsg(big(20000))}, numCtx: 64},
+		{name: "lone huge user turn", in: []ollama.ChatMessage{userMsg(big(20000))}, numCtx: 64},
+		{name: "huge system prompt bounded", in: []ollama.ChatMessage{sysMsg(big(20000)), userMsg("go")}, numCtx: budgetLimitFor(48)},
+		{name: "tiny num_ctx", in: []ollama.ChatMessage{userMsg(big(1000))}, numCtx: budgetLimitFor(6)},
+		{name: "older tool exchange evicted atomically", in: []ollama.ChatMessage{sys, userMsg(big(400)), callToolMsg("read_file", `{"path":"/old"}`), toolResultMsg("read_file", bigR(400)), userMsg("next"), asstMsg("ok")}, numCtx: budgetLimitFor(150)},
+		{name: "oversized retained tool args compacted", in: []ollama.ChatMessage{sys, userMsg(big(80)), callToolMsg("write_file", `{"content":"`+big(4000)+`"}`), toolResultMsg("write_file", "wrote /x")}, numCtx: budgetLimitFor(150)},
+		{name: "oversized newest result trimmed", in: []ollama.ChatMessage{sys, userMsg(big(80)), callToolMsg("read_file", `{"path":"/x"}`), toolResultMsg("read_file", bigR(2000))}, numCtx: budgetLimitFor(300)},
+		{name: "large tool history heavy eviction", in: toolHistoryMessages(60, 400), numCtx: budgetLimitFor(3000)},
+		{name: "all exchanges dropped, newest oversized", in: hugeNewest, numCtx: budgetLimitFor(4000)},
+		{name: "re-budget an already-marked history", in: markedHistory, numCtx: budgetLimitFor(3000)},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			checkBudgetMatchesReference(t, tc.in, tc.numCtx)
+		})
+	}
+}
+
+// TestBudgetMessagesLargeToolHistory exercises re-budgeting of a large
+// tool-heavy conversation — the exact case that used to rescan the whole
+// message slice per eviction candidate. The result must stay inside the 3/4
+// budget, stay a fixed point of BudgetMessages, and keep agreeing with the
+// rescanning reference on every pass while the runner appends new tool turns.
+func TestBudgetMessagesLargeToolHistory(t *testing.T) {
+	hist := toolHistoryMessages(60, 400) // ~10.9k approximate tokens
+	numCtx := budgetLimitFor(3000)
+	limit := 3000
+
+	got := checkBudgetMatchesReference(t, hist, numCtx)
+	checkBudgetInvariants(t, got, limit, true)
+	if n := ApproxTokens(got); n > limit {
+		t.Errorf("output over the 3/4 budget: ApproxTokens = %d > limit %d", n, limit)
+	}
+	if !contentPresent(got, TruncationNotice) {
+		t.Errorf("no truncation marker after evicting a large tool history")
+	}
+	if last := got[len(got)-1]; last.Content != strings.Repeat("Y", 100) {
+		t.Errorf("newest assistant text not retained whole: %q", last.Content)
+	}
+
+	// The runner re-budgets the same (growing) history every iteration: each
+	// appended tool turn must re-budget identically to the rescanning oracle.
+	cur := hist
+	for i := 0; i < 5; i++ {
+		cur = append(cur, toolExchangeMessages(byte('A'+i), 400)...)
+		cur = checkBudgetMatchesReference(t, cur, numCtx)
+		checkBudgetInvariants(t, cur, limit, false)
+	}
+	if again := BudgetMessages(cur, numCtx); !reflect.DeepEqual(again, cur) {
+		t.Errorf("result is not a fixed point of BudgetMessages after re-budgeting")
+	}
+}
+
+// TestBudgetMessagesPreservesAtomicToolExchange: with the over-budget region
+// spanning many tool turns, eviction must drop whole user-led exchanges — no
+// lone assistant call, no orphan role=tool result, no retained history that
+// begins mid-exchange — and must match the rescanning reference.
+func TestBudgetMessagesPreservesAtomicToolExchange(t *testing.T) {
+	hist := toolHistoryMessages(90, 500)
+	numCtx := budgetLimitFor(2500)
+	limit := 2500
+
+	got := checkBudgetMatchesReference(t, hist, numCtx)
+	checkBudgetInvariants(t, got, limit, true)
+
+	// Retained history must start at an exchange boundary: right after the
+	// pinned system prefix (the truncation marker included) the first
+	// conversational message is a user turn, never an assistant call or an
+	// orphan tool result.
+	conv := 0
+	for conv < len(got) && got[conv].Role == ollama.RoleSystem {
+		conv++
+	}
+	if conv >= len(got) {
+		t.Fatalf("nothing retained after the pinned system prefix")
+	}
+	if got[conv].Role != ollama.RoleUser {
+		t.Fatalf("retained history starts mid-exchange at %d: %+v", conv, got[conv])
+	}
+	if !contentPresent(got, TruncationNotice) {
+		t.Errorf("no marker although older tool exchanges were evicted")
+	}
+	// Every retained assistant tool call still has its correlated result, and
+	// no result survives its call: eviction never splits a tool turn.
+	calls, results := 0, 0
+	for _, m := range got {
+		if m.Role == ollama.RoleAssistant && len(m.ToolCalls) > 0 {
+			calls++
+		}
+		if m.Role == ollama.RoleTool {
+			results++
+		}
+	}
+	if calls != results {
+		t.Errorf("tool turn split by eviction: %d calls retained but %d results", calls, results)
+	}
+	if got[len(got)-1].Content != strings.Repeat("Y", 125) {
+		t.Errorf("newest exchange not retained whole: %q", got[len(got)-1].Content)
+	}
+}
+
+// benchBudgetSink keeps benchmark outputs reachable so the compiler cannot
+// eliminate the measured call.
+var benchBudgetSink []ollama.ChatMessage
+
+// BenchmarkBudgetMessagesLargeToolHistory measures re-budgeting a ~1.8k
+// message tool-heavy history that forces eviction of most older exchanges
+// (the case that used to rescan the whole remaining slice per candidate).
+func BenchmarkBudgetMessagesLargeToolHistory(b *testing.B) {
+	history := toolHistoryMessages(600, 500)
+	numCtx := budgetLimitFor(30000)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		benchBudgetSink = BudgetMessages(history, numCtx)
+	}
+}
+
+// BenchmarkBudgetMessagesLargeToolHistoryReference times the pre-rewrite
+// semantics (whole-slice rescans) on the same history, so the perf claim is
+// measurable against the oracle.
+func BenchmarkBudgetMessagesLargeToolHistoryReference(b *testing.B) {
+	history := toolHistoryMessages(600, 500)
+	numCtx := budgetLimitFor(30000)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		benchBudgetSink = referenceBudgetMessages(history, numCtx)
+	}
+}
