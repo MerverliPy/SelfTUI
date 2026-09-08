@@ -39,6 +39,12 @@ grep "linux-${ARCH}" SHA256SUMS | sha256sum -c -
 tar -xzf "selftui-${VER}-linux-${ARCH}.tar.gz" && ./selftui
 ```
 
+Got the Go toolchain? One command installs the same release:
+
+```sh
+go install github.com/MerverliPy/SelfTUI/cmd/self-tui@latest
+```
+
 Prefer to build from source? See
 [Build & run](#build--run) — `make build` → `bin/selftui`.
 
