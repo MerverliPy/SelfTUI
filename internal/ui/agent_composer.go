@@ -208,12 +208,15 @@ func (v AgentView) batchKey(k tea.Key) (AgentView, tea.Cmd) {
 		b.Respond(false)
 		v.notice = "declined batch"
 		v.batchReview = nil
-	case k.Code == tea.KeyPgUp:
-		// One file per page: paging back clamps at the first file.
+	case k.Code == tea.KeyPgUp || k.Text == "k" || k.Code == tea.KeyUp:
+		// One file per page: paging back clamps at the first file. j/k and
+		// ↑/↓ are the same mobile-safe aliases every other paged view
+		// accepts (Codex P1: phone keyboards without PageUp/PageDown must
+		// still reach files 2..N before y can apply the batch).
 		if v.batchPage > 0 {
 			v.batchPage--
 		}
-	case k.Code == tea.KeyPgDown:
+	case k.Code == tea.KeyPgDown || k.Text == "j" || k.Code == tea.KeyDown:
 		// paging forward clamps at the last file.
 		if v.batchPage+1 < len(b.Files) {
 			v.batchPage++

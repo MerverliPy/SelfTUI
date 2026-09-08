@@ -69,7 +69,7 @@ func TestBatchReviewOverlayRendersAndApproves(t *testing.T) {
 	v := pendingBatchReviewView(t)
 	out := stripANSI(v.View())
 	// Page 1 of 2 shows the first file (a.txt create) with the page indicator.
-	for _, want := range []string{"Review write_files batch", "file 1/2", "a.txt", "hello", "y / enter apply all · n / esc decline · pgup/pgdn"} {
+	for _, want := range []string{"Review write_files batch", "file 1/2", "a.txt", "hello", "y / enter apply all · n / esc decline · pgup/pgdn · ↑/↓ or j/k"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("batch overlay missing %q:\n%s", want, out)
 		}
@@ -92,6 +92,17 @@ func TestBatchReviewOverlayRendersAndApproves(t *testing.T) {
 	}
 	if strings.Contains(out, "a.txt") {
 		t.Errorf("page 2 must show only the second file, still showing a.txt:\n%s", out)
+	}
+
+	// Mobile-safe aliases (Codex P1): k pages back, Down pages forward —
+	// the same ↑/↓ or j/k pattern every other paged view accepts.
+	v, _ = v.Update(tea.KeyPressMsg{Text: "k"})
+	if v.batchPage != 0 {
+		t.Fatalf("k did not page back: batchPage = %d, want 0", v.batchPage)
+	}
+	v, _ = v.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	if v.batchPage != 1 {
+		t.Fatalf("Down did not page forward: batchPage = %d, want 1", v.batchPage)
 	}
 
 	// y approves the whole batch (all pages); the runner applies both files.
@@ -407,7 +418,77 @@ func TestBatchReviewEmptyFilesRendersDeclineShell(t *testing.T) {
 	if v.batchPage != 0 {
 		t.Errorf("pgdn on an empty batch moved the page: %d", v.batchPage)
 	}
+	for _, key := range []tea.KeyPressMsg{{Text: "j"}, {Text: "k"}, {Code: tea.KeyDown}, {Code: tea.KeyUp}} {
+		v, _ = v.Update(key)
+		if v.batchPage != 0 {
+			t.Errorf("alias %v on an empty batch moved the page: %d", key, v.batchPage)
+		}
+	}
 	if v.batchReview == nil {
-		t.Fatal("pgdn must not dismiss the review")
+		t.Fatal("paging keys must not dismiss the review")
+	}
+}
+
+// TestBatchReviewAliasPagingWalksAllFiles pins the Codex P1 fix: the j/k and
+// ↑/↓ aliases (the repo-wide paged-view pattern) reach every file of the
+// batch without PageUp/PageDown, so a phone keyboard can inspect files 2..N
+// before y applies the whole set. Aliases clamp at both ends.
+func TestBatchReviewAliasPagingWalksAllFiles(t *testing.T) {
+	v := testAgent(t, nil)
+	mk := func(path string) agent.BatchFileReview {
+		return agent.BatchFileReview{Path: path, Kind: "create", Summary: "A " + path, Rows: []string{"+one"}}
+	}
+	v.batchReview = &agent.BatchReviewMsg{
+		Name:      "write_files",
+		Workspace: "/tmp",
+		Timeout:   120 * time.Second,
+		Files:     []agent.BatchFileReview{mk("1.go"), mk("2.go"), mk("3.go"), mk("4.go")},
+	}
+	// j alone walks page 1 to the last page.
+	for want := 1; want <= 3; want++ {
+		v, _ = v.Update(tea.KeyPressMsg{Text: "j"})
+		if v.batchPage != want {
+			t.Fatalf("j walk: batchPage = %d, want %d", v.batchPage, want)
+		}
+	}
+	// j clamps at the last page; the modal stays open.
+	v, _ = v.Update(tea.KeyPressMsg{Text: "j"})
+	if v.batchPage != 3 || v.batchReview == nil {
+		t.Fatalf("j past the last page must clamp: page=%d modal=%v", v.batchPage, v.batchReview != nil)
+	}
+	// Up arrow and k walk back to page 1.
+	v, _ = v.Update(tea.KeyPressMsg{Code: tea.KeyUp})
+	v, _ = v.Update(tea.KeyPressMsg{Code: tea.KeyUp})
+	v, _ = v.Update(tea.KeyPressMsg{Text: "k"})
+	if v.batchPage != 0 {
+		t.Fatalf("Up/k walk back: batchPage = %d, want 0", v.batchPage)
+	}
+	if out := stripANSI(v.View()); !strings.Contains(out, "file 1/4") {
+		t.Errorf("back on page 1, missing indicator:\n%s", out)
+	}
+}
+
+// TestBatchReviewSingleFileAliasesHarmless: a one-file batch has nothing to
+// page, so the legend must not advertise paging and every paging key (alias
+// or not) is a no-op that keeps the review pending.
+func TestBatchReviewSingleFileAliasesHarmless(t *testing.T) {
+	v := testAgent(t, nil)
+	v.batchReview = &agent.BatchReviewMsg{
+		Name:      "write_files",
+		Workspace: "/tmp",
+		Timeout:   120 * time.Second,
+		Files:     []agent.BatchFileReview{{Path: "only.go", Kind: "create", Summary: "A only.go", Rows: []string{"+one"}}},
+	}
+	for _, key := range []tea.KeyPressMsg{
+		{Text: "j"}, {Text: "k"}, {Code: tea.KeyUp}, {Code: tea.KeyDown},
+		{Code: tea.KeyPgUp}, {Code: tea.KeyPgDown},
+	} {
+		v, _ = v.Update(key)
+		if v.batchPage != 0 || v.batchReview == nil {
+			t.Fatalf("single-file batch must ignore %v: page=%d modal=%v", key, v.batchPage, v.batchReview != nil)
+		}
+	}
+	if out := stripANSI(v.View()); strings.Contains(out, "j/k") || strings.Contains(out, "pgup/pgdn") {
+		t.Errorf("single-file legend must not advertise paging:\n%s", out)
 	}
 }

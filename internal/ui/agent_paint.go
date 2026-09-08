@@ -412,7 +412,7 @@ func (v AgentView) renderBatchReviewOverlay(bodyH int) string {
 	lines = append(lines, "")
 	legend := "y / enter apply all · n / esc decline"
 	if len(b.Files) > 1 {
-		legend += " · pgup/pgdn"
+		legend += " · pgup/pgdn · ↑/↓ or j/k"
 	}
 	lines = append(lines, legend+" · window "+b.Timeout.String())
 	return v.renderOverlayTitle(bodyH, "Review write_files batch", lines)

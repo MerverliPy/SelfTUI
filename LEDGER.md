@@ -6870,3 +6870,47 @@ this session's pre-fix probing).
   the next step from the §10/§12 backlog (remaining candidates: release cut
   for the post-v0.3.0 work, F-11 low-severity cmd coverage, §11 risk #5
   serialization decision).
+
+## Session — 2026-09-08 (PR #36 review fix): Codex P1 — mobile-safe batch page aliases (orchestrator run, DIRECT)
+
+**Work done**
+- Owner-assigned task: monitor PR #36 reviewer comments and fix each with a
+  critically planned, validated solution. CI passed at open; the Codex review
+  landed one **P1** on `internal/ui/agent_composer.go` (batchKey): on the
+  supported iPhone/SSH path, keyboards without PageUp/PageDown cannot reach
+  files 2..N — the modal owns all input, arrows/j/k were swallowed, while `y`
+  still applies the whole batch. Claim parent-verified against HEAD before
+  planning (batchKey had exactly y/n/esc + pgup/pgdn cases).
+- Fix (reviewer's stated intent, followed exactly): accept **the same aliases
+  the repo's other paged views accept** — `k.Text == "k" || k.Code == tea.KeyUp`
+  (prev) and `k.Text == "j" || k.Code == tea.KeyDown` (next), the byte-identical
+  comparison pattern of agent_menu.go:260/265 and agent_session.go:203/207. No
+  invented aliases (no h/l, no Left/Right — accepted by no paged view here).
+  Legend now advertises `↑/↓ or j/k` (repo-wide phrasing: palette.go:181,
+  agent_paint.go:492/587, agent_menu.go:365); pgup/pgdn stay accepted.
+- Validation: `TestBatchReviewAliasPagingWalksAllFiles` proves `j` alone walks
+  page 1→4/4 with clamps (files 2..N reachable without paging keys — the
+  reviewer's requirement); `TestBatchReviewOverlayRendersAndApproves` covers
+  k/Down movement + legend; `TestBatchReviewSingleFileAliasesHarmless` keeps
+  one-file batches legend-free and key-immune; empty-batch shell ignores
+  aliases; routing regression proves Up/j page inside the modal without
+  leaking to tabs/composer; y/n/esc flow unchanged.
+- Goldens: only the 4 batch-review frames regenerated (legend row gained
+  `· ↑/↓ or j/k`, wrapping to 2 rows at 72 cols); all other frames untouched.
+
+**Commands + exit codes**
+- `go test ./internal/ui -run 'TestBatchReview' -count=1` → ok (8/8 batch tests).
+- `go test ./internal/ui -run TestGoldenRender -update` → ok (4 batch frames only).
+- `make check` → exit 0; `go test -race ./... -count=1` → exit 0; `gofmt -l` → clean.
+
+**Decisions / lines to respect**
+- Aliases are exactly the other paged views' set — do not add more key
+  families to the batch modal without a repo-convention change.
+- The fix rides PR #36's branch (PR #22 precedent: Codex review fixes land as
+  commits on the PR branch).
+
+**Blockers / open decisions**
+- None.
+
+**Next action**
+- Owner merges PR #36 once CI + Codex re-review are green.

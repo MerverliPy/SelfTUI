@@ -7,7 +7,6 @@
                                                                         
                                                                         
                                                                         
-                                                                        
   ╭──────────────────────────────────────────────────────────────────╮  
   │Review write_files batch                                          │  
   │                                                                  │  
@@ -16,7 +15,8 @@
   │-old four                                                         │  
   │+new four                                                         │  
   │                                                                  │  
-  │y / enter apply all · n / esc decline · pgup/pgdn · window 2m0s   │  
+  │y / enter apply all · n / esc decline · pgup/pgdn · ↑/↓ or j/k ·  │  
+  │window 2m0s                                                       │  
   ╰──────────────────────────────────────────────────────────────────╯  
                                                                         
                                                                         

@@ -22,7 +22,7 @@
   │-if err := ctx.Err(); err != nil {                                                                                │  
   │+if err := ctx.Err(); err != nil { return err }                                                                   │  
   │                                                                                                                  │  
-  │y / enter apply all · n / esc decline · pgup/pgdn · window 2m0s                                                   │  
+  │y / enter apply all · n / esc decline · pgup/pgdn · ↑/↓ or j/k · window 2m0s                                      │  
   ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯  
                                                                                                                         
                                                                                                                         

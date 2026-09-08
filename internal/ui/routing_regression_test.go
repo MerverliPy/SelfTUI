@@ -233,6 +233,16 @@ func TestAppRoutingBatchReviewApprovesAndJournals(t *testing.T) {
 	if m.tab != agentTab {
 		t.Fatalf("pgdn switched the tab to %d", m.tab)
 	}
+	// Mobile-safe aliases stay modal-owned too: Up pages back, j pages
+	// forward, and neither leaks to the composer, transcript, or tabs.
+	m = updateTab(t, m, tea.KeyPressMsg{Code: tea.KeyUp})
+	if m.agent.batchReview == nil || m.agent.batchPage != 0 {
+		t.Fatalf("Up must page back inside the batch modal (page=%d review=%v)", m.agent.batchPage, m.agent.batchReview != nil)
+	}
+	m = updateTab(t, m, tea.KeyPressMsg{Text: "j"})
+	if m.agent.batchReview == nil || m.agent.batchPage != 1 || m.tab != agentTab {
+		t.Fatalf("j must page inside the batch modal without leaking (page=%d tab=%d review=%v)", m.agent.batchPage, m.tab, m.agent.batchReview != nil)
+	}
 	m = updateTab(t, m, tea.KeyPressMsg{Text: "y"}) // approve all
 	for i := 0; i < 30 && m.agent.streaming; i++ {
 		m = pumpAgent(t, &m)
