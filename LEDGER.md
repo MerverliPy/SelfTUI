@@ -7044,3 +7044,88 @@ Codex re-review was clean ("Didn't find any major issues. Chef's kiss." on
 **Next action**
 - Owner: review the packet and merge or discard the two candidate branches. This
   docs commit rides the next PR (branch protection: no direct main pushes).
+
+---
+
+## 2026-09-08 — owner decision on packet `as-20260908-175037` (merge c1 + c2, keep local)
+
+**Work done**
+- Orchestrator session (DIRECT triage, zero agents): read the canonical human-review
+  packet `/tmp/audit-squad-as-20260908-175037/HUMAN-REVIEW.md` (located via ledger
+  cross-reference; no repo-local copy exists; two older packets superseded), and
+  verified its branch claims against the repo before the decision was taken.
+- Interactive owner questionnaire on the packet's pending decisions
+  (c1 merge/discard, c2 merge/discard, landing, execution mode).
+
+**Commands + exit codes**
+- `fd -H -I 'HUMAN-REVIEW'` (repo: none; /tmp + ~/.pi + ~/.agents: 3 audit-squad
+  packets) → located; `diff -q` newest vs older packets → differ (exit 1,
+  informational — confirmed newest is canonical via ledger tail).
+- `git branch -v --list 'audit-squad/*'` → `audit-squad/c1 4afeaf7`,
+  `audit-squad/c2 8527d23` (exit 0; SHAs match the packet exactly).
+- `git status --porcelain` → empty before append (exit 0).
+
+**Decisions (owner, 2026-09-08, via questionnaire)**
+- c1 perf (`audit-squad/c1` @ `4afeaf7`): **MERGE**.
+- c2 security (`audit-squad/c2` @ `8527d23`): **MERGE**.
+- Landing: **keep local** — nothing pushed to origin (repo convention; owner pushes later).
+- Execution: **fresh session** per one-step-per-session governance — the merges +
+  canonical gates run in a new session; this LEDGER append stays uncommitted and
+  rides the next PR (branch protection: no direct main pushes).
+
+**Blockers / open decisions**
+- None from this session. Packet caveats remain attached to the candidates: c1's
+  speedup is not formally benchmarked (differential tests pin semantics only);
+  c2's FS-race hardening has irreducible edge cases (mount points, multi-actor swaps).
+
+**Next action**
+- Fresh session (cwd = repo root): `git merge audit-squad/c1` then
+  `git merge audit-squad/c2` (disjoint diffs — order not load-bearing), run the full
+  canonical gate from real output, keep both branches per convention, do not push,
+  and record the merged SHAs in the handoff.
+
+---
+
+## 2026-09-08 — merges executed: audit-squad/c1 + c2 → main; gate PASSED (owner task)
+
+**Work done**
+- Orchestrator session (DIRECT triage, zero agents — merges + canonical gate are
+  parent-local sequential work with one writer). Read both candidate diffs in full
+  before merging: c1 = incremental token accounting in `BudgetMessages`/`boundToLimit`
+  (running totals replace rescan-sums; internal signatures only; +297 lines of
+  differential tests); c2 = descriptor-relative write hardening (`openDirChain`
+  O_NOFOLLOW walk, fd-relative `renameat`, final-component `fstatat(AT_SYMLINK_NOFOLLOW)`
+  re-check, `removeNoFollow` for rollback; imports `golang.org/x/sys/unix` — verified
+  already a direct requirement in go.mod, no dependency drift).
+- Pre-merge overlap check: zero files shared between the two diffs → conflict-free.
+- Merged c1 then c2 into main (ort strategy, no conflicts); kept both branches at
+  their original SHAs; nothing pushed to origin (owner pushes later per convention).
+
+**Commands + exit codes**
+- `git diff --stat main...audit-squad/c{1,2}` + `comm -12` overlap check → disjoint (exit 0).
+- `git show audit-squad/c2:go.mod | rg x/sys` → `golang.org/x/sys v0.47.0` present (exit 0).
+- `git merge --no-edit audit-squad/c1` → merge commit `64b82d3` (exit 0).
+- `git merge --no-edit audit-squad/c2` → merge commit `4fa7636` (exit 0).
+- `make check` (build + test -count=1 + vet + fmt) → exit 0; all pkgs `ok`,
+  internal/agent 8.744s (new c1/c2 tests included), internal/ui 7.770s.
+- `make race` (`go test -race -count=1 ./...`) → exit 0; all pkgs `ok`.
+- `git branch -v --list 'audit-squad/*'` → c1 @ `4afeaf7`, c2 @ `8527d23` unchanged (exit 0).
+- Final state: main ahead of origin/main by 6 commits (2 prior docs + 2 branch heads
+  + 2 merge commits); working tree clean after this entry's commit.
+
+**Decisions**
+- Merge order as instructed: c1 then c2 (diffs disjoint, order not load-bearing).
+- This LEDGER commit lands on local main (precedent `59b897c`): local commits are not
+  pushes, branch protection bars only direct origin/main pushes, and the prior session's
+  uncommitted append (2026-09-08 questionnaire entry) is preserved verbatim by sweeping
+  it into this docs commit rather than left dangling on a dirty tree.
+
+**Blockers / open decisions**
+- None. Packet caveats carry forward unchanged: c1 speedup not formally benchmarked
+  (differential tests pin semantics); c2 FS-race hardening keeps irreducible edge cases
+  (mount points, multi-actor swaps).
+
+**Next action**
+- Owner: push the 6 local main commits via the next PR (no direct origin/main push),
+  then delete the audit-squad/c1 + c2 branches once origin confirms; nothing further
+  queued from this session.
