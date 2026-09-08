@@ -7,8 +7,10 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/log"
 
 	"selftui/internal/config"
+	"selftui/internal/logsink"
 	"selftui/internal/ollama"
 )
 
@@ -48,6 +50,15 @@ type App struct {
 	// note is a transient app-level toast shown in the status bar's left
 	// cell (theme toggles etc.), cleared on the next keypress.
 	note string
+
+	// N5 debug drawer: logger + shared sink, wired by main through WithLog
+	// (nil in compat constructors/tests → ctrl+o inert). drawerOpen flags
+	// the read-only logs overlay; drawerUp is the scroll-back offset from
+	// the ring tail (0 follows).
+	logger     *log.Logger
+	logSink    *logsink.Sink
+	drawerOpen bool
+	drawerUp   int
 }
 
 // New builds the root model with a background parent context. It is the
@@ -180,6 +191,17 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// An open palette is its own modal: it consumes every key.
 		if a.paletteOpen {
 			return a.paletteKey(k)
+		}
+		// N5 logs drawer: ctrl+o toggles a read-only overlay from any tab,
+		// over any modal — unlike the palette it never races a stream (it
+		// only reads the shared log ring). While open it is its own modal
+		// and consumes every key (drawerKey); ctrl+o closes it again.
+		if k.Code == 'o' && k.Mod.Contains(tea.ModCtrl) && !a.paletteOpen {
+			a.toggleDrawer()
+			return a, nil
+		}
+		if a.drawerOpen {
+			return a.drawerKey(k)
 		}
 		// An open settings form consumes every key (it is its own modal);
 		// esc discards, enter/tab advance. Tab-bar and digit keys only act
@@ -341,10 +363,11 @@ func (a App) statusLeft(right string) string {
 }
 
 // canOpenPalette reports whether the command palette may open right now:
-// never over another modal (settings form, approval, picker, pull, delete)
-// and never mid-generation (its actions would race the stream).
+// never over another modal (settings form, approval, picker, pull, delete,
+// the logs drawer) and never mid-generation (its actions would race the
+// stream).
 func (a App) canOpenPalette() bool {
-	return !a.paletteOpen && !a.settings.Editing() && !a.models.ModalOpen() && !a.agent.ModalOpen() && !a.agent.streaming
+	return !a.paletteOpen && !a.drawerOpen && !a.settings.Editing() && !a.models.ModalOpen() && !a.agent.ModalOpen() && !a.agent.streaming
 }
 
 // WithSessionDir enables Agent chat transcript persistence under dir (the
@@ -352,6 +375,22 @@ func (a App) canOpenPalette() bool {
 // recorded in each transcript's header.
 func (a App) WithSessionDir(dir, host string) App {
 	a.agent = a.agent.WithSessionDir(dir, host)
+	return a
+}
+
+// WithLog attaches the shared debug logger and sink (PLAN.md §12 N5): the
+// logger reaches the Ollama client and the agent runner for transport and
+// loop traces, the sink feeds the logs drawer. Nil (compat constructors,
+// tests) leaves the shell drawerless and ctrl+o inert.
+func (a App) WithLog(l *log.Logger, sink *logsink.Sink) App {
+	a.logger = l
+	a.logSink = sink
+	if l != nil {
+		a.agent = a.agent.WithLogger(l)
+		if a.client != nil {
+			a.client.SetLogger(l)
+		}
+	}
 	return a
 }
 
@@ -396,8 +435,16 @@ func (a *App) applySaved(cfg config.Config) tea.Cmd {
 
 	if clientChanged {
 		// Host/token changed: swap the App-owned client once and point both
-		// tabs at that same new instance (P1-6).
+		// tabs at that same new instance (P1-6). The debug logger re-attaches
+		// so the new client keeps tracing, and the sink learns the new token
+		// so later entries redact it too (N5).
 		a.client = ollama.New(cfg.Host, cfg.AuthToken)
+		if a.logger != nil {
+			a.client.SetLogger(a.logger)
+		}
+		if a.logSink != nil {
+			a.logSink.SetSecret(cfg.AuthToken)
+		}
 		models, mCmd := a.models.ApplyClient(a.client)
 		agent, aCmd := a.agent.ApplyConfig(cfg, a.client, true)
 		a.models, a.agent = models, agent
@@ -469,6 +516,11 @@ func (a App) View() tea.View {
 			body = a.agent.View()
 		default:
 			body = a.settings.View()
+		}
+		if a.drawerOpen {
+			// N5: the logs drawer floats over the active view's bottom rows
+			// (k9s-style); it is read-only and never changes the view state.
+			body = a.overlayDrawer(body)
 		}
 	}
 

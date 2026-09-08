@@ -5466,3 +5466,155 @@ owner-selected v0.2 set (V2a–V2d). DIRECT execution, zero agents.
 **Next action**
 - Fresh session at `/home/calvin/SelfTUI`; next N-item per §12 sequencing:
   **N5 — debug/log drawer** (`charmbracelet/log`, keybind-toggled, redacted).
+
+## Session — 2026-09-07 (late, same session): owner-approved push of N6 → origin (PR #22)
+
+**Work done**
+- Owner instructed: "I give you permission to Push N6 to origin." Triaged
+  DIRECT (zero agents), routed through the repo's PR pattern (main protected).
+- `git checkout -b feat/n6-composer` (carries N6 35c0ace + ledger ad1a6e2) →
+  push → PR #22 → required check `Go fmt · vet · test · race · vuln ·
+  cross-build` PASS first try (1m05s, run 34173394762; no #21-style CI
+  fixture flake) → `gh pr merge 22 --merge --delete-branch` → main
+  fast-forwarded to 19f4b93.
+
+**Commands + exit codes**
+- `git push -u origin feat/n6-composer` → 0; `gh pr create --fill` → 0
+  (https://github.com/MerverliPy/SelfTUI/pull/22); `gh pr checks 22 --watch`
+  → 0 (pass 1m5s); `gh pr merge 22 --merge --delete-branch` → 0.
+- Post-merge: `main...origin/main` in sync, working tree clean.
+
+**Decisions / lines to respect**
+- This ledger commit is local-only again (protected branch); it rides the
+  next PR branch (same carry pattern as ad1a6e2 rode #22).
+
+**Blockers / open decisions**
+- None new. Owner decisions still pending: V2d scope (decide at that
+  session's start), optional GPG key upload, N8 on-device spike (owner-run).
+
+**Next action**
+- Fresh session at `/home/calvin/SelfTUI`; next N-item per §12 sequencing:
+  **N5 — debug/log drawer** (`charmbracelet/log`, keybind-toggled, shared
+  sink via `--log-file`, redact bearer tokens).
+
+## Session — 2026-09-07 (N5): debug/log drawer (orchestrator run)
+
+**Work done**
+- N5 per PLAN §12: `charmbracelet/log` keybind-toggled drawer, `--log-file` shared
+  sink, bearer-token redaction. Delegation note: single implementation lane
+  `developer-tooling-engineer` (mission 5bb7598c, fork context); no VCS actions by
+  the child. Parent independently verified (fresh `gofmt`/`vet`/`make check`/
+  `go test -race`), spot-checked the redaction tests and golden diffs, ticked
+  PLAN §12 N5, committed.
+- Implementation: new `internal/logsink` (redacting tee sink — file writer + ring
+  buffer so file and drawer can never disagree; registered-secret-first redaction +
+  generic `Bearer <tok>` pattern with 4-char prose floor; `SetSecret` re-arms on
+  Settings token change); `--log-file` flag in `cmd/self-tui/main.go` (XDG default
+  unchanged); `ctrl+o` k9s-style read-only drawer in `internal/ui/drawer.go` (modal
+  owns keys, tail-follow, pgup/pgdn, esc/re-toggle closes, `ctrl+p` blocked over it)
+  + palette *Logs drawer* entry as the phone path; nil-safe trace seams in
+  `internal/ollama/client.go`+`stream.go` (method/path/status/duration/bytes, no
+  bodies) and `internal/agent/runner.go` (tool-call summaries, budget/truncation
+  markers, plain-chat fallback) via `WithLogger`/`WithLog` setters; README flag/
+  keybind/redaction docs.
+
+**Commands + exit codes**
+- Parent verification (fresh, after child): `gofmt -l .` → empty (rc 0); `go vet ./...`
+  → clean; `make check` → 0; `go test -race -count=1 ./...` → 0 (all 7 pkgs ok; ui
+  15.0s). 33 new/updated tests (logsink redaction incl. end-to-end "sekrit never in
+  sink", drawer modal/key-leak pins, `--log-file` precedence, ollama/agent traces).
+- Goldens: `palette-compact/wide` grew exactly the one command row (verified via git
+  diff); 2 new `agent-logs-drawer-*` fixtures (72×30, 120×40); all other frames
+  byte-identical, pinned by `TestDrawerClosedViewIsByteIdentical`.
+
+**Decisions / lines to respect**
+- Redaction lives at the single shared sink, not per-consumer — a future second sink
+  or flag cannot leak the token without deliberately bypassing `logsink`.
+- `ctrl+o` chosen (verified conflict-free across app/agent/models/settings; reads as
+  "output"); palette entry preserved as the discoverable phone path per M7 precedent.
+- Drawer is read-only by design: no clearing that would lose file-sink history.
+- N2 contract held: `pendingStream`/60ms tick paths untouched.
+
+**Blockers / open decisions**
+- `make smoke` hits its pre-existing-host guard (harness refuses to delete the
+  already-installed `qwen3:0.6b`); binary built and booted under the pty capture
+  before the guard — no regression signal, same as prior sessions.
+- Local `main` again ahead of `origin/main` (N5 + carried ledger commit). Main is
+  protected — push must ride a PR branch (pattern: PR #22). Awaiting owner push.
+
+**Next action**
+- Fresh session at `/home/calvin/SelfTUI`; next N-item per §12 sequencing:
+  **N7 — upstream tracking** (no code: watch bubbletea v2 for the scroll-optimized
+  flush + event-driven rendering releases, then re-run D4 + scroll benches; glamour
+  width-bucketing micro-item under N1) — continuous/owner-driven; otherwise the
+  owner's pending V2d decision or the N8 on-device spike.
+
+## Session — 2026-09-07 (PR #22 review fixes): 7/7 Codex findings closed (orchestrator run)
+
+**Work done**
+- Fixed all 7 findings from the PR #22 Codex review
+  (github.com/MerverliPy/SelfTUI/pull/22#pullrequestreview-5136151563, reviewed
+  commit 35c0ace). Triage: DIRECT (all findings confined to two files in one
+  subsystem — `internal/ui/agent_view.go`, `internal/agent/attach.go` — so no
+  parallel lanes; parent implemented + verified). No VCS actions by any child
+  (none used).
+- P1 sanitize reasoning: `mergeThinkingDeltas` now runs `sanitizeTerminalText`
+  at the merge, so live /thinking blocks and committed turns never carry
+  ANSI/OSC/control bytes from a hostile model/server.
+- P1 sensitive-path policy on attachments: `ExpandFileRefs` gates every token
+  through `ToolPolicy.AuthorizePath` before `ReadFile` (a hand-typed `@.env` /
+  `@credentials.json` / `.ssh`-tree reference renders the same "unavailable"
+  policy note the read tools produce); `WorkspaceFiles` never offers and never
+  descends into policy-refused paths, so the picker cannot advertise them.
+- P2 flush reasoning on done: `onChatDone` calls `mergeThinkingDeltas()` next
+  to `mergeStreamDeltas()` so a `ThinkingMsg` racing `AgentDoneMsg` within the
+  60 ms repaint window commits its tail instead of losing it.
+- P2 picker highlight: `pickFile` reads `matches[fileIdx]` before resetting the
+  picker state (was resetting first, always inserting row 0).
+- P2 whitespace paths: new `agent.EscapeFileRef` (escapes spaces as `\ `) used
+  by the picker insert; `FileRefTokens` treats a backslash-escaped whitespace
+  as part of the token and unescapes before resolution — `docs/design notes.md`
+  now survives pick → tokenize → expand.
+- P2 multiline tool rows: new `toolDetailRows` splits a bounded tool line into
+  one stored element per display row, keeping `streamLineCount` == rendered
+  rows for /details (no composer/status push off-screen).
+- P2 attachment reads off the update loop: `sendInput` defers `@`-expansion
+  into a `tea.Cmd`; the landing `attachExpandedMsg` drives the new `beginTurn`
+  (commit user turn → context budget → enqueue → startChat → remote-attach
+  warning). New `expandPending` guard stops a second send racing the first;
+  `beginTurn` re-checks `resumePending` and restores the draft if a transcript
+  load raced the (now async) expansion.
+
+**Commands + exit codes**
+- Parent verification (all fresh, no caching): `gofmt -l .` → empty (rc 0);
+  `go vet ./...` → clean (rc 0); `make test` → 0 (all 7 pkgs ok); `make race` →
+  0 (all 7 pkgs ok; ui 15.6s); `make build` → 0.
+- 11 new/updated tests: agent — escaped-space token + escaped-space expand +
+  sensitive-path-refused subtests, `TestWorkspaceFilesSensitivePathsFiltered`;
+  ui — `TestAgentViewThinkingFlushAndSanitize`, `TestAgentViewToolRowsMatchCount`,
+  `TestAgentViewPickerHighlightAndSpaces`, `TestAgentViewAttachSensitiveRefused`,
+  plus the three existing attach-send tests adapted to run the deferred
+  expansion command (`drainExpansion` helper).
+
+**Decisions / lines to respect**
+- Sensitive-path gate applied unconditionally on the attachment path (even for
+  plain-chat runners with no tool set): attachments are the one channel that
+  could still ship a credential file, so the gate is defense-in-depth, not
+  tied to tool arming.
+- Escaping chosen over "don't offer unrepresentable paths": keeps manual
+  `@`-typing of spaced paths working and matches the picker's insert contract.
+- Async expansion keeps `expandPending` + a `resumePending` re-check so the
+  timing change introduces no send/resume race.
+- N2 contract untouched (`pendingStream`/60 ms tick); committed-turn rendering,
+  goldens, and the meter behavior are byte-identical (only the send timing of
+  `@`-ref turns changed, by design).
+
+**Blockers / open decisions**
+- None for this step. Local `main` remains ahead of `origin/main` (N5 + N6
+  post-merge fixes + carried ledger commits). Main is protected — the fix and
+  the N5 commit must ride a PR branch (pattern: PR #22). Awaiting owner push.
+
+**Next action**
+- Fresh session at `/home/calvin/SelfTUI`; per owner's plan sequencing: push
+  N5 + these PR #22 review fixes via a PR branch, then N7 upstream tracking
+  (no code) / owner's V2d call / N8 device spike.

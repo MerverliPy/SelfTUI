@@ -47,6 +47,7 @@ var (
 // cancel (typically deferred) so the request is released when the stream is
 // abandoned without reaching EOF.
 func (c *Client) postStream(ctx context.Context, path string, body []byte) (*http.Response, context.CancelFunc, error) {
+	start := time.Now()
 	reqCtx, cancel := context.WithCancel(ctx)
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, c.baseURL+path, bytes.NewReader(body))
 	if err != nil {
@@ -59,9 +60,16 @@ func (c *Client) postStream(ctx context.Context, path string, body []byte) (*htt
 	}
 	resp, err := c.stream.Do(req)
 	if err != nil {
+		// N5 drawer: connection failures on the stream client (host down,
+		// mid-generation drop) are the drawer's connection-error events.
+		c.logWarn("ollama stream failed", "method", "POST", "path", path,
+			"err", err.Error())
 		cancel()
 		return nil, nil, fmt.Errorf("ollama POST %s: %w", path, err)
 	}
+	// N5 drawer: stream-open trace — shape only, never the wire body.
+	c.logDebug("ollama stream open", "method", "POST", "path", path,
+		"status", resp.StatusCode, "duration_ms", time.Since(start).Milliseconds())
 	return resp, cancel, nil
 }
 

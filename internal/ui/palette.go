@@ -29,6 +29,7 @@ func paletteItemList() []paletteItem {
 		{"clear", "Clear conversation", "wipe the Agent transcript (asks first)"},
 		{"theme", "Toggle theme", "switch dark ↔ light for this session"},
 		{"refresh", "Refresh models", "reload the model list"},
+		{"logs", "Logs drawer", "toggle the debug log drawer (ctrl+o)"},
 		{"help", "Command list", "open the slash-command reference"},
 	}
 }
@@ -120,6 +121,8 @@ func (a *App) runPaletteItem(it paletteItem) (App, tea.Cmd) {
 		a.agent.loading = true
 		a.agent.modelsErr = ""
 		return *a, tea.Batch(a.models.loadCmd(), a.agent.loadModelsCmd())
+	case "logs":
+		a.toggleDrawer()
 	case "help":
 		a.switchTab(1)
 		a.agent.helpOpen = true

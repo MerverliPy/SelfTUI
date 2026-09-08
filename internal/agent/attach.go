@@ -13,11 +13,14 @@ import (
 // checks. There is no new read primitive here.
 
 // FileRefTokens extracts the workspace-file candidates from a draft: every
-// '@' begins a token that runs to the next whitespace (or end of text), with
-// trailing prose punctuation ("@README.md.", "@src/app.go,") stripped so a
-// sentence-final reference still resolves. The tokens are candidates only —
-// ExpandFileRefs decides which ones name real, readable workspace files;
-// anything else stays ordinary prose.
+// '@' begins a token that runs to the next unescaped whitespace (or end of
+// text), with trailing prose punctuation ("@README.md.", "@src/app.go,")
+// stripped so a sentence-final reference still resolves. A whitespace
+// character preceded by a backslash ("\ ") stays inside the token, so paths
+// containing spaces — which the @-picker offers in the escaped form —
+// survive tokenization. The tokens are candidates only — ExpandFileRefs
+// decides which ones name real, readable workspace files; anything else
+// stays ordinary prose.
 func FileRefTokens(text string) []string {
 	var out []string
 	for i := 0; i < len(text); {
@@ -26,10 +29,17 @@ func FileRefTokens(text string) []string {
 			continue
 		}
 		j := i + 1
-		for j < len(text) && text[j] != ' ' && text[j] != '\t' && text[j] != '\n' && text[j] != '\r' {
+		for j < len(text) {
+			if text[j] == '\\' && j+1 < len(text) && isRefSpace(text[j+1]) {
+				j += 2 // escaped whitespace: part of the path
+				continue
+			}
+			if isRefSpace(text[j]) {
+				break
+			}
 			j++
 		}
-		token := strings.TrimRight(text[i+1:j], ".,;:!?)\"']}")
+		token := unescapeFileRef(strings.TrimRight(text[i+1:j], ".,;:!?)\"']}"))
 		if token != "" {
 			out = append(out, token)
 		}
@@ -38,11 +48,29 @@ func FileRefTokens(text string) []string {
 	return out
 }
 
+func isRefSpace(b byte) bool {
+	return b == ' ' || b == '\t' || b == '\n' || b == '\r'
+}
+
+// EscapeFileRef makes one workspace path safe inside an @-reference: literal
+// spaces become "\ " so the tokenizer keeps the whole path as one token. The
+// picker inserts escaped paths; hand-typed drafts may use the same form.
+func EscapeFileRef(path string) string {
+	return strings.ReplaceAll(path, " ", "\\ ")
+}
+
+// unescapeFileRef reverses escapeFileRef: "\ " sequences become literal
+// spaces before a token is resolved as a path.
+func unescapeFileRef(path string) string {
+	return strings.ReplaceAll(path, "\\ ", " ")
+}
+
 // ExpandFileRefs turns one draft into the wire content for an agent turn:
 // every '@token' that resolves to a readable workspace file gets an inline
 // `[file: token]` block appended (in first-mention order, deduplicated);
 // references that name an existing but unreadable file (directory, over the
-// size cap, or a workspace escape attempt) carry a visible "unavailable"
+// size cap, a workspace escape attempt, or a path the workspace tool policy
+// refuses — .env, credentials, .ssh/… trees) carry a visible "unavailable"
 // note instead of content. Tokens that name no file at all are left as
 // ordinary prose. The returned value is the full message content to send.
 func ExpandFileRefs(ctx context.Context, root, text string) string {
@@ -58,7 +86,17 @@ func ExpandFileRefs(ctx context.Context, root, text string) string {
 			continue
 		}
 		seen[token] = true
-		content, err := ReadFile(ctx, root, token)
+		// The attachment path runs the same sensitive-path gate the agent's
+		// read tools are subject to: a draft may reference @.env or
+		// @credentials.json by hand, and such a reference must be refused
+		// exactly like a read_file of the same path would be.
+		var content string
+		var err error
+		if perr := (ToolPolicy{}).AuthorizePath(token); perr != nil {
+			err = perr
+		} else {
+			content, err = ReadFile(ctx, root, token)
+		}
 		switch {
 		case err == nil:
 			b.WriteString("\n\n[file: " + token + "]\n" + content)

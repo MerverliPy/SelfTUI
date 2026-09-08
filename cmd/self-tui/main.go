@@ -19,6 +19,7 @@ import (
 	"github.com/charmbracelet/log"
 
 	"selftui/internal/config"
+	"selftui/internal/logsink"
 	"selftui/internal/ollama"
 	"selftui/internal/ui"
 )
@@ -72,6 +73,7 @@ func run() error {
 	flagMaxToolIterations := flag.String("max-tool-iterations", "", "max tool iterations")
 	flagSystemPrompt := flag.String("system-prompt", "", "agent system prompt")
 	flagVerbose := flag.Bool("verbose", false, "debug-level logging")
+	flagLogFile := flag.String("log-file", "", "debug log file path (default: $XDG_STATE_HOME/selftui/log.txt)")
 	flagVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
 
@@ -131,7 +133,11 @@ func run() error {
 	}
 
 	// --- file logger (stderr stays clean for the alt-screen over SSH) ---
-	logPath, err := xdg.StateFile(filepath.Join("selftui", "log.txt"))
+	// One shared sink (N5): every entry is redacted once, then fanned out to
+	// the durable file and the drawer's ring buffer, so --log-file output
+	// and the ctrl+o drawer can never disagree and a bearer token can reach
+	// neither. Redaction is at the sink, so --log-file cannot bypass it.
+	logPath, err := logFilePath(*flagLogFile)
 	if err != nil {
 		return fmt.Errorf("resolve log path: %w", err)
 	}
@@ -140,7 +146,8 @@ func run() error {
 		return fmt.Errorf("open log %s: %w", logPath, err)
 	}
 	defer logFile.Close()
-	rootLog := log.NewWithOptions(logFile, log.Options{Prefix: "selftui", ReportCaller: true})
+	sink := logsink.New(logFile, logsink.NewRing(logRingLines), cfg.AuthToken)
+	rootLog := log.NewWithOptions(sink, log.Options{Prefix: "selftui", ReportCaller: true})
 	if *flagVerbose {
 		rootLog.SetLevel(log.DebugLevel)
 	}
@@ -163,6 +170,7 @@ func run() error {
 	client := ollama.New(cfg.Host, cfg.AuthToken)
 	m := ui.NewWithContext(ctx, &cfg, ui.NewStyles(cfg.Theme), client)
 	m = m.WithSessionDir(sessionDirForRun(), cfg.Host)
+	m = m.WithLog(rootLog, sink)
 	p := tea.NewProgram(m, tea.WithContext(ctx))
 	rootLog.Info("program running")
 	final, err := p.Run()
@@ -187,6 +195,21 @@ func run() error {
 	rootLog.Info("shutdown clean")
 	return nil
 }
+
+// logFilePath resolves the debug log destination (N5): --log-file wins;
+// the XDG state default ($XDG_STATE_HOME/selftui/log.txt) otherwise. Kept
+// small and testable so the flagset-style entrypoint tests can pin the
+// flag > default precedence without re-parsing the process-global set.
+func logFilePath(flagVal string) (string, error) {
+	if flagVal != "" {
+		return flagVal, nil
+	}
+	return xdg.StateFile(filepath.Join("selftui", "log.txt"))
+}
+
+// logRingLines is the drawer's ring capacity: the last N redacted entries
+// back the ctrl+o drawer; the file sink keeps the full history.
+const logRingLines = 1000
 
 // sessionCloseTimeout bounds how long the entrypoint waits for the transcript
 // recorder to flush at shutdown (P1-1). A recorder worker stuck on a wedged

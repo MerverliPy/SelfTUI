@@ -12,6 +12,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/charmbracelet/log"
 )
 
 // requestTimeout bounds every request. Show on a remote host can be slow;
@@ -33,6 +35,13 @@ type Client struct {
 	// before the client aborts it (phase 5). Set to the 90s default by New;
 	// tests inject short windows. Zero is treated as the default.
 	streamIdle time.Duration
+
+	// logger, when non-nil, receives the N5 debug-drawer transport traces:
+	// one DEBUG line per request/response (method, path, status, duration,
+	// body size — never request or response bodies, never headers) and WARN
+	// lines for connection failures and error statuses. Nil (the default)
+	// logs nothing, so every existing caller and test stays silent.
+	logger *log.Logger
 }
 
 // New builds a client for an Ollama base URL (e.g. "http://localhost:11434").
@@ -49,6 +58,27 @@ func New(host, token string) *Client {
 		http:       &http.Client{Timeout: requestTimeout, CheckRedirect: redirectPolicy},
 		stream:     &http.Client{CheckRedirect: redirectPolicy},
 		streamIdle: streamIdleTimeout,
+	}
+}
+
+// SetLogger attaches the shared debug logger (PLAN.md §12 N5). Call it once
+// during wiring before the client serves traffic; a nil logger (the default)
+// keeps the client silent.
+func (c *Client) SetLogger(l *log.Logger) {
+	c.logger = l
+}
+
+// logDebug emits one drawer trace line; a nil logger is a no-op.
+func (c *Client) logDebug(msg string, kv ...any) {
+	if c.logger != nil {
+		c.logger.Debug(msg, kv...)
+	}
+}
+
+// logWarn emits one connection-error line; a nil logger is a no-op.
+func (c *Client) logWarn(msg string, kv ...any) {
+	if c.logger != nil {
+		c.logger.Warn(msg, kv...)
 	}
 }
 
@@ -71,6 +101,7 @@ func redirectPolicy(req *http.Request, _ []*http.Request) error {
 // Ollama error message when the body carries one ({ "error": "..." }),
 // and the HTTP status otherwise.
 func (c *Client) do(ctx context.Context, method, path string, body any) ([]byte, error) {
+	start := time.Now()
 	var rd io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
@@ -93,16 +124,31 @@ func (c *Client) do(ctx context.Context, method, path string, body any) ([]byte,
 
 	resp, err := c.http.Do(req)
 	if err != nil {
+		// N5 drawer: connection failures are the reconnect/error events —
+		// the error string carries the transport cause (never the headers).
+		c.logWarn("ollama request failed", "method", method, "path", path,
+			"err", err.Error())
 		return nil, fmt.Errorf("ollama %s %s: %w", method, path, err)
 	}
 	defer resp.Body.Close()
 
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
 	if err != nil {
+		c.logWarn("ollama request body read failed", "method", method, "path", path,
+			"err", err.Error())
 		return nil, fmt.Errorf("ollama %s %s: read body: %w", method, path, err)
 	}
 
+	// N5 drawer: one trace line per completed request/response. Only the
+	// shape (method, path, status, size, duration) is logged — bodies and
+	// headers never are, and the shared sink redacts regardless.
+	c.logDebug("ollama request", "method", method, "path", path,
+		"status", resp.StatusCode, "bytes", len(raw),
+		"duration_ms", time.Since(start).Milliseconds())
+
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		c.logWarn("ollama request error", "method", method, "path", path,
+			"status", resp.StatusCode)
 		return nil, apiError(method, path, resp.StatusCode, raw)
 	}
 	return raw, nil

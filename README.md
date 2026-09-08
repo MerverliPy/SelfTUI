@@ -142,8 +142,11 @@ govulncheck -version                         # must report v1.7.0
 
 `make vuln` additionally needs `govulncheck` on `PATH` (pinned install:
 `go install golang.org/x/vuln/cmd/govulncheck@v1.7.0`). Logs go to
-`$XDG_STATE_HOME/selftui/log.txt` — never stderr, so the TUI stays
-clean over SSH.
+`$XDG_STATE_HOME/selftui/log.txt` (override with `-log-file /path/to/log`)
+— never stderr, so the TUI stays clean over SSH. Every log line is redacted
+at the sink: the configured auth token and `Bearer`-style credentials are
+replaced with `[redacted]` before they reach the file or the ctrl+o logs
+drawer.
 
 ## Release engineering (v0.1)
 
@@ -231,7 +234,7 @@ Resolution order: **flags > env > config file > defaults**.
 
 | Source | Examples |
 |--------|----------|
-| Flags | `selftui -host http://192.168.1.50:11434 -theme light -default-model qwen3:8b -temperature 0.4 -top-p 0.95 -num-ctx 8192 -max-tool-iterations 20 -workspace-root ~/proj -system-prompt "…"` |
+| Flags | `selftui -host http://192.168.1.50:11434 -theme light -default-model qwen3:8b -temperature 0.4 -top-p 0.95 -num-ctx 8192 -max-tool-iterations 20 -workspace-root ~/proj -system-prompt "…" -verbose -log-file /tmp/selftui.log` |
 | Env | `SELFTUI_HOST`, `SELFTUI_THEME`, `SELFTUI_DEFAULT_MODEL`, `SELFTUI_WORKSPACE_ROOT`, `SELFTUI_AUTH_TOKEN`, `SELFTUI_TOOLS_ENABLED`, `SELFTUI_AGENT_TEMPERATURE`, `SELFTUI_AGENT_TOP_P`, `SELFTUI_AGENT_NUM_CTX`, `SELFTUI_AGENT_SYSTEM_PROMPT`, `SELFTUI_AGENT_MAX_TOOL_ITERATIONS`, `SELFTUI_SESSION_DIR`, `SELFTUI_NO_SESSION` |
 | File | `~/.config/selftui/config.toml` (`host`, `theme`, `default_model`, `auth_token`, `workspace_root`, `tools_enabled`, `[agent]` table) |
 
@@ -248,7 +251,10 @@ only sent over `https://` unless the host is loopback
 `tab` / `shift-tab`, or `1`/`2`/`3` from the Models tab, switch Models ·
 Agent · Settings. `1`/`2`/`3` also switch from an empty Agent chat input; once
 you start typing a prompt the digits become text (so “count to 300” never
-jumps tabs). `ctrl+c` quits.
+jumps tabs). `ctrl+c` quits. `ctrl+o` toggles the read-only **logs drawer**
+from any tab — debug traces (ollama requests, connection errors, agent-loop
+decisions) with bearer tokens redacted; `pgup`/`pgdn` scroll, `esc` closes
+(detail under Command palette below). `ctrl+p` opens the command palette.
 
 **Models tab (M1b)**: `j`/`k` or arrows select · `enter` opens the inspect
 pane (compact) or refreshes it (wide) · `esc` closes it · `u`/`d` scroll the
@@ -311,11 +317,25 @@ tools or return no tool call show an explicit plain-chat fallback.
 
 **Command palette (M7)**: `ctrl+p` from any tab opens the command palette —
 go to a tab, change model, clear the conversation, toggle the theme, refresh
-models, or open the command list — filtered as you type (`↑/↓` or `j/k`
-move, `enter` runs, `esc` closes). On a phone keyboard without a ctrl key,
-the Agent tab's `/` menu is the equivalent path (Blink maps ctrl to the
-`ctrl+p` shortcut). Palette and slash actions are session-scoped; persistence
-is Settings → Theme.
+models, open the logs drawer, or open the command list — filtered as you type
+(`↑/↓` or `j/k` move, `enter` runs, `esc` closes). On a phone keyboard
+without a ctrl key, the Agent tab's `/` menu is the equivalent path (Blink
+maps ctrl to the `ctrl+p` shortcut). Palette and slash actions are
+session-scoped; persistence is Settings → Theme.
+
+**Logs drawer (N5)**: `ctrl+o` from any tab (or the palette's *Logs drawer*
+command) toggles a read-only debug drawer over the view's bottom rows —
+ollama request/response traces (method, path, status, size, duration),
+connection errors, and agent-loop decisions (tool calls, context-budget
+truncations, plain-chat fallbacks). `pgup`/`pgdn` or `↑/↓` scroll back
+through the last 1000 entries (`end` returns to tail-follow, `home` jumps to
+the top), `esc` or `ctrl+o` closes. The drawer and the log file are the same
+redacted stream: bearer tokens are scrubbed from everything that flows
+through the logger (the configured `auth_token` and generic `Bearer …`
+credentials), so neither sink ever holds a secret. Redirect the file with
+`-log-file /path/to/log` (default `$XDG_STATE_HOME/selftui/log.txt`); the
+drawer always mirrors what is written there. Log verbosity is unchanged by
+the drawer — `-verbose` still raises the level to debug.
 
 **Settings tab (M4/Phase 4)**: a huh form over the config surface, in four sections —
 Connection (host, auth token), Model defaults (default model, temperature,
