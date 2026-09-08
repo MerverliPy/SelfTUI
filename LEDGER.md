@@ -7000,3 +7000,47 @@ Codex re-review was clean ("Didn't find any major issues. Chef's kiss." on
 - **Next session backlog (owner picks, fresh session):** F-11 cmd coverage
   (low, optional per AUDIT.md) · §11 risk #5 Ollama job serialization decision
   · post-release N-series sequencing if the owner prefers feature work.
+
+---
+
+## 2026-09-08 — audit-squad run `as-20260908-175037` (deterministic multi-agent audit)
+
+**Work done**
+- Executed the audit-squad skill end-to-end against main @ `81273ed`: preflight (9/9
+  canonical checks green at baseline) → 2 independent discovery lanes → adversarial
+  critique (2 major anchored critiques, both parent-verified, both dispositioned fixed)
+  → 2 engineering lanes in isolated clones → deterministic sandbox judge.
+- Judge verdicts: **PASS | PASS** (18/18 checks, 0 discipline findings). Candidate
+  branches fetched into this repo as refs — **nothing merged, nothing pushed**:
+  - `audit-squad/c1` @ `4afeaf7` — perf: incremental token accounting in
+    `BudgetMessages` (+366/−33, differential reference tests + benchmark).
+  - `audit-squad/c2` @ `8527d23` — security: fail-closed writes under symlink swaps
+    in `atomicWrite` (openat/no-follow; ancestor+final swap regression tests;
+    stash-verified test teeth) (+215/−13).
+
+**Commands + exit codes**
+- Baseline + judge runs: `make fmt/vet/test/race/vuln`, `go mod verify`, release
+  builds, `secret-scan`, `actionlint` — all exit 0 at base and on both candidates
+  (evidence: `/tmp/audit-squad-as-20260908-175037/judge-*.json`, `logs/`).
+- Parent validation after engineering: schema validators, `HEAD^ == 81273ed`,
+  diff ⊆ scope, protected-path + test-deletion scans — all clean;
+  `git -C /home/calvin/SelfTUI status --porcelain` → empty (0 dirty paths).
+
+**Decisions / lines to respect**
+- Infra adaptation (recorded in preflight `isolation.notes`): baseline/candidate dirs
+  are self-contained **full clones**, not linked worktrees — the bwrap-sandboxed
+  `TestRunCommandAllowsReadOnlyGit` cannot resolve worktree `.git` files or shared
+  alternates (exit 128). Adaptation restored behavioral gating; no rule weakened.
+- Discovery Lane A's runner status was `failed` (missing `structured_output` protocol
+  call) but its complete artifact was recovered and passed all deterministic gates —
+  provenance flagged in the packet and manifest.
+- LEDGER/PLAN/AGENTS/COUNCIL-MEMO were enforced as protected paths throughout.
+
+**Blockers / open decisions**
+- Owner decisions pending (OD1/OD3/OD4 — human merges, value is the human's call):
+  review `/tmp/audit-squad-as-20260908-175037/HUMAN-REVIEW.md`, then
+  `git merge audit-squad/c1` and/or `git merge audit-squad/c2`, or discard.
+
+**Next action**
+- Owner: review the packet and merge or discard the two candidate branches. This
+  docs commit rides the next PR (branch protection: no direct main pushes).
