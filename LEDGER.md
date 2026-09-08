@@ -6049,3 +6049,66 @@ Nothing pushed to origin (landing stays the owner's call); both branches kept (r
 **Next action**
 - Owner lands local main on origin in a fresh session (push or PR), then optional audit-squad cleanup;
   N1 width-bucketing or the flaky-runner hardening item is the next queued step; N7 stays continuous watch.
+
+### 2026-09-08 — PR #25 opened, P1 review fix, merged to origin/main (audit-squad cA+cB landing)
+**Milestone:** owner-assigned step — create the landing PR for the audit-squad cA+cB merges, monitor
+checks + reviewer suggestions, merge when clean · **Result:** done — PR #25
+(`landing/audit-squad-ca-cb` → `main`) merged as `2e2a8c11`; one Codex P1 found, verified,
+fixed fix-forward (`31ce8aa`), re-review clean ("Didn't find any major issues"), CI green on the
+fix commit and on the post-merge main run. Local main ff'd to `2e2a8c11`; `make check` rc 0.
+
+**Work done**
+- **PR created:** branch `landing/audit-squad-ca-cb` at local main `11d6da8` (cA+cB merges + both
+  ledger handoffs riding, per carried-docs precedent); PR #25 with a precise body quoting the
+  corrected packet's judge verdicts and the pre-existing flaky-runner finding (overstatement guarded
+  against — body states judge-b3 PASS and attributes the two earlier FAILs to the base-commit flake
+  family, §5).
+- **Round-1 Codex review (1 P1 on `internal/agent/command.go`):** default-on helper execution —
+  git enables textconv filters (default for `git diff`, `git log -p`) and external diff drivers
+  (`git diff`) WITHOUT any flag when `.gitattributes`+`.git/config` define a driver; cB's allowlist
+  rejected the enabling spellings but did not disable the default-on channels, and the sandbox
+  mounts the workspace writable. **Independently reproduced on git 2.43.0** before acting: helper
+  marker written by `git diff`, `git diff --no-ext-diff` (the one negation cB allowed), and
+  `git log -p`; only `--no-textconv`/`--no-ext-diff` suppress; accepted on diff/log/show.
+- **Fix (`31ce8aa`, fix-forward on the PR branch):** `applyReadOnlyGitGuards` — RunCommand forces
+  `--no-textconv --no-ext-diff` right after the subcommand for every diff/log/show invocation
+  (post-validation, idempotent, no-op for non-patch invocations); both negations allowlisted per
+  subcommand (enabling forms still rejected); doc comments + `docs/run-command-containment.md`
+  corrected (execution is closed by forced negations, not option rejection alone). New tests:
+  `TestApplyReadOnlyGitGuards` (pure shape) and `TestRunCommandDoesNotExecuteRepoConfiguredGitHelpers`
+  (execution-level bwrap trap: textconv + external diff driver armed against a tracked binary file;
+  **red-checked** without the guard — helper executes inside bubblewrap and writes into the writable
+  /workspace; green with it). `#!/usr/bin/sh` shebang chosen because /bin is not mounted in the
+  sandbox (usrmerge) — keeps the tripwire non-vacuous.
+- **Verification:** `make check` rc 0; package under `-race` rc 0; targeted suite 5/5 PASS
+  (validator reject/accept tables, guard unit, exec regression, live bwrap containment test);
+  PR CI pass on `11d6da8` (1m11s) and on `31ce8aa` (1m13s).
+- **Round-2 Codex on `31ce8aa` (05:39Z):** "Didn't find any major issues. You're on a roll." —
+  verdict posted as an **issue comment** (not a review object), which is why the earlier
+  review-object poll loop appeared hung; no hang, wrong surface. Lesson recorded below.
+- **Merged:** `gh pr merge 25 --merge` → merge commit `2e2a8c11` (parents `995f147` + `31ce8aa`);
+  post-merge CI on main → success; local main ff `11d6da8..2e2a8c1`; `make check` on merged main rc 0.
+
+**Commands + exit codes**
+- `gh pr create` → PR #25 rc 0; `gh pr comment 25 "@codex review"` ×2 → rc 0.
+- `make check` (post-fix, on branch) → rc 0; `go test -race -count=1 ./internal/agent -run '<targeted>'` → rc 0.
+- Red/green: guard disabled → exec test FAIL (marker written into /workspace); guard active → PASS.
+- `gh pr checks 25 --watch` → pass 1m13s on `31ce8aa`; `gh pr merge 25 --merge` → rc 0.
+- `git merge --ff-only origin/main` → rc 0 (`11d6da8..2e2a8c1`); `make check` on merged main → rc 0.
+- `gh run list --branch main` → completed success on `2e2a8c11`.
+
+**Decisions / lines to respect**
+- Standard merge commit (not squash), branch `landing/audit-squad-ca-cb` kept — repo convention.
+- Round-1 P1 thread stays open on GitHub (no thread-resolve via REST); addressed state evidenced by
+  `31ce8aa` + clean round-2 (same pattern as PR #24's P2).
+- **Process lesson:** the Codex connector posts verdicts as issue comments or review objects
+  inconsistently — monitoring must watch `/pulls/{n}/reviews`, `/pulls/{n}/comments`, AND
+  `/issues/{n}/comments` (plus reactions on the trigger comment); my single-surface poll produced a
+  false "hung" appearance. Also: long watch loops need shorter iterations or multiple tool calls —
+  two 20+-min poll shells died on the 13-min bash timeout mid-poll.
+- The audit-squad packet's flaky-runner finding remains logged (2026-09-08 earlier entry) for a
+  future session; N1 width-bucketing still queued; N7 continuous watch unchanged.
+
+**Blockers / open decisions**
+- None. **Next:** N1 glamour width-bucketing micro-item (queued), flaky-runner hardening (queued),
+  or next owner-assigned step; N7 stays continuous watch.
