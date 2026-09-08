@@ -2,6 +2,9 @@ package ui
 
 import (
 	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +14,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"selftui/internal/ollama"
 	"selftui/internal/session"
 )
 
@@ -520,5 +524,71 @@ func TestAgentViewSessionFailureSurfacesOnce(t *testing.T) {
 	}
 	if strings.Contains(ve.notice, "send a message first") {
 		t.Errorf("export notice after failure = %q, want no dead-end send-message advice", ve.notice)
+	}
+}
+
+// TestAgentViewFallbackMarkerTranscriptRoundTrip (F1) drives a real
+// plain-chat fallback through the tool-armed runner with a session dir
+// configured, then proves the caveat persists end to end: committed turn
+// content → the /export transcript file → a /resume reload (session.Load)
+// surfaces the marker again. Before F1 the only caveat was the transient
+// statusline notice, so the export recorded an uncaveated narrated claim.
+func TestAgentViewFallbackMarkerTranscriptRoundTrip(t *testing.T) {
+	// Tools armed, but the fake stream returns content with no tool call:
+	// the runner downgrades iteration 0 to plain chat (agent.FallbackMsg).
+	root := t.TempDir()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/tags":
+			w.Header().Set("Content-Type", "application/json")
+			io.WriteString(w, uiTagsBody)
+		case "/api/chat":
+			w.Header().Set("Content-Type", "application/x-ndjson")
+			io.WriteString(w, chatEvent("I've written the numbers 1 to 300 to count_to_300.txt.", false)+"\n"+
+				chatEvent("", true)+"\n")
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	dir := t.TempDir()
+	v := newAgentTools(t, ollama.New(srv.URL, ""), srv.URL, root)
+	v = v.WithSessionDir(dir, "")
+	v, _ = v.Update(tea.WindowSizeMsg{Width: 88, Height: 40})
+	v, _ = v.Update(agentModelsLoadedMsg{models: sampleModels()})
+	typeText(t, &v, "write the numbers")
+	v, _ = v.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	drainChat(t, &v)
+	defer v.recorder.Close()
+
+	// In-memory turn carries the caveat inline.
+	if n := len(v.turns); n != 2 {
+		t.Fatalf("turns = %d, want 2 (user + fallback assistant)", n)
+	}
+	if !strings.Contains(v.turns[1].msg.Content, "no tool ran this turn") {
+		t.Fatalf("committed fallback turn lacks the note: %+v", v.turns[1].msg)
+	}
+
+	// The exported transcript file carries it (async recorder: poll).
+	text := waitForSession(t, dir, "count_to_300.txt", "no tool ran this turn")
+	if strings.Contains(text, "\x1b") {
+		t.Error("transcript contains raw escape bytes")
+	}
+
+	// A /resume reload of that transcript surfaces the marker again.
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("transcript dir entries = %v (err %v), want exactly one file", entries, err)
+	}
+	parsed, err := session.Load(filepath.Join(dir, entries[0].Name()))
+	if err != nil {
+		t.Fatalf("session.Load: %v", err)
+	}
+	if len(parsed) != 2 {
+		t.Fatalf("parsed turns = %d, want 2", len(parsed))
+	}
+	if parsed[1].Role != "assistant" || !strings.Contains(parsed[1].Content, "no tool ran this turn") {
+		t.Errorf("resumed assistant turn lost the marker: %+v", parsed[1])
 	}
 }

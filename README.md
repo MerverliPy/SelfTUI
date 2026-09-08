@@ -73,9 +73,10 @@ toggles with enter) — see “Using SelfTUI from an iPhone (SSH)” below.
 - **Sessions are in-memory.** The conversation lives in the running process
   and ends with it. Every committed turn is mirrored to an **append-only
   Markdown transcript export** under the XDG state dir, so a chat survives
-  exit as an inspectable file — but the export **cannot be resumed**: there
-  is no reload/import path in v0.1. `/export` in the Agent input flushes and
-  reports the transcript path.
+  exit as an inspectable file — and since **V2a (v0.2)** a saved transcript
+  **can be reloaded** in a fresh process with `/resume` (see *Navigation*).
+  v0.1 itself shipped no reload path; `/export` in the Agent input flushes
+  and reports the transcript path.
 - **Tools are disabled by default** and require an explicit workspace. The
   agent is plain chat (`tools off`) until you enable workspace tools
   (Settings → Agent → *Enable workspace tools*, `tools_enabled`, or
@@ -90,7 +91,7 @@ toggles with enter) — see “Using SelfTUI from an iPhone (SSH)” below.
   requires `https://` (enforced by config validation).
 
 M7 polished the feel (opencode.ai TUI as reference): a slash-command menu over
-the Agent input (`/clear`, `/model`, `/theme`, `/export`, `/help`,
+the Agent input (`/clear`, `/model`, `/resume`, `/theme`, `/export`, `/help`,
 `/refresh`) and a `ctrl+p` command palette reachable from any tab; stable
 per-turn headers, a streaming caret (`▍`) that disappears at rest, elapsed +
 stop-reason meta right-aligned on each assistant header, `pgup`/`pgdn` paging
@@ -274,10 +275,10 @@ context meter with token usage (`ctx ▓▓░░ 38% · 1.2k/3.1k`), an auto-gr
 prompt (up to four rows), and below the box a statusline that shows the
 running state with an **armed interrupt** (`esc` arms, `esc` again cancels —
 a stray esc can't kill a run) or the key legend. A **`/`** in the prompt opens
-the command menu — `/clear` (asks first), `/model`, `/theme` (session toggle;
-save in Settings to keep it), `/help` (command reference), `/refresh`, and
-`/export` (flush the Markdown transcript and show its path; the chat itself
-stays in-memory and the export cannot be resumed) —
+the command menu — `/clear` (asks first), `/model`, `/resume` (reload a
+saved transcript), `/theme` (session toggle; save in Settings to keep it),
+`/help` (command reference), `/refresh`, and
+`/export` (flush the Markdown transcript and show its path) —
 filtered as you type; arrows move and `enter` runs. Idle `esc` clears a
 drafted prompt. Every finished assistant message shows elapsed time and why
 it stopped (`· stop` / `· length` / `· stopped`) right-aligned on its header;
@@ -285,15 +286,20 @@ while a turn streams a `▍` caret rides the last line and vanishes at rest.
 Once the conversation fills the context budget the meter turns red and a
 visible truncation marker stays in the transcript until `/clear`.
 
-**Chat is in-memory; the transcript is an export, not a session store.**
-Committed turns are mirrored to a per-process Markdown file under
+**Chat is in-memory; the transcript is an export — and `/resume` reloads
+it.** Committed turns are mirrored to a per-process Markdown file under
 `$XDG_STATE_HOME/selftui/sessions/` (`chat-<timestamp>-<pid>.md`, 0600,
 `## user (qwen3:8b) · time` / `## assistant (…) · elapsed · reason` blocks).
-The file is append-only, survives exit, and is inspectable — it is **not**
-resumable: reopening SelfTUI starts a fresh in-memory session and there is no
-import/reload path. `/export` in the Agent input flushes and reports the
-path; `SELFTUI_SESSION_DIR` overrides the directory and `SELFTUI_NO_SESSION=1`
-turns recording off (chat then stays in-memory only).
+The file is append-only, survives exit, and is inspectable. Reopening
+SelfTUI starts a fresh in-memory session; `/resume` (V2a) opens a picker of
+the saved transcripts (newest first) and loads the chosen one into the live
+conversation — asking first when the current chat already has history, and
+refusing sends while a load is in flight. The saved file is never rewritten:
+the resumed conversation continues in a fresh per-process transcript.
+`/export` in the Agent input flushes and reports the path;
+`SELFTUI_SESSION_DIR` overrides the directory and `SELFTUI_NO_SESSION=1`
+turns recording off (chat then stays in-memory only, and `/resume` reports
+"session recording is off — nothing to resume").
 
 Tool-capable models may use jailed `read_file`, `list_dir`, `grep`,
 `write_file`, and `edit_file`; every mutation opens a `y`/`enter` approve or
@@ -427,9 +433,10 @@ turns, and discards settings edits. Below **40×12** SelfTUI shows the bounded
 ### If your SSH session drops
 
 SelfTUI keeps your **settings** in a config file, but the conversation lives
-in the running process (chat is in-memory; the Markdown transcript export is
-not resumable). What survives a phone-side drop depends on the transport
-(verified live, `docs/reconnect.md`):
+in the running process (chat is in-memory; committed turns are mirrored to
+the per-process Markdown transcript under the XDG state dir). What survives
+a phone-side drop depends on the transport (verified live,
+`docs/reconnect.md`):
 
 - **Inside tmux (or mosh)** — the recommended setup — the app process
   survives: reconnect and re-attach and you get the **same screen back**
@@ -437,7 +444,8 @@ not resumable). What survives a phone-side drop depends on the transport
 - **Plain SSH (no tmux)** — the drop kills the app; reconnect and relaunch:
   clean boot at the negotiated geometry, config re-applied, and the aborted
   model job is cleaned up by Ollama (nothing is left stuck). The transcript
-  file from the dead process is still on disk.
+  file from the dead process is still on disk — relaunch and run `/resume`
+  to load that chat back into the fresh session.
 
 `make smoke-reconnect` exercises the plain-SSH path locally (SIGHUP on a
 mid-generation drop, host recovery, clean fresh reconnect); its scratch
