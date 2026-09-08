@@ -6112,3 +6112,81 @@ fix commit and on the post-merge main run. Local main ff'd to `2e2a8c11`; `make 
 **Blockers / open decisions**
 - None. **Next:** N1 glamour width-bucketing micro-item (queued), flaky-runner hardening (queued),
   or next owner-assigned step; N7 stays continuous watch.
+
+### 2026-09-08 — N1 width-bucketing micro-item + flaky-runner hardening + per-client transports (orchestrator run)
+**Milestone:** owner-assigned step — work the queue (N1 glamour width-bucketing micro-item; flaky-runner
+hardening from the audit-squad packet §5 pre-existing finding; trailing ledger commit `e905d69` rides the
+next landing) per the binding one-step rule · **Result:** done — all three items landed on branch
+`feat/n1-width-bucket-flaky-transport` (cut at local main `e905d69` so the trailing ledger commit rides),
+canonical gate green (`make check` rc 0) and **8/8 full `make race` runs green** after the hardening
+(vs ~17-19% per-run flake rate before: 2 fails in 8 base-era runs per the packet, 3 fails in 16 runs in
+this session's pre-fix probing).
+
+**Work done**
+- **N1 width-bucketing (PLAN §12 N7 micro-item):** `chatRenderWidth` buckets the chat pane's render
+  width DOWN to a multiple of 5 cols (panes < 5 cols stay exact); all five glamour gates
+  (`ensureRenderer` callers: `renderBlock`, `rebuildRenderer`, `rebuildRenderCache`,
+  `primeStreamRender`, `streamBlockRender`) plus the `tea.WindowSizeMsg` handler now key on the
+  bucketed width, so resize jitter inside one bucket leaves the glamour renderer AND the per-width
+  caches warm; the resize handler rebuilds only on a bucket change (nil renderer still retries the
+  build). Rounding is down so a bucketed render never overflows the real pane. Tests:
+  `TestChatRenderWidthBucketsToFiveColumns` (table) + `TestResizeJitterKeepsRenderCacheWarm`
+  (same-bucket resize keeps renderer at 85 and the stream cache warm; cross-bucket re-keys and
+  re-primes; cache ≡ fresh render). Goldens: **byte-identical, no regeneration needed** — 72×30
+  (pane 70) is already on a bucket and the 120×40 fixture content never wraps past col 115.
+- **Flaky-runner hardening (packet §5 remedy direction):** new `chatStub` harness
+  (`internal/agent/chatstub_test.go`) replaces the raw-counter httptest handlers of the exposed
+  family (oversized-arg H-03, batch-over-limit, bounds-tool-calls, executes-native,
+  embedded-tool-JSON ×3 subtests, plain-chat-fallback, grep-hide, metrics, mutation-confirm,
+  write-confirm-expiry). Contract: (a) an undecodable request body — which the runner cannot
+  produce (it always sends json.Marshal'd ChatRequests) — is logged, refused 400, never counted;
+  (b) requests are counted by body sha256 identity, so a redelivered request counts once while each
+  real iteration (messages grow monotonically) still counts — genuine runner bugs keep failing the
+  counts; (c) responses are served by body-identity phase so a redelivery receives its original
+  response (arrival-keyed responses were corrupting the scripted conversation — the embedded-JSON
+  flake showed turn-2's response as turn-1's content).
+- **Root-cause honesty:** the exact transport mechanism behind the duplicate/truncated deliveries is
+  NOT fully identified. Static analysis of go1.27.1 transport retry semantics says a POST replays
+  only after a nothing-written failure on a reused conn (which leaves no server trace), yet the
+  observed extra arrivals were complete valid requests — the mechanism survives my read of the
+  transport. Four instrumented capture attempts (server-side body/addr logging; in-package client
+  trace with dial/reuse/RoundTrip logging) did not catch a live occurrence. The hardening is
+  therefore deliberately mechanism-independent: it makes every observed failure shape structurally
+  impossible while preserving assertion power against real runner bugs.
+- **Per-client transports (`internal/ollama`):** `ollama.New` now gives both HTTP clients a private
+  `http.DefaultTransport` clone (`privateTransport()`) instead of sharing the process-global pool.
+  Honest note: this did NOT change the flake rate (3 fails in 16 pre-hardening race runs) — the
+  shared-pool + recycled-ephemeral-port leakage class it removes is real hygiene but was not the
+  operative mechanism. Kept: one client per host in production (`main.go`, `app.go`), transports
+  pool per origin anyway, and tests already override `c.http/c.stream.Transport` directly.
+  Regression test `TestNewUsesPrivateTransports` pins private non-global pools + preserved proxy.
+
+**Commands + exit codes**
+- `make check` (final, on branch) → rc 0 (build + uncached suite + vet + fmt).
+- `make race` ×8 post-hardening → all rc 0 (was 3 FAILs across 16 pre-hardening runs this session:
+  TestMutationToolsNeedExplicitConfirmation calls=3; TestRunnerRejectsOversizedNativeToolArgument
+  decode-EOF + requests=2 ×2 incl. one probe-induced; TestRunnerParsesContentEmbeddedToolJSON
+  subtest calls=3 with corrupted final).
+- `go test -count=1 ./...` → ok (all packages) before the race gauntlet; `go vet ./...` + `gofmt -l .` clean.
+- `go test ./internal/ui -run 'TestChatRenderWidth|TestResizeJitter|TestGolden|TestStream|TestAgentWindow'` → ok; goldens untouched (`git status` shows no testdata changes).
+
+**Decisions / lines to respect**
+- Identity-based counting is NOT assertion weakening: distinct logical iterations always have
+  distinct bodies (messages grow per iteration), so the counts still catch real runner bugs; the
+  absorbed shapes are exactly those the runner cannot produce. Recorded in chatstub_test.go's doc.
+- `TestRunnerCancellationReturnsPromptly` and the constant-single-response handlers were left
+  untouched (no counter, no phase keying — not exposed).
+- The remaining same-shape handlers without counters were left as-is; if a flake ever migrates to
+  them, convert to `chatStub` the same way.
+- Transport fix kept despite not moving the flake rate — isolation hygiene, zero production cost,
+  pinned by its own regression test.
+- N7 continuous upstream watch unchanged; the packet's CI fallback (`-p 1`) NOT applied — revisit
+  only if flakes recur post-hardening.
+
+**Blockers / open decisions**
+- None in the work. **Open (owner):** land the PR (repo rhythm); the exact transport mechanism
+  remains unidentified — if flakes recur despite the stub, the next probe is a client-side
+  writeLoop-level trace (requires an in-package hook in internal/ollama).
+
+**Next action**
+- Owner merges the landing PR; then N7 continuous watch or the next owner-assigned step.

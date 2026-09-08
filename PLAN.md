@@ -903,9 +903,11 @@ Spec detail kept for reference:
 ✅v Pinned `bubbletea v2.0.9` does **NOT** have `WithScrollOptimization` (research
 flagged release status unconfirmed; verified absent). When Charm ships the
 scroll-optimized flush (#1725/#1761) + event-driven rendering (#1776) in a release,
-pin it and re-run the D4 bench + a 72×30 scroll-frame bench. Track glamour
-width-bucketing (round width to 5 cols so resize jitter doesn't rebuild the
-renderer) as a micro-item under N1.
+pin it and re-run the D4 bench + a 72×30 scroll-frame bench. The glamour
+width-bucketing micro-item (round render width down to 5 cols so resize jitter
+reuses the renderer + per-width caches) **LANDED 2026-09-08** —
+`chatRenderWidth` + identity-keyed gates in `internal/ui/agent_view.go`;
+goldens byte-identical; see LEDGER.
 
 ### N8 — Spike (device test, owner-run): native scrollback via tea.Println
 Charm's chat-history pattern (discussion #1482): print *finalized* turns to the
