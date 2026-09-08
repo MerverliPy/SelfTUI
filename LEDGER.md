@@ -6639,3 +6639,80 @@ this session's pre-fix probing).
 **Next action**
 - Owner re-picks the next §10 milestone from the true backlog (menu
   re-presented in this session; otherwise fresh session).
+
+## Session — 2026-09-08 (gate): V2e multi-file + undo/redo design gate — owner GO (orchestrator run, WORKFLOW)
+
+**Work done**
+- (Earlier phases this session, recorded in the pick/hygiene entry above:) F-07 pick
+  invalidated on evidence; `spike/n8-scrollback` deleted per owner click; PLAN §12
+  corrected via PR #33 (merge `b3bf636`).
+- Owner re-pick (menu re-presented without F-07): **V2d-deferred agent breadth —
+  multi-file edits / undo-redo**, shape = design gate first (V2b precedent).
+- Triage: WORKFLOW — two genuinely independent read-only lanes, fanout 2/3:
+  **scout** (mutation-surface recon → `/tmp/selftui-v2e-scout-context.md`, run
+  `8092459a`, completed) + **researcher** (prior art →
+  `/tmp/selftui-v2e-research.md`, run `9b469831`). Researcher's first attempt failed
+  as a foreground child without web-tool extensions (documented infra constraint);
+  same-protocol retry as an async background child succeeded.
+- Parent verified load-bearing seams by direct read before synthesis (tool schema,
+  confirm flow 30/60 s turn-end, `atomicWrite`, `AuthorizePath`); scout later proved
+  WRONG on ".git is never a writable target" — caught by the review pass (child
+  output = evidence, not truth).
+- Design doc written: `docs/v2e-multifile-undo-design.md` — closed-schema
+  `write_files` batch tool (ops ≤ 16, per-op ≤ 256 KiB, 1 MiB call cap), all-or-
+  nothing propose → 72×30 diff-review overlay (120 s/300 s window) → validate-all-
+  at-apply (TOCTOU; M-06 gate) → journal write-ahead (pre-image bytes+mode+existed,
+  fsync before first write) → sequential `atomicWrite` apply → compensating rollback;
+  undo/redo journal under `$XDG_STATE_HOME/selftui/undo/` with aider-style refuse-
+  guards (post-hash check), bounds (25 entries / 32 MiB / 8 MiB per-file), session-
+  scoped; `/undo` + `/redo` commands; test strategy §5; owner forks §6; gate record §8.
+- **Independent review:** reality-checker (run `2d15ad0e`) → **NEEDS WORK** (high
+  confidence, B+ substance): 3 wrong §2 refs, unsubstantiated ".git never writable"
+  invariant (**real shipped gap — no `.git` refusal anywhere in the mutation path;
+  a `write_file` into `.git/hooks/pre-commit` reaches the approval dialog today**),
+  unpinned rollback-failure semantics, "crash-safe" overclaim (no parent-dir fsync
+  after rename), `credentials*` phrasing (exact-map, no prefix), residual-TOCTOU note.
+- Parent verified every finding against HEAD (greps: `executeTool`@runner.go:497,
+  `ToolConfirmMsg`@86, `confirm()`@630, H-03 reject-in-full@373-389, constants@16/32-33,
+  exact-one-match@mutation.go:61, `.git` refs read-side only @tools.go:197 +
+  workspace.go:107/256, `AgentTools`@tools.go:30 with six tools@44-79) and applied all
+  six fixes; re-check trigger closed parent-side (refreshed §2 grep-verified, `.git`
+  gate added to §4.2 step 4 for batch + single-file tools, rollback-failure §6.8
+  recorded). No second review pass — mechanical fixes, parent-verified (router:
+  no review-loop chains).
+- **Owner gate click (ask_user_question): GO** — implement next session; §6 resolved:
+  review window 120 s/300 s; undo covers all confirmed mutations; `/redo` included;
+  defaults for bounds/mid-apply-rollback/session-scope/rollback-failure.
+
+**Commands + exit codes**
+- Lanes: scout run `8092459a` (completed; per-run model meta not in receipt — roster
+  primary glm-5.3-flash, unconfirmed from meta), researcher run `9b469831` (run meta:
+  **deepseek-v4-flash** — healthy same-chain fallback from its glm-5.3-flash primary;
+  reported, not assumed), reality-checker run `2d15ad0e` (run meta: **glm-5.3-flash**
+  — non-DeepSeek, so no sole-DS-verdict concern).
+- `make check` on clean main (`03fd761`) → **exit 0** (F-07 re-verification phase).
+- Grep verifications all rc 0 (list above); `git rev-parse main origin/main` →
+  equal pre-PR; working tree clean before branch.
+- Docs land via PR (branch protection): `docs/v2e-design-gate` → PR → required
+  check → merge-commit merge → pull main (result recorded below if merged this
+  session).
+
+**Decisions / lines to respect**
+- Design gate = V2b precedent: evidence doc + independent reality-checker + owner
+  click BEFORE any implementation; implementation session owns §5 exit criteria.
+- The `.git` mutation refusal ships as part of V2e implementation (not a separate
+  hotfix): dialog-protected today, owner approved the gate design containing it.
+- Model cost discipline: scout/researcher on cheap chain members; reality-checker
+  bounded (toolBudget soft10/hard18, 10 min); no premium lanes used this session.
+- Run-meta honesty: report what ran (researcher on DS fallback, reality-checker on
+  glm-5.3-flash); scout meta unavailable in receipt.
+
+**Blockers / open decisions**
+- None for this step. Implementation scope = design §4 (resolved decisions) with §5
+  as the exit gate; `.git` refusal included.
+
+**Next action**
+- Fresh session (owner assigns): **implement V2e** per
+  `docs/v2e-multifile-undo-design.md` — batch tool + journal + undo/redo + `.git`
+  refusal + review overlay; exit = §5 test strategy green (`make check`, `go test
+  -race ./...`, goldens: existing frames byte-identical + new overlay fixtures).

@@ -565,6 +565,21 @@ scoped exit criteria — context injected + bounded + tested (unit, git-repo,
 boundedness, depth-cap, cancellation, wire-shape tests), `make check` and
 `go test -race` green.*
 
+**V2e — GATE: multi-file edit batches + undo/redo (design gate).** ✅ *gate passed
+2026-09-08 — owner GO; evidence: `docs/v2e-multifile-undo-design.md` + LEDGER.*
+Design for a closed-schema `write_files` batch tool (all-or-nothing propose → 72×30
+diff-review overlay → validate-all-at-apply, including a new lexical `.git` mutation
+refusal that also closes a shipped dialog-only protection gap in the single-file
+tools → journal write-ahead → compensating rollback) plus a touched-files pre-image
+undo/redo journal (aider-style refuse-guards, Claude-Code-style bounds: 25 entries /
+32 MiB / 8 MiB per-file cap; session-scoped; `/undo` + `/redo`). Review: reality-
+checker NEEDS WORK (B+ substance) → all six findings parent-verified and fixed;
+re-check trigger closed with grep evidence. Owner decisions resolved in session:
+review window 120 s/300 s, undo covers all confirmed mutations, `/redo` included,
+session-scoped journal, rollback-failure = stop + retain entry. *Implementation is
+the next session, owner-assigned per the one-step rule; exit criteria = the design's
+§5 test strategy.*
+
 ---
 
 ## 11. Risks & open questions
