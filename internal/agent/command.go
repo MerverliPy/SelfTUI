@@ -144,18 +144,194 @@ func validateCommand(argv []string) error {
 			}
 		}
 	case "git":
-		if len(argv) < 2 || !map[string]bool{"status": true, "diff": true, "log": true, "show": true, "branch": true, "rev-parse": true, "ls-files": true, "grep": true}[argv[1]] {
+		if len(argv) < 2 || !gitSubcommands[argv[1]] {
 			return errors.New("run_command: allowed git subcommands are status, diff, log, show, branch, rev-parse, ls-files, grep")
 		}
-		for _, arg := range argv[2:] {
-			if arg == "-c" || strings.HasPrefix(arg, "-c=") || strings.HasPrefix(arg, "--config") || strings.HasPrefix(arg, "--git-dir") || strings.HasPrefix(arg, "--work-tree") {
-				return fmt.Errorf("run_command: unsafe git option %q", arg)
-			}
+		if err := validateGitArgs(argv[1], argv[2:]); err != nil {
+			return err
 		}
 	default:
 		return fmt.Errorf("run_command: executable %q is not allowlisted", argv[0])
 	}
 	return nil
+}
+
+// gitSubcommands is the fixed read-only git capability surface promised to the
+// model: each command runs against the workspace repository with a scrubbed
+// environment and the workspace root bound at /workspace. "Read-only" refers
+// to the intent, not to git's behavior, so option validation is deny-by-
+// default (see gitOptionFlags/gitOptionValues below).
+var gitSubcommands = map[string]bool{
+	"status": true, "diff": true, "log": true, "show": true, "branch": true,
+	"rev-parse": true, "ls-files": true, "grep": true,
+}
+
+// gitOptionFlags lists, per git subcommand, the exact option spellings that
+// take no value and are safe to pass through (for example --short, --oneline,
+// --stat). gitOptionValues lists options that take a value and are safe too:
+// both the bare spelling (the value is the next argv element, which the
+// generic argv checks above already validated as an ordinary operand) and the
+// attached "--name=value" spelling are accepted.
+//
+// Everything not listed here — whether a write sink such as "--output=<file>"
+// (honored by the diff machinery shared by diff/log/show, writing relative to
+// /workspace), an external-helper switch such as "--ext-diff" or "--textconv"
+// (which run helpers configured in the repository's config and attributes),
+// or any other abbreviation or unlisted option — is rejected. Only an exact
+// allowlist can do this, and the history explains why: the pre-cB validator
+// passed every option through to git except a few config/work-tree spellings
+// it checked by string prefix, so its read-only promise was only
+// approximately true — git parses any unique prefix of a long option, and
+// "--out=<file>" slipped past to the "--output" write sink. The allowlist
+// supersedes that pass-through and prefix matching must not return: these
+// lists contain exact spellings only, and a new option is added to them
+// deliberately rather than inferred by abbreviation.
+var (
+	gitOptionFlags = map[string]map[string]bool{
+		"status": {
+			"-b": true, "-s": true, "--branch": true, "--porcelain": true, "--short": true,
+		},
+		"diff": {
+			"--name-only": true, "--name-status": true, "--no-ext-diff": true,
+			"--numstat": true, "--shortstat": true, "--stat": true,
+		},
+		"log": {
+			"-n": true, "-p": true, "--abbrev-commit": true, "--all": true,
+			"--decorate": true, "--graph": true, "--merges": true, "--name-only": true,
+			"--name-status": true, "--no-color": true, "--no-merges": true,
+			"--numstat": true, "--oneline": true, "--patch": true, "--shortstat": true,
+			"--stat": true,
+		},
+		"show": {
+			"-p": true, "--abbrev-commit": true, "--name-only": true,
+			"--name-status": true, "--no-color": true, "--no-patch": true,
+			"--numstat": true, "--oneline": true, "--patch": true,
+			"--shortstat": true, "--stat": true,
+		},
+		"branch": {
+			"-a": true, "-r": true, "-v": true, "-vv": true, "--all": true,
+			"--remotes": true, "--verbose": true,
+		},
+		"rev-parse": {
+			"--abbrev-ref": true, "--is-bare-repository": true, "--is-inside-work-tree": true,
+			"--short": true, "--show-prefix": true, "--show-toplevel": true, "--verify": true,
+		},
+		"ls-files": {
+			"-c": true, "-d": true, "-m": true, "-o": true, "-z": true,
+			"--cached": true, "--deleted": true, "--exclude-standard": true,
+			"--modified": true, "--others": true,
+		},
+		"grep": {
+			"-c": true, "-e": true, "-E": true, "-F": true, "-i": true,
+			"-l": true, "-n": true, "-v": true, "-w": true, "--count": true,
+			"--extended-regexp": true, "--files-with-matches": true,
+			"--fixed-strings": true, "--ignore-case": true, "--invert-match": true,
+			"--line-number": true, "--word-regexp": true,
+		},
+	}
+	gitOptionValues = map[string]map[string]bool{
+		"diff": {
+			"--diff-filter": true, "--word-diff": true,
+		},
+		"log": {
+			"--after": true, "--author": true, "--before": true, "--committer": true,
+			"--format": true, "--grep": true, "--max-count": true, "--pretty": true,
+			"--since": true, "--until": true,
+		},
+		"show": {
+			"--date": true, "--format": true, "--pretty": true,
+		},
+	}
+)
+
+// validateGitArgs enforces the read-only git option policy for one allowlisted
+// subcommand.
+//
+// The subcommand allowlist at argv[1] is already the primary barrier against
+// git config/directory overrides: git only honors "-c name=value",
+// "--config-env=...", "--git-dir=...", and "--work-tree=..." before the
+// subcommand, and argv[1] must be one of gitSubcommands, so those spellings
+// cannot occupy that option slot. As defense in depth they are also rejected
+// after the subcommand, where git cannot honor them today but where a future
+// git revision might start interpreting them.
+//
+// Option tokens that are not in the subcommand's allowlist are refused outright
+// instead of being passed through to git. That closes the write and
+// execution sinks reachable through options: the diff machinery shared by
+// diff/log/show writes files for "--output=<file>" (relative to /workspace),
+// and "--ext-diff"/"--textconv" make git execute external diff or textconv
+// helpers that a repository's .git/config and .gitattributes can define.
+func validateGitArgs(subcommand string, args []string) error {
+	flags := gitOptionFlags[subcommand]
+	values := gitOptionValues[subcommand]
+	for _, arg := range args {
+		// Once "--" appears everything after it is an operand (revision,
+		// pathspec, or pattern), never an option; the generic checks above
+		// already validated those tokens for path escapes and metacharacters.
+		if arg == "--" {
+			return nil
+		}
+		if !strings.HasPrefix(arg, "-") {
+			// Operand: a revision, pathspec, pattern, or the value following a
+			// bare value option (for example the 5 in "git log -n 5").
+			continue
+		}
+		// The subcommand's own option allowlist wins, so a "-c" that belongs
+		// to the subcommand (git ls-files -c, git grep -c) is accepted while
+		// the same token remains rejected for subcommands that lack it.
+		if flags[arg] || values[arg] {
+			continue
+		}
+		if subcommand == "log" && gitLogCountShorthand(arg) {
+			continue
+		}
+		if gitOptionValueMatch(values, arg) {
+			continue
+		}
+		if arg == "-c" || strings.HasPrefix(arg, "-c=") || strings.HasPrefix(arg, "--config") ||
+			strings.HasPrefix(arg, "--git-dir") || strings.HasPrefix(arg, "--work-tree") {
+			return fmt.Errorf("run_command: unsafe git option %q", arg)
+		}
+		return fmt.Errorf("run_command: git option %q is not allowed for read-only git %s", arg, subcommand)
+	}
+	return nil
+}
+
+// gitOptionValueMatch reports whether arg is the "--name=value" attached
+// spelling of a listed value option. The bare "--name value" spelling is
+// already accepted above via values[arg]; the value itself is then the next
+// argv element and is validated as an ordinary operand.
+func gitOptionValueMatch(values map[string]bool, arg string) bool {
+	for name := range values {
+		if strings.HasPrefix(arg, name+"=") {
+			return true
+		}
+	}
+	return false
+}
+
+// gitLogCountShorthand accepts git log's "-<count>" and "-n<count>" forms
+// (for example "-5" and "-n5"). The count is a non-negative decimal integer,
+// so the form can only limit how many commits are shown. Bare "-n" is part of
+// the flag allowlist above; anything else starting with '-' is left to the
+// allowlist, which rejects it.
+func gitLogCountShorthand(arg string) bool {
+	if arg == "-" || !strings.HasPrefix(arg, "-") {
+		return false
+	}
+	digits := arg[1:]
+	if strings.HasPrefix(arg, "-n") {
+		digits = arg[2:]
+	}
+	if digits == "" {
+		return false
+	}
+	for _, r := range digits {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func pathEscapesWorkspace(arg string) bool {

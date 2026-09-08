@@ -49,6 +49,41 @@ Every request reaches the normal in-TUI approval modal before execution. The
 modal shows the tool name, canonical workspace, timeout, and raw argv JSON;
 approval defaults to no and expires after the same bounded confirmation window.
 
+## Git option policy (deny-by-default)
+
+"Read-only" is an intent, not a git guarantee, so the validator enforces a
+per-subcommand option allowlist for the eight git subcommands instead of
+passing options through. Each subcommand accepts only the exact option
+spellings listed for it in `internal/agent/command.go`; everything else is
+rejected before the sandbox runs:
+
+- **write sinks are closed:** `--output[=<file>]` — honored by the diff
+  machinery shared by `diff`, `log`, and `show`, which writes the patch to a
+  file under `/workspace` — is never allowed. Because git accepts any unique
+  prefix of a long option, abbreviations such as `--out=...` are rejected the
+  same way: the allowlist matches exact spellings only;
+- **external-helper execution is closed:** `--ext-diff` and `--textconv`
+  (which make git run helpers defined in repository config/attributes) are
+  rejected. Only `--no-ext-diff`, which disables the external helper, is
+  allowed for `diff`;
+- **config and work-tree isolation is retained:** `-c`, `--config-env`,
+  `--git-dir`, `--work-tree`, and their `=`-attached spellings are rejected
+  wherever they appear (git only honors them before the subcommand, and the
+  subcommand slot itself is allowlisted); the sandbox additionally scrubs
+  config with `GIT_CONFIG_GLOBAL=/dev/null` and `GIT_CONFIG_SYSTEM=/dev/null`;
+- operands (revisions such as `HEAD~1`, pathspecs such as `HEAD:README.md` or
+  `internal/`, and values of listed value options) still pass as plain
+  operands, so the ordinary read-only diagnostics keep working: `git status
+  --short`, `git log --oneline -n 5`, `git diff --stat HEAD~1 HEAD`, `git
+  rev-parse HEAD`, `git ls-files`, path-scoped `git grep`, and `git show
+  HEAD:README.md` are all accepted.
+
+To request a new option, add its exact spelling to the subcommand's list in
+`internal/agent/command.go` (`gitOptionFlags` for options without a value,
+`gitOptionValues` for options that take one) and cover it in the validator
+tests in `internal/agent/command_test.go`. The option must not open a write or
+external-helper-execution sink, and abbreviated spellings are never inferred.
+
 ## Hard limits
 
 | Limit | Default / maximum | Enforcement |
