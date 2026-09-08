@@ -6516,3 +6516,62 @@ this session's pre-fix probing).
 **Next action**
 - Fresh session: remaining audit items are owner-optional (F-09/F-10); the release train
   is done — next feature work per §10 (V2/N-series backlog) or owner's choice.
+
+## Session — 2026-09-08 (audit residue close-out): GPG click verified done; F-10 + F-09 closed (orchestrator run, DIRECT)
+
+**Work done**
+- Triage: DIRECT — verify + tiny local hygiene + two release-note lines; zero agents;
+  parent-local tools per router §1. Fresh session, owner picked the step via
+  ask_user_question (F-10 + F-09 close-out; the choice served as the human gate for the
+  branch/worktree deletes, merged-only scope).
+- **Standing GPG owner click VERIFIED DONE (retired from handoff):** GitHub API on the
+  v0.3.0 tag object (60c31a3) reports `verification.verified: true, reason: "valid"`
+  (GitHub only reports "valid" when the matching key is registered at
+  github.com/settings/keys); tag signature packet keyid = `5F74A36F7B5C1670` = the
+  documented signing key (fp `8D3A52AB…F74A36F7B5C1670`); local `git verify-tag v0.3.0`
+  → Good signature (EDDSA). The v0.3.0 release shows the Verified badge.
+- **F-10 CLOSED (local-only, no repo change):** 25 merged local branches deleted
+  (ref-only; each tip proven an ancestor of main via `git merge-base --is-ancestor`;
+  remote counterparts remain on origin for auditability): 22 via `git branch -d`,
+  `fix/release-tag-verify` + `perf/n1-windowing` via `-D` (refused `-d` only because
+  their origin upstreams diverge — both ancestors of main), and
+  `p0-supply-chain-to-main` via `-D` (omitted from the earlier listing; ancestor proven
+  before delete). Branches 27 → 2 (`main` + `spike/n8-scrollback`, deliberately kept —
+  unmerged, outside the confirmed scope). Three clean audit-squad worktrees removed from
+  `/tmp/audit-squad-as-20260907-77853d/` (base, wt-cA, wt-cB) + `git worktree prune` +
+  `git remote prune origin` (pruned stale `origin/feat/n6-composer`,
+  `origin/perf/n4-n2`); `/tmp` dir removed; `git worktree list` → main checkout only.
+- **F-09 CLOSED (GitHub-only, no repo file change):** one blockquote line appended to
+  the v0.1.0 and v0.1.1 release notes: tags predate the signed-tag policy (enforced from
+  v0.2.0 onward, GPG-signed + `release.yml`-verified); v0.1.x tags are unsigned. Original
+  bodies preserved (fetched, appended, edited via `gh release edit`, tails verified).
+  This satisfies AUDIT.md F-09's suggested fix; no AUDIT.md edit (F-03 convention:
+  finding status lives in LEDGER residuals).
+
+**Commands + exit codes**
+- `gh api repos/MerverliPy/SelfTUI/git/tags/60c31a3…` → verified true/valid; tag keyid
+  via `git cat-file tag v0.3.0 | gpg --list-packets` → 5F74A36F7B5C1670;
+  `git verify-tag v0.3.0` → Good signature.
+- `git worktree remove` ×3 + `git worktree prune` → rc 0; `git remote prune origin` →
+  2 stale refs pruned; `git branch -d/-D` deletions → 25 deleted, rc 0;
+  `git merge-base --is-ancestor` checks → rc 0 (ancestor) for all three `-D` targets.
+- `gh release edit v0.1.0` / `v0.1.1` → rc 0; body tails show the appended note.
+- Final state: `git status --porcelain` empty before the LEDGER append; branches =
+  `main`, `spike/n8-scrollback`; worktree list = `/home/calvin/SelfTUI fbfa7bf [main]`.
+
+**Decisions / lines to respect**
+- Unmerged branches are never force-deleted by default: `spike/n8-scrollback` kept
+  (contains unmerged scrollback spike work; owner decides separately — `-D` is available).
+- `-D` used only where `-d` refused solely on divergent upstreams and the tip was proven
+  an ancestor of main (nothing reachable lost).
+- Audit-residue statuses recorded here, not in AUDIT.md (F-03 convention maintained).
+- Docs-only session: full `make check` gate not run (no code/config changed); the PR's
+  required CI check covers the tree.
+
+**Blockers / open decisions**
+- None. All audit residue is closed or retired: F-09 ✔ (release-note note), F-10 ✔
+  (local hygiene), standing GPG click ✔ (verified done).
+
+**Next action**
+- Fresh session: next feature work per §10 (V2/N-series backlog) — owner picks the
+  milestone; spike/n8-scrollback may be resumed or `-D`-deleted as part of that choice.
