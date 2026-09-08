@@ -447,3 +447,87 @@ func TestModelsViewPullSaturationCancellationTerminates(t *testing.T) {
 	}
 	requireSettledGoroutines(t, baseline)
 }
+
+// TestAgentTerminalEventSurvivesCanceledFullActivityChannel (cA): a turn
+// whose fake host streams more events than the 64-slot activity channel can
+// hold saturates the channel while the test stops draining; canceling the
+// parent then forces the producer's final terminal event onto the full
+// channel, where the emitEvent fallback drops it. The UI must still complete
+// that turn: once the queued activity is drained through the real production
+// pickup path (waitChatCmd), the terminal event must surface — never be lost —
+// so the view reaches its terminal state (streaming false, subscription
+// cleared) instead of spinning in streaming mode forever. This asserts UI
+// completion, not just producer exit (cA-002).
+func TestAgentTerminalEventSurvivesCanceledFullActivityChannel(t *testing.T) {
+	burstDone := make(chan struct{})
+	srv := saturationChatHost(burstDone)
+	t.Cleanup(srv.Close)
+
+	parentCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cfg := config.Default()
+	v := newAgentView(parentCtx, ollama.New(srv.URL, ""), NewStyles("dark"), "dark",
+		"", cfg.WorkspaceRoot, cfg.Agent.SystemPrompt, cfg.Agent, false, srv.URL)
+	v, _ = v.Update(tea.WindowSizeMsg{Width: 88, Height: 40})
+	v, _ = v.Update(agentModelsLoadedMsg{models: sampleModels()})
+	typeText(t, &v, "hello")
+	v, _ = v.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if !v.streaming {
+		t.Fatal("enter: chat should start")
+	}
+
+	// Prove the stream is live, then STOP draining so the producer saturates
+	// the 64-slot activity channel (same setup as the M-06 producer test).
+	for i := 0; i < 3; i++ {
+		select {
+		case msg := <-v.chatCh:
+			v, _ = v.Update(msg)
+		case <-time.After(2 * time.Second):
+			t.Fatalf("chat deltas stopped arriving before saturation (streaming=%v len(ch)=%d)",
+				v.streaming, len(v.chatCh))
+		}
+	}
+	select {
+	case <-burstDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("fake host never finished its burst")
+	}
+	if !waitForSaturatedChannel(t, v.chatCh) {
+		t.Fatal("activity channel never saturated (producer did not block?)")
+	}
+
+	cancel()
+
+	// The producer must exit even though its terminal send collided with the
+	// full channel; the producer closes the activity channel before chatDone
+	// (defer order), so a chatDone receive also proves chatCh is closed.
+	select {
+	case <-v.chatDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("chat producer still blocked after parent cancel with a full channel")
+	}
+
+	// Drain the queued activity through the production pickup path — the same
+	// waitChatCmd command the view re-arms after every activity event. Events
+	// arrive in FIFO order; once the channel is drained and closed, the
+	// retained terminal event must surface so the turn completes instead of
+	// the view spinning in streaming mode.
+	for v.streaming {
+		cmd := v.waitChatCmd()
+		if cmd == nil {
+			t.Fatal("chat subscription ended while the view is still streaming")
+		}
+		msg := cmd()
+		if msg == nil {
+			t.Fatal("activity channel drained without the terminal event: the canceled turn can never complete")
+		}
+		v, _ = v.Update(msg)
+	}
+	if v.streaming {
+		t.Fatal("view still streaming after a canceled, saturated turn (terminal event was lost)")
+	}
+	if v.chatCh != nil || v.chatDone != nil {
+		t.Errorf("turn not finalized: chatCh set=%v chatDone set=%v, want both cleared",
+			v.chatCh != nil, v.chatDone != nil)
+	}
+}
