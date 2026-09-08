@@ -6918,3 +6918,12 @@ this session's pre-fix probing).
   the fix commit — Codex: "Didn't find any major issues. Chef's kiss."
   (reviewed `dd3a4d6`; 👍 on the PR, evidence comment id 5592562543). CI pass
   (58s) on the same commit; PR MERGEABLE. Ready for the owner to merge.
+
+**PR #36 merged to main (2026-09-08):** `gh pr merge 36 --merge` → merge
+commit `f54fb115` (merge of the V2e residual-hardening + Codex-P1-alias fix +
+LEDGER docs). Branch-protection required check PASSED on the merge commit
+(≈58s). `main` pulled cleanly to `f54fb115`; branch
+`fix/v2e-residual-hardening` kept (auditable history, same as #35). The
+Codex re-review was clean ("Didn't find any major issues. Chef's kiss." on
+`dd3a4d6`). This LEDGER entry is a local docs commit riding the next PR
+(branch protection: no direct main pushes).
