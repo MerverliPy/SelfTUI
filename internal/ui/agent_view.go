@@ -658,7 +658,7 @@ func (v *AgentView) primeStreamRender() {
 		return
 	}
 	header := v.assistantHeader(v.model)
-	w := maxInt(v.w-2, 1)
+	w := chatRenderWidth(v.w - 2)
 	if v.streamRenderValid && v.streamRenderSrc == v.streamText &&
 		v.streamRenderHead == header && v.streamRenderW == w && v.streamRenderDark == v.dark {
 		return // unchanged inputs: the cache is still exact
@@ -678,7 +678,7 @@ func (v *AgentView) primeStreamRender() {
 // a frame hits.
 func (v AgentView) streamBlockRender() string {
 	header := v.assistantHeader(v.model)
-	w := maxInt(v.w-2, 1)
+	w := chatRenderWidth(v.w - 2)
 	if v.streamRenderValid && v.streamRenderSrc == v.streamText &&
 		v.streamRenderHead == header && v.streamRenderW == w && v.streamRenderDark == v.dark {
 		return v.streamRender
@@ -774,15 +774,20 @@ func (v AgentView) Update(msg tea.Msg) (AgentView, tea.Cmd) {
 
 	case tea.WindowSizeMsg:
 		v.w, v.h = msg.Width, msg.Height
-		// Wrap width changed: recompose the textarea fit and force a renderer
-		// + cache rebuild at the new width. N2: re-prime the active-block
+		// Wrap width changed: recompose the textarea fit and rebuild the
+		// renderer + caches at the new width. N2: re-prime the active-block
 		// cache too, so the next frame cannot fall back to per-frame renders
-		// until the next tick.
+		// until the next tick. N1 micro-item: the render width is bucketed
+		// to 5 columns, so jitter inside one bucket leaves the renderer and
+		// both caches warm; only a bucket change rebuilds (a nil renderer
+		// always retries the build).
 		v = v.fitComposer()
-		v.renderW = -1
-		v.rebuildRenderer()
-		v.rebuildRenderCache()
-		v.primeStreamRender()
+		if w := chatRenderWidth(v.w - 2); v.renderW != w || v.tr == nil {
+			v.renderW = -1
+			v.rebuildRenderer()
+			v.rebuildRenderCache()
+			v.primeStreamRender()
+		}
 		return v, nil
 
 	case agentModelsLoadedMsg:
@@ -2365,7 +2370,14 @@ func (v AgentView) assistantHeaderRow(model, meta string) string {
 	if meta == "" {
 		return left
 	}
-	inner := maxInt(v.w-2, 10)
+	// Pad to the bucketed render width (N1 micro-item), not the exact pane:
+	// the header is baked into each cached block, so its padding must be a
+	// pure function of the same bucket the markdown used. A same-bucket
+	// resize then leaves every cached header still correct (bucket ≤ pane,
+	// so it can never exceed the pane), and a cross-bucket rebuild realigns
+	// it. Cost: right-aligned meta may sit a few columns short of the margin
+	// on non-bucket-aligned panes; the 72×30 device pane (70) is exact.
+	inner := chatRenderWidth(maxInt(v.w-2, 10))
 	pad := inner - lipgloss.Width(left) - lipgloss.Width(meta)
 	if pad < 1 {
 		return left + "  " + v.styles.mutedText().Render(meta)
@@ -2420,8 +2432,23 @@ func turnTokPerSec(m ollama.ChatMetrics) int {
 	return int(math.Round(float64(m.Tokens) * 1e9 / m.Nanos))
 }
 
-// ensureRenderer builds the glamour renderer when it is missing or the width
-// changed. renderBlock calls it lazily so streaming renders never fail.
+// chatRenderWidth buckets the chat pane's render width down to a multiple of
+// five (N1 micro-item, PLAN §12 N7): resize jitter inside one bucket reuses
+// the bucketed glamour renderer and the per-width caches instead of
+// rebuilding and re-rendering on every wiggle. Rounding is down so a bucketed
+// render never exceeds the real pane; panes narrower than one bucket keep
+// their exact width.
+func chatRenderWidth(pane int) int {
+	pane = maxInt(pane, 1)
+	if pane < 5 {
+		return pane
+	}
+	return pane - pane%5
+}
+
+// ensureRenderer builds the glamour renderer when it is missing or the
+// (bucketed) width changed. renderBlock calls it lazily so streaming renders
+// never fail.
 func (v *AgentView) ensureRenderer(width int) {
 	width = maxInt(width, 1)
 	if v.tr != nil && v.renderW == width {
@@ -2443,18 +2470,18 @@ func (v *AgentView) ensureRenderer(width int) {
 	v.renderW = width
 }
 
-// rebuildRenderer (re)builds the renderer for the current width after a
-// geometry change. A failed build keeps the previous renderer; View falls
-// back to raw text so output is never silent.
+// rebuildRenderer (re)builds the renderer for the current (bucketed) width
+// after a geometry change. A failed build keeps the previous renderer; View
+// falls back to raw text so output is never silent.
 func (v *AgentView) rebuildRenderer() {
-	v.ensureRenderer(maxInt(v.w-2, 1))
+	v.ensureRenderer(chatRenderWidth(v.w - 2))
 }
 
 // rebuildRenderCache re-renders every committed block at the current width.
 // Only called on geometry changes (rare); renderBlock uses the shared cache
 // every frame otherwise.
 func (v *AgentView) rebuildRenderCache() {
-	if v.renderW != maxInt(v.w-2, 1) {
+	if v.renderW != chatRenderWidth(v.w-2) {
 		return // renderer is stale; ensureRenderer on next renderBlock fixes it
 	}
 	for i := range v.turns {
@@ -2490,7 +2517,7 @@ func (v AgentView) renderBlock(header, md string) string {
 	// a hostile sequence into the terminal; user text is local but harmless
 	// to strip here (display-only, idempotent).
 	md = sanitizeTerminalText(md)
-	v.ensureRenderer(maxInt(v.w-2, 1))
+	v.ensureRenderer(chatRenderWidth(v.w - 2))
 	if v.tr != nil {
 		if out, err := v.tr.RenderBytes([]byte(md)); err == nil {
 			return header + "\n" + strings.TrimSuffix(string(out), "\n")

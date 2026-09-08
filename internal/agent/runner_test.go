@@ -78,25 +78,19 @@ func TestReadOnlyToolsRejectSymlinkEscape(t *testing.T) {
 // failed deep inside the filesystem layer) and the loop continued.
 func TestRunnerRejectsOversizedNativeToolArgument(t *testing.T) {
 	root := t.TempDir()
-	requests := 0
 	executed := 0
 	// ~1 MiB + slack of text inside a valid JSON arguments object: the decoded
 	// arguments cross the 1 MiB per-call ceiling while the single NDJSON event
 	// stays far below the 4 MiB per-event wire cap.
 	huge := strings.Repeat("a", (1<<20)+512)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requests++
-		if err := json.NewDecoder(r.Body).Decode(new(ollama.ChatRequest)); err != nil {
-			t.Fatalf("decode request: %v", err)
-		}
+	srv, stub := newChatStub(t, func(phase int, _ ollama.ChatRequest, w http.ResponseWriter) {
 		w.Header().Set("Content-Type", "application/x-ndjson")
-		if requests == 1 {
+		if phase == 0 {
 			io.WriteString(w, toolEvent(nativeCall("read_file", fmt.Sprintf(`{"path":"%s"}`, huge))))
 			return
 		}
 		io.WriteString(w, finalEvent("done"))
-	}))
-	t.Cleanup(srv.Close)
+	})
 
 	r := NewRunnerWithPolicy(ollama.New(srv.URL, ""), root, "", 4, &ToolPolicy{})
 	err := r.Run(context.Background(), Request{
@@ -115,8 +109,8 @@ func TestRunnerRejectsOversizedNativeToolArgument(t *testing.T) {
 	if executed != 0 {
 		t.Errorf("tool executions = %d, want 0 (oversized call must not execute)", executed)
 	}
-	if requests != 1 {
-		t.Errorf("chat requests = %d, want 1 (run must stop at the crossing iteration)", requests)
+	if stub.requests() != 1 {
+		t.Errorf("chat requests = %d, want 1 (run must stop at the crossing iteration)", stub.requests())
 	}
 }
 
@@ -126,22 +120,16 @@ func TestRunnerRejectsOversizedNativeToolArgument(t *testing.T) {
 // batch, bounded only by max_tool_iterations.
 func TestRunnerRejectsBatchOverCallLimit(t *testing.T) {
 	root := t.TempDir()
-	requests := 0
 	executed := 0
 	calls := make([]string, 70)
 	for i := range calls {
 		calls[i] = nativeCall("list_dir", `{"path":"."}`)
 	}
 	batch := multiToolEvent(calls)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requests++
-		if err := json.NewDecoder(r.Body).Decode(new(ollama.ChatRequest)); err != nil {
-			t.Fatalf("decode request: %v", err)
-		}
+	srv, stub := newChatStub(t, func(_ int, _ ollama.ChatRequest, w http.ResponseWriter) {
 		w.Header().Set("Content-Type", "application/x-ndjson")
 		io.WriteString(w, batch)
-	}))
-	t.Cleanup(srv.Close)
+	})
 
 	r := NewRunnerWithPolicy(ollama.New(srv.URL, ""), root, "", 3, &ToolPolicy{})
 	err := r.Run(context.Background(), Request{
@@ -157,8 +145,8 @@ func TestRunnerRejectsBatchOverCallLimit(t *testing.T) {
 	if executed != 0 {
 		t.Errorf("tool executions = %d, want 0 (crossing batch must not execute)", executed)
 	}
-	if requests != 1 {
-		t.Errorf("chat requests = %d, want 1 (run must stop at the crossing iteration)", requests)
+	if stub.requests() != 1 {
+		t.Errorf("chat requests = %d, want 1 (run must stop at the crossing iteration)", stub.requests())
 	}
 }
 
@@ -169,22 +157,16 @@ func TestRunnerRejectsBatchOverCallLimit(t *testing.T) {
 // until max_tool_iterations was exhausted.
 func TestRunnerBoundsToolCallsPerRun(t *testing.T) {
 	root := t.TempDir()
-	requests := 0
 	executed := 0
 	calls := make([]string, 40)
 	for i := range calls {
 		calls[i] = nativeCall("list_dir", `{"path":"."}`)
 	}
 	batch := multiToolEvent(calls)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requests++
-		if err := json.NewDecoder(r.Body).Decode(new(ollama.ChatRequest)); err != nil {
-			t.Fatalf("decode request: %v", err)
-		}
+	srv, stub := newChatStub(t, func(_ int, _ ollama.ChatRequest, w http.ResponseWriter) {
 		w.Header().Set("Content-Type", "application/x-ndjson")
 		io.WriteString(w, batch)
-	}))
-	t.Cleanup(srv.Close)
+	})
 
 	r := NewRunnerWithPolicy(ollama.New(srv.URL, ""), root, "", 5, &ToolPolicy{})
 	err := r.Run(context.Background(), Request{
@@ -200,8 +182,8 @@ func TestRunnerBoundsToolCallsPerRun(t *testing.T) {
 	if executed != 40 {
 		t.Errorf("tool executions = %d, want 40 (only the first accepted batch runs)", executed)
 	}
-	if requests != 2 {
-		t.Errorf("chat requests = %d, want 2 (crossing second batch rejected)", requests)
+	if stub.requests() != 2 {
+		t.Errorf("chat requests = %d, want 2 (crossing second batch rejected)", stub.requests())
 	}
 }
 
@@ -210,15 +192,9 @@ func TestRunnerExecutesNativeToolAndStreamsFinal(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("# hello\nagent-readable\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	calls := 0
 	var secondMessages []ollama.ChatMessage
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls++
-		var req ollama.ChatRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			t.Fatalf("decode request: %v", err)
-		}
-		if calls == 1 {
+	srv, stub := newChatStub(t, func(phase int, req ollama.ChatRequest, w http.ResponseWriter) {
+		if phase == 0 {
 			if len(req.Tools) != 6 {
 				t.Errorf("tools = %d, want 6 (read/list/grep/write/edit/run_command)", len(req.Tools))
 			}
@@ -229,8 +205,7 @@ func TestRunnerExecutesNativeToolAndStreamsFinal(t *testing.T) {
 		secondMessages = req.Messages
 		w.Header().Set("Content-Type", "application/x-ndjson")
 		io.WriteString(w, finalEvent("I read the file."))
-	}))
-	t.Cleanup(srv.Close)
+	})
 
 	var events []Msg
 	r := NewRunnerWithPolicy(ollama.New(srv.URL, ""), root, "system", 4, &ToolPolicy{})
@@ -240,8 +215,8 @@ func TestRunnerExecutesNativeToolAndStreamsFinal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if calls != 2 {
-		t.Fatalf("chat calls = %d, want 2", calls)
+	if stub.requests() != 2 {
+		t.Fatalf("chat calls = %d, want 2", stub.requests())
 	}
 	if len(secondMessages) < 3 || secondMessages[len(secondMessages)-1].Role != ollama.RoleTool {
 		t.Fatalf("second messages = %+v, want tool result last", secondMessages)
@@ -391,16 +366,14 @@ func TestRunnerParsesContentEmbeddedToolJSON(t *testing.T) {
 
 	// runToolCase drives one Run over a scripted two-turn endpoint.
 	runToolCase := func(t *testing.T, firstContent string) (calls int, got string) {
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			calls++
+		srv, stub := newChatStub(t, func(phase int, _ ollama.ChatRequest, w http.ResponseWriter) {
 			w.Header().Set("Content-Type", "application/x-ndjson")
-			if calls == 1 {
+			if phase == 0 {
 				io.WriteString(w, finalEvent(firstContent))
 				return
 			}
 			io.WriteString(w, finalEvent("found it"))
-		}))
-		t.Cleanup(srv.Close)
+		})
 		r := NewRunnerWithPolicy(ollama.New(srv.URL, ""), root, "", 3, &ToolPolicy{})
 		err := r.Run(context.Background(), Request{Model: "coder", Messages: []ollama.ChatMessage{{Role: ollama.RoleUser, Content: "find needle"}}}, func(msg Msg) {
 			if token, ok := msg.(TokenMsg); ok {
@@ -410,7 +383,7 @@ func TestRunnerParsesContentEmbeddedToolJSON(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Run: %v", err)
 		}
-		return calls, got
+		return stub.requests(), got
 	}
 
 	t.Run("tool_calls envelope executes", func(t *testing.T) {
@@ -480,18 +453,15 @@ func TestLooksLikeEmbeddedJSONPinned(t *testing.T) {
 }
 
 func TestRunnerExplicitPlainChatFallbackOnToolRejection(t *testing.T) {
-	calls := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls++
-		if calls == 1 {
+	srv, stub := newChatStub(t, func(phase int, _ ollama.ChatRequest, w http.ResponseWriter) {
+		if phase == 0 {
 			w.WriteHeader(http.StatusBadRequest)
 			io.WriteString(w, `{"error":"model does not support tools"}`)
 			return
 		}
 		w.Header().Set("Content-Type", "application/x-ndjson")
 		io.WriteString(w, finalEvent("plain answer"))
-	}))
-	t.Cleanup(srv.Close)
+	})
 	var fallback bool
 	var got string
 	r := NewRunnerWithPolicy(ollama.New(srv.URL, ""), t.TempDir(), "", 2, &ToolPolicy{})
@@ -505,8 +475,8 @@ func TestRunnerExplicitPlainChatFallbackOnToolRejection(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Run fallback: %v", err)
 	}
-	if calls != 2 || !fallback || got != "plain answer" {
-		t.Errorf("calls=%d fallback=%v text=%q", calls, fallback, got)
+	if stub.requests() != 2 || !fallback || got != "plain answer" {
+		t.Errorf("requests=%d fallback=%v text=%q", stub.requests(), fallback, got)
 	}
 }
 
@@ -570,16 +540,15 @@ func TestRunnerGrepOverRootHidesPolicyDeniedDescendants(t *testing.T) {
 	root := seedSensitiveGrepWorkspace(t)
 	calls := 0
 	var summary string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv, _ := newChatStub(t, func(phase int, _ ollama.ChatRequest, w http.ResponseWriter) {
 		calls++
 		w.Header().Set("Content-Type", "application/x-ndjson")
-		if calls == 1 {
+		if phase == 0 {
 			io.WriteString(w, toolEvent(nativeCall("grep", `{"pattern":"GOOD_|LEAK_","path":"."}`)))
 			return
 		}
 		io.WriteString(w, finalEvent("searched"))
-	}))
-	t.Cleanup(srv.Close)
+	})
 
 	r := NewRunnerWithPolicy(ollama.New(srv.URL, ""), root, "", 3, &ToolPolicy{})
 	if err := r.Run(context.Background(), Request{
@@ -739,17 +708,14 @@ func TestRunnerMetricsAbsentStaysZero(t *testing.T) {
 func TestRunnerMetricsLastFinalChunkWins(t *testing.T) {
 	// A multi-iteration tool loop reports the metrics of the stream that
 	// ENDED the turn, not the intermediate tool-call stream.
-	calls := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls++
+	srv, stub := newChatStub(t, func(phase int, _ ollama.ChatRequest, w http.ResponseWriter) {
 		w.Header().Set("Content-Type", "application/x-ndjson")
-		if calls == 1 {
+		if phase == 0 {
 			io.WriteString(w, `{"message":{"role":"assistant","tool_calls":[{"function":{"name":"list_dir","arguments":{"path":"."}}}]},"done":true,"done_reason":"tool_calls","eval_count":11,"eval_duration":11e9}`+"\n")
 			return
 		}
 		io.WriteString(w, `{"message":{"role":"assistant","content":"listed"},"done":true,"done_reason":"stop","prompt_eval_count":2222,"eval_count":33,"eval_duration":3.3e9}`+"\n")
-	}))
-	t.Cleanup(srv.Close)
+	})
 	var done AgentDoneMsg
 	r := NewRunnerWithPolicy(ollama.New(srv.URL, ""), t.TempDir(), "", 3, &ToolPolicy{})
 	if err := r.Run(context.Background(), Request{
@@ -761,8 +727,8 @@ func TestRunnerMetricsLastFinalChunkWins(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if calls != 2 {
-		t.Fatalf("calls = %d, want 2 (tool call + final answer)", calls)
+	if stub.requests() != 2 {
+		t.Fatalf("chat requests = %d, want 2 (tool call + final answer)", stub.requests())
 	}
 	if done.Reason != "stop" {
 		t.Errorf("Reason = %q, want stop", done.Reason)

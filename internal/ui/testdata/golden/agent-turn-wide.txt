@@ -5,7 +5,7 @@
 │  explain this repo                                                                                                   │
 │                                                                                                                      │
 │                                                                                                                      │
-│◈ qwen3:8b                                                                                                 0.4s · stop│
+│◈ qwen3:8b                                                                                              0.4s · stop   │
 │                                                                                                                      │
 │  It is a mobile-first terminal UI for Ollama, styled like the opencode.ai TUI.                                       │
 │                                                                                                                      │

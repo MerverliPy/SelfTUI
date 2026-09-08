@@ -6049,3 +6049,156 @@ Nothing pushed to origin (landing stays the owner's call); both branches kept (r
 **Next action**
 - Owner lands local main on origin in a fresh session (push or PR), then optional audit-squad cleanup;
   N1 width-bucketing or the flaky-runner hardening item is the next queued step; N7 stays continuous watch.
+
+### 2026-09-08 — PR #25 opened, P1 review fix, merged to origin/main (audit-squad cA+cB landing)
+**Milestone:** owner-assigned step — create the landing PR for the audit-squad cA+cB merges, monitor
+checks + reviewer suggestions, merge when clean · **Result:** done — PR #25
+(`landing/audit-squad-ca-cb` → `main`) merged as `2e2a8c11`; one Codex P1 found, verified,
+fixed fix-forward (`31ce8aa`), re-review clean ("Didn't find any major issues"), CI green on the
+fix commit and on the post-merge main run. Local main ff'd to `2e2a8c11`; `make check` rc 0.
+
+**Work done**
+- **PR created:** branch `landing/audit-squad-ca-cb` at local main `11d6da8` (cA+cB merges + both
+  ledger handoffs riding, per carried-docs precedent); PR #25 with a precise body quoting the
+  corrected packet's judge verdicts and the pre-existing flaky-runner finding (overstatement guarded
+  against — body states judge-b3 PASS and attributes the two earlier FAILs to the base-commit flake
+  family, §5).
+- **Round-1 Codex review (1 P1 on `internal/agent/command.go`):** default-on helper execution —
+  git enables textconv filters (default for `git diff`, `git log -p`) and external diff drivers
+  (`git diff`) WITHOUT any flag when `.gitattributes`+`.git/config` define a driver; cB's allowlist
+  rejected the enabling spellings but did not disable the default-on channels, and the sandbox
+  mounts the workspace writable. **Independently reproduced on git 2.43.0** before acting: helper
+  marker written by `git diff`, `git diff --no-ext-diff` (the one negation cB allowed), and
+  `git log -p`; only `--no-textconv`/`--no-ext-diff` suppress; accepted on diff/log/show.
+- **Fix (`31ce8aa`, fix-forward on the PR branch):** `applyReadOnlyGitGuards` — RunCommand forces
+  `--no-textconv --no-ext-diff` right after the subcommand for every diff/log/show invocation
+  (post-validation, idempotent, no-op for non-patch invocations); both negations allowlisted per
+  subcommand (enabling forms still rejected); doc comments + `docs/run-command-containment.md`
+  corrected (execution is closed by forced negations, not option rejection alone). New tests:
+  `TestApplyReadOnlyGitGuards` (pure shape) and `TestRunCommandDoesNotExecuteRepoConfiguredGitHelpers`
+  (execution-level bwrap trap: textconv + external diff driver armed against a tracked binary file;
+  **red-checked** without the guard — helper executes inside bubblewrap and writes into the writable
+  /workspace; green with it). `#!/usr/bin/sh` shebang chosen because /bin is not mounted in the
+  sandbox (usrmerge) — keeps the tripwire non-vacuous.
+- **Verification:** `make check` rc 0; package under `-race` rc 0; targeted suite 5/5 PASS
+  (validator reject/accept tables, guard unit, exec regression, live bwrap containment test);
+  PR CI pass on `11d6da8` (1m11s) and on `31ce8aa` (1m13s).
+- **Round-2 Codex on `31ce8aa` (05:39Z):** "Didn't find any major issues. You're on a roll." —
+  verdict posted as an **issue comment** (not a review object), which is why the earlier
+  review-object poll loop appeared hung; no hang, wrong surface. Lesson recorded below.
+- **Merged:** `gh pr merge 25 --merge` → merge commit `2e2a8c11` (parents `995f147` + `31ce8aa`);
+  post-merge CI on main → success; local main ff `11d6da8..2e2a8c1`; `make check` on merged main rc 0.
+
+**Commands + exit codes**
+- `gh pr create` → PR #25 rc 0; `gh pr comment 25 "@codex review"` ×2 → rc 0.
+- `make check` (post-fix, on branch) → rc 0; `go test -race -count=1 ./internal/agent -run '<targeted>'` → rc 0.
+- Red/green: guard disabled → exec test FAIL (marker written into /workspace); guard active → PASS.
+- `gh pr checks 25 --watch` → pass 1m13s on `31ce8aa`; `gh pr merge 25 --merge` → rc 0.
+- `git merge --ff-only origin/main` → rc 0 (`11d6da8..2e2a8c1`); `make check` on merged main → rc 0.
+- `gh run list --branch main` → completed success on `2e2a8c11`.
+
+**Decisions / lines to respect**
+- Standard merge commit (not squash), branch `landing/audit-squad-ca-cb` kept — repo convention.
+- Round-1 P1 thread stays open on GitHub (no thread-resolve via REST); addressed state evidenced by
+  `31ce8aa` + clean round-2 (same pattern as PR #24's P2).
+- **Process lesson:** the Codex connector posts verdicts as issue comments or review objects
+  inconsistently — monitoring must watch `/pulls/{n}/reviews`, `/pulls/{n}/comments`, AND
+  `/issues/{n}/comments` (plus reactions on the trigger comment); my single-surface poll produced a
+  false "hung" appearance. Also: long watch loops need shorter iterations or multiple tool calls —
+  two 20+-min poll shells died on the 13-min bash timeout mid-poll.
+- The audit-squad packet's flaky-runner finding remains logged (2026-09-08 earlier entry) for a
+  future session; N1 width-bucketing still queued; N7 continuous watch unchanged.
+
+**Blockers / open decisions**
+- None. **Next:** N1 glamour width-bucketing micro-item (queued), flaky-runner hardening (queued),
+  or next owner-assigned step; N7 stays continuous watch.
+
+### 2026-09-08 — N1 width-bucketing micro-item + flaky-runner hardening + per-client transports (orchestrator run)
+**Milestone:** owner-assigned step — work the queue (N1 glamour width-bucketing micro-item; flaky-runner
+hardening from the audit-squad packet §5 pre-existing finding; trailing ledger commit `e905d69` rides the
+next landing) per the binding one-step rule · **Result:** done — all three items landed on branch
+`feat/n1-width-bucket-flaky-transport` (cut at local main `e905d69` so the trailing ledger commit rides),
+canonical gate green (`make check` rc 0) and **8/8 full `make race` runs green** after the hardening
+(vs ~17-19% per-run flake rate before: 2 fails in 8 base-era runs per the packet, 3 fails in 16 runs in
+this session's pre-fix probing).
+
+**Work done**
+- **N1 width-bucketing (PLAN §12 N7 micro-item):** `chatRenderWidth` buckets the chat pane's render
+  width DOWN to a multiple of 5 cols (panes < 5 cols stay exact); all five glamour gates
+  (`ensureRenderer` callers: `renderBlock`, `rebuildRenderer`, `rebuildRenderCache`,
+  `primeStreamRender`, `streamBlockRender`) plus the `tea.WindowSizeMsg` handler now key on the
+  bucketed width, so resize jitter inside one bucket leaves the glamour renderer AND the per-width
+  caches warm; the resize handler rebuilds only on a bucket change (nil renderer still retries the
+  build). Rounding is down so a bucketed render never overflows the real pane. Tests:
+  `TestChatRenderWidthBucketsToFiveColumns` (table) + `TestResizeJitterKeepsRenderCacheWarm`
+  (same-bucket resize keeps renderer at 85 and the stream cache warm; cross-bucket re-keys and
+  re-primes; cache ≡ fresh render). Goldens: **byte-identical, no regeneration needed** — 72×30
+  (pane 70) is already on a bucket and the 120×40 fixture content never wraps past col 115.
+- **Flaky-runner hardening (packet §5 remedy direction):** new `chatStub` harness
+  (`internal/agent/chatstub_test.go`) replaces the raw-counter httptest handlers of the exposed
+  family (oversized-arg H-03, batch-over-limit, bounds-tool-calls, executes-native,
+  embedded-tool-JSON ×3 subtests, plain-chat-fallback, grep-hide, metrics, mutation-confirm,
+  write-confirm-expiry). Contract: (a) an undecodable request body — which the runner cannot
+  produce (it always sends json.Marshal'd ChatRequests) — is logged, refused 400, never counted;
+  (b) requests are counted by body sha256 identity, so a redelivered request counts once while each
+  real iteration (messages grow monotonically) still counts — genuine runner bugs keep failing the
+  counts; (c) responses are served by body-identity phase so a redelivery receives its original
+  response (arrival-keyed responses were corrupting the scripted conversation — the embedded-JSON
+  flake showed turn-2's response as turn-1's content).
+- **Root-cause honesty:** the exact transport mechanism behind the duplicate/truncated deliveries is
+  NOT fully identified. Static analysis of go1.27.1 transport retry semantics says a POST replays
+  only after a nothing-written failure on a reused conn (which leaves no server trace), yet the
+  observed extra arrivals were complete valid requests — the mechanism survives my read of the
+  transport. Four instrumented capture attempts (server-side body/addr logging; in-package client
+  trace with dial/reuse/RoundTrip logging) did not catch a live occurrence. The hardening is
+  therefore deliberately mechanism-independent: it makes every observed failure shape structurally
+  impossible while preserving assertion power against real runner bugs.
+- **Per-client transports (`internal/ollama`):** `ollama.New` now gives both HTTP clients a private
+  `http.DefaultTransport` clone (`privateTransport()`) instead of sharing the process-global pool.
+  Honest note: this did NOT change the flake rate (3 fails in 16 pre-hardening race runs) — the
+  shared-pool + recycled-ephemeral-port leakage class it removes is real hygiene but was not the
+  operative mechanism. Kept: one client per host in production (`main.go`, `app.go`), transports
+  pool per origin anyway, and tests already override `c.http/c.stream.Transport` directly.
+  Regression test `TestNewUsesPrivateTransports` pins private non-global pools + preserved proxy.
+
+**Commands + exit codes**
+- `make check` (final, on branch) → rc 0 (build + uncached suite + vet + fmt).
+- `make race` ×8 post-hardening → all rc 0 (was 3 FAILs across 16 pre-hardening runs this session:
+  TestMutationToolsNeedExplicitConfirmation calls=3; TestRunnerRejectsOversizedNativeToolArgument
+  decode-EOF + requests=2 ×2 incl. one probe-induced; TestRunnerParsesContentEmbeddedToolJSON
+  subtest calls=3 with corrupted final).
+- `go test -count=1 ./...` → ok (all packages) before the race gauntlet; `go vet ./...` + `gofmt -l .` clean.
+- `go test ./internal/ui -run 'TestChatRenderWidth|TestResizeJitter|TestGolden|TestStream|TestAgentWindow'` → ok; goldens untouched (`git status` shows no testdata changes).
+
+**Decisions / lines to respect**
+- Identity-based counting is NOT assertion weakening: distinct logical iterations always have
+  distinct bodies (messages grow per iteration), so the counts still catch real runner bugs; the
+  absorbed shapes are exactly those the runner cannot produce. Recorded in chatstub_test.go's doc.
+- `TestRunnerCancellationReturnsPromptly` and the constant-single-response handlers were left
+  untouched (no counter, no phase keying — not exposed).
+- The remaining same-shape handlers without counters were left as-is; if a flake ever migrates to
+  them, convert to `chatStub` the same way.
+- Transport fix kept despite not moving the flake rate — isolation hygiene, zero production cost,
+  pinned by its own regression test.
+- N7 continuous upstream watch unchanged; the packet's CI fallback (`-p 1`) NOT applied — revisit
+  only if flakes recur post-hardening.
+
+**Blockers / open decisions**
+- None in the work. **Open (owner):** land the PR (repo rhythm); the exact transport mechanism
+  remains unidentified — if flakes recur despite the stub, the next probe is a client-side
+  writeLoop-level trace (requires an in-package hook in internal/ollama).
+
+**Next action**
+- Owner merges the landing PR; then N7 continuous watch or the next owner-assigned step.
+  **Codex review round 1 on `d75787c` (2 P2, both verified valid, fixed fix-forward):**
+  (1) cached assistant blocks bake `assistantHeaderRow` padding at the EXACT pane width, so a
+  same-bucket shrink left stale headers exceeding the pane by up to 4 cols — fix: the header now
+  pads to the bucketed render width too (`chatRenderWidth(maxInt(v.w-2, 10))`), making every cached
+  block a pure function of its bucket (bucket ≤ pane ⇒ the exceed case is impossible; same-bucket
+  jitter changes nothing visible; 72×30 pane 70 exact; documented cost: right-aligned meta may sit
+  a few cols short of the margin on non-bucket-aligned panes). Two wide goldens regenerated
+  (agent-resumed-wide, agent-turn-wide: meta 3 cols short); `TestAssistantHeaderCarriesRightAlignedMeta`
+  updated to the bucketed contract + a pane-fit guard. (2) chatStub called `respond` outside the
+  stub mutex, so a concurrent duplicate delivery could race unsynchronized callback state
+  (`calls++`, `secondMessages`) — fix: phase assignment AND respond serialized under one mutex.
+  Post-fix: `make check` rc 0, `make race` ×2 rc 0, `gofmt -l .` clean.

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -46,17 +45,14 @@ func TestWriteAndEditStayInsideWorkspace(t *testing.T) {
 
 func TestMutationToolsNeedExplicitConfirmation(t *testing.T) {
 	root := t.TempDir()
-	calls := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls++
+	srv, stub := newChatStub(t, func(phase int, _ ollama.ChatRequest, w http.ResponseWriter) {
 		w.Header().Set("Content-Type", "application/x-ndjson")
-		if calls == 1 {
+		if phase == 0 {
 			io.WriteString(w, toolEvent(nativeCall("write_file", `{"path":"note.txt","content":"approved"}`)))
 			return
 		}
 		io.WriteString(w, finalEvent("written"))
-	}))
-	t.Cleanup(srv.Close)
+	})
 
 	confirmed := false
 	r := NewRunnerWithPolicy(ollama.New(srv.URL, ""), root, "", 2, &ToolPolicy{})
@@ -69,8 +65,8 @@ func TestMutationToolsNeedExplicitConfirmation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if !confirmed || calls != 2 {
-		t.Fatalf("confirmed=%v calls=%d", confirmed, calls)
+	if !confirmed || stub.requests() != 2 {
+		t.Fatalf("confirmed=%v requests=%d", confirmed, stub.requests())
 	}
 	got, err := os.ReadFile(filepath.Join(root, "note.txt"))
 	if err != nil || string(got) != "approved" {
@@ -106,16 +102,13 @@ func TestDeclinedMutationDoesNotWrite(t *testing.T) {
 // one terminal done result and written nothing.
 func TestWriteConfirmExpiresWithoutResponse(t *testing.T) {
 	root := t.TempDir()
-	calls := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls++
+	srv, stub := newChatStub(t, func(_ int, _ ollama.ChatRequest, w http.ResponseWriter) {
 		w.Header().Set("Content-Type", "application/x-ndjson")
 		// Every chat request asks for the same write. With the expiry fix the
 		// runner gives up on its own after the injected window, so the server
-		// must never see a second request.
+		// must never see a second logical request.
 		io.WriteString(w, toolEvent(nativeCall("write_file", `{"path":"note.txt","content":"late"}`)))
-	}))
-	t.Cleanup(srv.Close)
+	})
 
 	r := NewRunnerWithPolicy(ollama.New(srv.URL, ""), root, "", 4, &ToolPolicy{})
 	r.confirmTimeout = 50 * time.Millisecond // injected short approval window
@@ -137,8 +130,8 @@ func TestWriteConfirmExpiresWithoutResponse(t *testing.T) {
 	if dones != 1 {
 		t.Fatalf("terminal done results = %d, want exactly one", dones)
 	}
-	if calls != 1 {
-		t.Fatalf("chat calls = %d, want 1 (the runner must not retry after expiry)", calls)
+	if stub.requests() != 1 {
+		t.Fatalf("chat calls = %d, want 1 (the runner must not retry after expiry)", stub.requests())
 	}
 	if _, err := os.Stat(filepath.Join(root, "note.txt")); !os.IsNotExist(err) {
 		t.Fatalf("expired approval wrote the file: %v", err)
