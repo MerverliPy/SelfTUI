@@ -378,6 +378,15 @@ func (a App) WithSessionDir(dir, host string) App {
 	return a
 }
 
+// WithUndoDir attaches the V2e undo journal's crash-artifact dir (the
+// resolved state dir; empty keeps it memory-only). Called by main after New;
+// a prior journal is closed and replaced so the crash artifacts land under
+// the configured root.
+func (a App) WithUndoDir(dir string) App {
+	a.agent = a.agent.WithUndoDir(dir)
+	return a
+}
+
 // WithLog attaches the shared debug logger and sink (PLAN.md §12 N5): the
 // logger reaches the Ollama client and the agent runner for transport and
 // loop traces, the sink feeds the logs drawer. Nil (compat constructors,
@@ -395,12 +404,17 @@ func (a App) WithLog(l *log.Logger, sink *logsink.Sink) App {
 }
 
 // CloseSession is the normal-shutdown lifecycle boundary for chat-transcript
-// persistence: it flushes every committed turn to the transcript and stops
-// the recorder worker so nothing is stranded when the process returns (main
-// calls it on the final model returned by Program.Run). A disabled or silent
-// session is a no-op; the underlying close is idempotent.
+// persistence and the V2e undo journal: it flushes every committed turn to
+// the transcript, stops the recorder worker, and GCs the undo journal's
+// crash artifacts (session stacks die with the process) so nothing is
+// stranded when the process returns (main calls it on the final model
+// returned by Program.Run). A disabled or silent session is a no-op; the
+// underlying closes are idempotent.
 func (a App) CloseSession() error {
-	return a.agent.CloseRecorder()
+	if err := a.agent.CloseRecorder(); err != nil {
+		return err
+	}
+	return a.agent.CloseUndo()
 }
 
 // applyTheme re-themes the whole shell (styles, tab chrome, and every child

@@ -27,6 +27,8 @@ func paletteItemList() []paletteItem {
 		{"tab-settings", "Settings", "go to the Settings tab"},
 		{"model", "Change model", "open the Agent model picker"},
 		{"clear", "Clear conversation", "wipe the Agent transcript (asks first)"},
+		{"undo", "Undo last change", "revert the agent's last file change (asks first)"},
+		{"redo", "Redo last undo", "reapply the last undone change (asks first)"},
 		{"theme", "Toggle theme", "switch dark ↔ light for this session"},
 		{"refresh", "Refresh models", "reload the model list"},
 		{"logs", "Logs drawer", "toggle the debug log drawer (ctrl+o)"},
@@ -108,6 +110,12 @@ func (a *App) runPaletteItem(it paletteItem) (App, tea.Cmd) {
 		} else {
 			a.agent.clearConfirm = true
 		}
+	case "undo":
+		a.switchTab(1)
+		a.agent, _ = a.agent.beginUndoConfirm(false)
+	case "redo":
+		a.switchTab(1)
+		a.agent, _ = a.agent.beginUndoConfirm(true)
 	case "theme":
 		next := "light"
 		if a.curTheme == "light" {

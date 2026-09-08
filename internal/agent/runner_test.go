@@ -195,8 +195,8 @@ func TestRunnerExecutesNativeToolAndStreamsFinal(t *testing.T) {
 	var secondMessages []ollama.ChatMessage
 	srv, stub := newChatStub(t, func(phase int, req ollama.ChatRequest, w http.ResponseWriter) {
 		if phase == 0 {
-			if len(req.Tools) != 6 {
-				t.Errorf("tools = %d, want 6 (read/list/grep/write/edit/run_command)", len(req.Tools))
+			if len(req.Tools) != 7 {
+				t.Errorf("tools = %d, want 7 (read/list/grep/write/edit/write_files/run_command)", len(req.Tools))
 			}
 			w.Header().Set("Content-Type", "application/x-ndjson")
 			io.WriteString(w, toolEvent(nativeCall("read_file", `{"path":"README.md"}`)))

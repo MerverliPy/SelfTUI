@@ -84,6 +84,7 @@ func (v AgentView) onChatDone(m agent.AgentDoneMsg) (AgentView, tea.Cmd) {
 	v.chatTerminal = nil // cA: the turn's retained terminal slot is consumed; next turn allocates a fresh one
 	v.toolStatus = ""
 	v.confirmation = nil
+	v.batchReview = nil // V2e: a turn that ended (approval, expiry, error) has no pending review
 
 	// N3: the done event's metrics describe the payload that was just sent,
 	// independent of whether any text streamed back. When the final chunk

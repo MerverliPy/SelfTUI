@@ -8,11 +8,11 @@
 │                                                                      │
 │                                                                      │
 │                                                                      │
-│                                                                      │
-│                                                                      │
 ╰──────────────────────────────────────────────────────────────────────╯
 ╭──────────────────────────────────────────────────────────────────────╮
 │❯ /clear  clear the conversation (asks first)                         │
+│  /undo  undo the agent's last file change                            │
+│  /redo  redo the last undone change                                  │
 │  /model  pick a model (m)                                            │
 │  /resume  resume a saved chat transcript                             │
 │  /theme  toggle dark/light for this session                          │

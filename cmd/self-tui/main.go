@@ -157,6 +157,10 @@ func run() error {
 	// is appended to a per-process file here, so a conversation survives the
 	// process. SELFTUI_NO_SESSION=1 disables; SELFTUI_SESSION_DIR overrides.
 	rootLog.Info("session dir", "path", sessionDirForRun())
+	// --- V2e undo journal crash-artifact dir: entries are session-scoped
+	// (they die with the process), but fsynced pre-image blobs land here for
+	// crash recovery and are GC'd at clean exit.
+	rootLog.Info("undo dir", "path", undoDirForRun())
 
 	// --- cancellation plumbing: SIGINT/SIGTERM cancel a root context that
 	// the tea runtime (tea.WithContext below) and every Models/Agent
@@ -170,6 +174,7 @@ func run() error {
 	client := ollama.New(cfg.Host, cfg.AuthToken)
 	m := ui.NewWithContext(ctx, &cfg, ui.NewStyles(cfg.Theme), client)
 	m = m.WithSessionDir(sessionDirForRun(), cfg.Host)
+	m = m.WithUndoDir(undoDirForRun())
 	m = m.WithLog(rootLog, sink)
 	p := tea.NewProgram(m, tea.WithContext(ctx))
 	rootLog.Info("program running")
@@ -194,6 +199,20 @@ func run() error {
 	}
 	rootLog.Info("shutdown clean")
 	return nil
+}
+
+// undoDirForRun resolves the V2e undo journal's crash-artifact directory:
+// $XDG_STATE_HOME/selftui/undo (next to the session transcripts). An empty
+// result leaves the journal memory-only. SELFTUI_UNDO_DIR overrides the
+// default (kept parallel to SELFTUI_SESSION_DIR for test isolation).
+func undoDirForRun() string {
+	if v := os.Getenv("SELFTUI_UNDO_DIR"); v != "" {
+		return v
+	}
+	if xdg.StateHome == "" {
+		return ""
+	}
+	return filepath.Join(xdg.StateHome, "selftui", "undo")
 }
 
 // logFilePath resolves the debug log destination (N5): --log-file wins;

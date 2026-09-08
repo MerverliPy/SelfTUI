@@ -137,15 +137,35 @@ type Runner struct {
 
 	// policy is nil when tools are disabled (the NewRunner compatibility
 	// constructor): the runner then never sends tool definitions and behaves
-	// as plain chat. NewRunnerWithPolicy arms the six V2c tools and gates
+	// as plain chat. NewRunnerWithPolicy arms the seven V2e tools and gates
 	// every requested path with the policy before a tool executes.
 	policy *ToolPolicy
+
+	// journal, when non-nil, records every confirmed mutation as a 1-op
+	// change-set (V2e, owner decision #3) and every applied write_files batch
+	// as one entry, so the session's /undo and /redo slash commands can
+	// revert them. It is session-scoped and survives runner rebuilds: the
+	// AgentView owns it and re-attaches it via WithJournal. A nil journal
+	// keeps the runner's legacy behavior (apply without recording) for plain
+	// runners and focused unit tests.
+	journal *UndoJournal
 
 	// logger, when non-nil, receives the N5 debug-drawer traces of the
 	// loop's decisions: plain-chat fallbacks, tool calls (name + bounded
 	// args summary), context budgeting, and budget rejections. It never
 	// carries message bodies, and the shared sink redacts regardless.
 	logger *log.Logger
+}
+
+// WithJournal attaches the session undo journal (V2e). Mutations that are
+// confirmed and applied then record a change-set entry for /undo; write_files
+// batches record as one entry. The UI re-attaches the same journal after
+// every runner rebuild (ApplyConfig), so undo survives settings changes.
+func (r *Runner) WithJournal(j *UndoJournal) *Runner {
+	if r != nil {
+		r.journal = j
+	}
+	return r
 }
 
 // WithLogger attaches the shared debug logger (PLAN.md §12 N5). The Agent
@@ -463,7 +483,7 @@ func (r *Runner) runPlainChat(ctx context.Context, req Request, messages []ollam
 	})
 }
 
-// tools returns the definitions to advertise: the policy's six V2c tools
+// tools returns the definitions to advertise: the policy's seven V2e tools
 // when one is set, nothing otherwise.
 func (r *Runner) tools() []ollama.ToolDefinition {
 	if r == nil || r.policy == nil {
@@ -562,15 +582,14 @@ func (r *Runner) executeTool(ctx context.Context, call ollama.ToolCall, emit fun
 			return "", err
 		}
 		// M-06: a cancellation that lands after approval but before the write
-		// must not mutate the workspace — check the run context at the last
-		// gate (the write itself is atomic and never masked by a late cancel).
-		if err := ctx.Err(); err != nil {
+		// must not mutate the workspace — the mutation engine gates on ctx
+		// before its first write and rolls back on a mid-apply cancel.
+		op := mutationOpFromSingle("write_file", args.Path, args.Content, "", "", args.Overwrite)
+		lines, err := applyMutationSet(ctx, root, []mutationOp{op}, r.authorizePath, r.journal, nil)
+		if err != nil {
 			return "", err
 		}
-		if err := WriteFile(root, args.Path, args.Content, args.Overwrite); err != nil {
-			return "", err
-		}
-		return "wrote " + args.Path, nil
+		return lines[0], nil
 	case "edit_file":
 		var args struct {
 			Path string `json:"path"`
@@ -590,13 +609,51 @@ func (r *Runner) executeTool(ctx context.Context, call ollama.ToolCall, emit fun
 			return "", err
 		}
 		// M-06: same last gate as write_file — never edit after a cancel.
-		if err := ctx.Err(); err != nil {
+		op := mutationOpFromSingle("edit_file", args.Path, "", args.Old, args.New, false)
+		lines, err := applyMutationSet(ctx, root, []mutationOp{op}, r.authorizePath, r.journal, nil)
+		if err != nil {
 			return "", err
 		}
-		if err := EditFile(root, args.Path, args.Old, args.New); err != nil {
+		return lines[0], nil
+	case "write_files":
+		var args writeFilesArgs
+		if err := decodeArgs(call.Function.Arguments, &args); err != nil {
+			return "", fmt.Errorf("write_files: %w", err)
+		}
+		// Caps are a hard proposal ceiling, rejected in full before any
+		// dialog (existing H-03 pattern).
+		if err := validateWriteFilesArgs(args); err != nil {
 			return "", err
 		}
-		return "edited " + args.Path, nil
+		// Sensitive paths never reach the review dialog: AuthorizePath runs
+		// per op at proposal, before confirmation (current behavior).
+		for i := range args.Ops {
+			if err := r.authorizePath(args.Ops[i].Path); err != nil {
+				return "", fmt.Errorf("write_files op %d (%s): %w", i+1, args.Ops[i].Path, err)
+			}
+		}
+		// Review: render per-file diffs, then the batch confirmation with its
+		// own 120s/300s window. Nothing is applied pre-approval.
+		files, err := r.previewBatch(root, args)
+		if err != nil {
+			return "", err
+		}
+		if err := r.batchConfirm(ctx, call, files, args.Note, emit); err != nil {
+			return "", err
+		}
+		// M-06 gate is inside applyMutationSet (validate-all → ctx → journal
+		// write-ahead → sequential apply → compensating rollback).
+		ops := make([]mutationOp, 0, len(args.Ops))
+		for _, op := range args.Ops {
+			ops = append(ops, opFromWriteFilesOp(op))
+		}
+		lines, err := applyMutationSet(ctx, root, ops, r.authorizePath, r.journal, nil)
+		if err != nil {
+			return "", err
+		}
+		// Model-facing result: compact per-file status lines only — never
+		// the full diff — so the transcript stays inside the context budget.
+		return strings.Join(lines, "\n"), nil
 	case "run_command":
 		var args struct {
 			Argv    []string `json:"argv"`
@@ -666,6 +723,59 @@ func (r *Runner) confirm(ctx context.Context, call ollama.ToolCall, seconds int,
 		return nil
 	case <-timer.C:
 		return fmt.Errorf("%s: %w", call.Function.Name, errApprovalTimedOut)
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// batchConfirm is the write_files review stage (design §4.2 steps 1–3): it
+// emits a BatchReviewMsg carrying per-file diffs and waits for the one
+// whole-batch reply. The window is the batch-specific 120 s default / 300 s
+// hard cap (owner decision #2), on the same confirmTimeout seam as the
+// single-file confirm so tests can inject a short expiry deterministically.
+// Nothing is applied before approval; expiry behaves like decline — the turn
+// ends with the stable approval-timeout error (M-01 shape).
+func (r *Runner) batchConfirm(ctx context.Context, call ollama.ToolCall, files []BatchFileReview, note string, emit func(Msg)) error {
+	timeout := defaultBatchReviewTimeout
+	if r != nil && r.confirmTimeout > 0 {
+		// M-01 seam: tests inject a short expiry here; production callers
+		// leave it at the 120s batch default.
+		timeout = r.confirmTimeout
+	}
+	if timeout > maxBatchReviewTimeout {
+		return fmt.Errorf("write_files: review timeout exceeds %s", maxBatchReviewTimeout)
+	}
+	msg := BatchReviewMsg{
+		Name:      "write_files",
+		Workspace: r.workspaceRoot,
+		Timeout:   timeout,
+		Files:     files,
+		Note:      note,
+		reply:     make(chan bool, 1),
+	}
+	emit(msg)
+
+	// M-01: the review window is a real timer, not a claim. When it fires
+	// with no answer the turn fails with the stable errApprovalTimedOut; the
+	// timer is stopped and drained on every other exit so a fired timer can
+	// never wake a later select or leak.
+	timer := time.NewTimer(timeout)
+	defer func() {
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+	}()
+	select {
+	case approved := <-msg.reply:
+		if !approved {
+			return fmt.Errorf("write_files: not approved")
+		}
+		return nil
+	case <-timer.C:
+		return fmt.Errorf("write_files: %w", errApprovalTimedOut)
 	case <-ctx.Done():
 		return ctx.Err()
 	}

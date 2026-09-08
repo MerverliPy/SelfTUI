@@ -19,15 +19,16 @@ import (
 // Phase 4 (workspace tool trust): ToolPolicy is the opt-in policy. A nil
 // policy (NewRunner, the compatibility constructor) means tools disabled —
 // the runner behaves as plain chat and never puts a tools field on the wire.
-// NewRunnerWithPolicy arms the six V2c tools and AuthorizePath gates every
-// path-based tool before it executes, on top of the canonical containment.
+// NewRunnerWithPolicy arms the seven jailed V2e tools (V2c's six plus the
+// write_files batch tool) and AuthorizePath gates every path-based tool
+// before it executes, on top of the canonical containment.
 
-func TestToolPolicyToolsAreTheSixV2cTools(t *testing.T) {
+func TestToolPolicyToolsAreTheSevenV2eTools(t *testing.T) {
 	var names []string
 	for _, d := range (ToolPolicy{}).Tools() {
 		names = append(names, d.Function.Name)
 	}
-	want := []string{"read_file", "list_dir", "grep", "write_file", "edit_file", "run_command"}
+	want := []string{"read_file", "list_dir", "grep", "write_file", "edit_file", "write_files", "run_command"}
 	if len(names) != len(want) {
 		t.Fatalf("Tools() = %v, want exactly %v", names, want)
 	}
@@ -50,6 +51,9 @@ func TestAuthorizePathSensitiveRules(t *testing.T) {
 		".config/gcloud/creds.json",
 		"/home/u/.config/gcloud/application_default_credentials.json",
 		".config/gcloud", "a/.config/gcloud/b",
+		// V2e: .git is never a writable (or readable-through-tools) target —
+		// git internals are not workspace content (design §2 gap row).
+		".git/config", ".git/HEAD", "a/.git/hooks/pre-commit", "sub/.git/refs/heads/main",
 		// Forbidden credential basenames (last path element).
 		".env", "creds/.env", "/abs/.env", "x/.env",
 		".env.local", ".env.production",
@@ -111,7 +115,7 @@ func TestDisabledRunnerSendsNoToolsField(t *testing.T) {
 	}
 }
 
-// TestPolicyRunnerSendsToolDefinitions: arming the policy puts the six V2c
+// TestPolicyRunnerSendsToolDefinitions: arming the policy puts the seven V2e
 // tools on the wire, restoring the tool loop.
 func TestPolicyRunnerSendsToolDefinitions(t *testing.T) {
 	calls := 0
@@ -121,8 +125,8 @@ func TestPolicyRunnerSendsToolDefinitions(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Fatalf("decode request: %v", err)
 		}
-		if len(req.Tools) != 6 {
-			t.Errorf("tools = %d, want the six V2c tools", len(req.Tools))
+		if len(req.Tools) != 7 {
+			t.Errorf("tools = %d, want the seven V2e tools", len(req.Tools))
 		}
 		w.Header().Set("Content-Type", "application/x-ndjson")
 		io.WriteString(w, finalEvent("done"))

@@ -23,6 +23,8 @@ type slashCommand struct {
 func slashCommandList() []slashCommand {
 	return []slashCommand{
 		{"clear", "clear the conversation (asks first)"},
+		{"undo", "undo the agent's last file change"},
+		{"redo", "redo the last undone change"},
 		{"model", "pick a model (m)"},
 		{"resume", "resume a saved chat transcript"},
 		{"theme", "toggle dark/light for this session"},
@@ -90,6 +92,10 @@ func (v AgentView) runSlashCommand() (AgentView, tea.Cmd) {
 		}
 		v.clearConfirm = true
 		return v, nil
+	case "undo":
+		return v.beginUndoConfirm(false)
+	case "redo":
+		return v.beginUndoConfirm(true)
 	case "resume":
 		return v.openResume()
 	case "model":

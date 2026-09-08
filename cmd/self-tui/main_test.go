@@ -165,6 +165,17 @@ func TestSessionDirForRun(t *testing.T) {
 	}
 }
 
+func TestUndoDirForRun(t *testing.T) {
+	t.Setenv("SELFTUI_UNDO_DIR", "/tmp/custom-undo")
+	if got := undoDirForRun(); got != "/tmp/custom-undo" {
+		t.Errorf("UNDO_DIR: got %q", got)
+	}
+	t.Setenv("SELFTUI_UNDO_DIR", "")
+	if got := undoDirForRun(); !strings.HasSuffix(got, "selftui/undo") {
+		t.Errorf("default: got %q, want …/selftui/undo", got)
+	}
+}
+
 // blockingModel is a final tea model whose CloseSession never returns until
 // release is closed — the wedged-sink shape P1-1 targets: the recorder worker
 // is stuck on a stalled filesystem write, so the shutdown flush cannot

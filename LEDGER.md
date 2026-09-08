@@ -6716,3 +6716,89 @@ this session's pre-fix probing).
   `docs/v2e-multifile-undo-design.md` — batch tool + journal + undo/redo + `.git`
   refusal + review overlay; exit = §5 test strategy green (`make check`, `go test
   -race ./...`, goldens: existing frames byte-identical + new overlay fixtures).
+
+## Session — 2026-09-08 (implementation): V2e multi-file batches + undo/redo — shipped green (orchestrator run, SINGLE_AGENT + targeted review)
+
+**Work done**
+- Owner-assigned step: implement V2e per `docs/v2e-multifile-undo-design.md`
+  (§4 spec, §6 resolved decisions); exit = §5 test strategy.
+- Triage: SINGLE_AGENT — one writer (`worker`, run `6d85aa59`, fork, 60 min
+  cap; changes left uncommitted for the parent) — plus one targeted read-only
+  `reviewer` pass (run `4fff3d73`), risk-justified (rollback/undo mutate user
+  files; `.git` refusal is a security fix). No parallel lanes (all parts touch
+  the same packages).
+- Shipped: closed-schema `write_files` (16 ops / 256 KiB per op / 1 MiB call,
+  reject-in-full pre-dialog); runner `batchConfirm` review stage (120 s/300 s)
+  with per-file diff `BatchReviewMsg`; all-or-nothing engine (validate-all-at-
+  apply incl. TOCTOU re-check + M-06 gate → journal write-ahead fsync →
+  sequential `atomicWrite` → compensating rollback → loud retain on rollback
+  failure); session-scoped `UndoJournal` (25 entries / 32 MiB / 8 MiB per-file,
+  LRU, `$XDG_STATE_HOME/selftui/undo/` 0600 crash artifacts, stale detection
+  at open, GC at Close); `/undo` + `/redo` slash + palette + y/esc confirms +
+  status notices; lexical `.git` refusal in `AuthorizePath` (single-file tools
+  inherit; closes the §2 gap); single-file mutations journal as 1-op sets
+  (decision #3); 7th tool in the closed schema (`ReadOnlyTools` order kept).
+- New files: `internal/agent/journal.go`, `batch.go`, `diff.go`,
+  `writefiles_test.go`, `batch_test.go`; `internal/ui/agent_undo.go`,
+  `agent_undo_test.go`. Golden fixtures: 2 new `agent-batch-*` (72×30/120×40).
+- **Golden reconciliation (parent decision A, pre-approved via supervisor
+  reply):** §4.3 mandates discoverable `/undo` `/redo` (slash+palette) while
+  §5 shorthand said "existing frames byte-identical" — reconciled per N6
+  precedent `35c0ace` ("slash/help fixtures grew with the command set"): only
+  the 6 command-enumerating frames regenerated; the other 17 verified
+  byte-identical; 2 new overlay fixtures added.
+- **Reviewer verdict: BLOCK — 3 P1s, all parent-verified by direct read, all
+  fixed parent-side (same-writer session, no second review layer needed for
+  mechanical fixes — design-gate session precedent):**
+  1. Per-op caps were kind-scoped (`create`/`overwrite` checked only
+     `content`; `edit` only `old`/`new`) — an oversized unused field slipped
+     the 256 KiB cap. Fixed: all three fields checked on every op
+     (`batch.go`); cap table extended (edit-oversized-content,
+     create-oversized-old rows).
+  2. `Commit`/`KeepPartial` cleared redo with bare `j.redo = nil` — bytes
+     stayed counted (premature LRU eviction of live entries) and disk dirs
+     orphaned. Fixed: `clearRedoLocked()` subtracts bytes + removes disk
+     artifacts; regression test `TestJournalRedoClearAccounting`.
+  3. `meta.json` carried only {seq, requested paths} — design §4.3 contract
+     ({path, mode, existed} + post-apply hash per file) unmet. Fixed: meta v2
+     written at Prepare (post-hash empty — write-ahead order preserved) and
+     re-fsynced at Commit with post-hashes; `readStaleFiles` reads v2;
+     regression test `TestJournalDiskMetaContract`.
+  Reviewer suggestions: symlink-alias residual of the lexical `.git` refusal —
+  documented, in-scope (design chose lexical; undo-time refuse-guards cover
+  divergence); `Prepare` partial-dir cleanup on failure — kept (defer
+  RemoveAll), no dedicated test (no deterministic injection seam through
+  `Prepare`; benign false-stale is GC'd at Close and never auto-reverted).
+- Run-meta honesty: the host acceptance evaluator flagged worker run
+  `6d85aa59` "acceptance: rejected" (exit 0, full report delivered); parent
+  re-verified every substantive claim directly (checks, seams, goldens) and
+  treats the flag as noise from the fixture-regeneration pattern, recorded
+  here for the trail. Reviewer run meta: completed (chain default).
+
+**Commands + exit codes**
+- `make check` → exit 0 (pre-review); `go test -race ./... -count=1` → exit 0
+  (7/7 packages, pre-review).
+- `make check` → exit 0 (post-fix); `go test -race ./... -count=1` → exit 0
+  (7/7 packages, post-fix). `gofmt -l internal cmd` → clean.
+- Golden diffs inspected: 6 frames changed only by the two mandated rows
+  (+ padding reflow); `agent-batch-compact.txt` = 30 lines, `-wide` = 40,
+  footer + keys + `window 2m0s` visible.
+- Seam spot-checks (grep/read): `.git` map `toolpolicy.go:43`, `write_files`
+  `tools.go:68` + `runner.go:618`, `batchConfirm` `runner.go:731-778`,
+  journal `Prepare` fsync `journal.go:173-209`, rollback-failure retain
+  `batch.go:404-422`.
+
+**Decisions / lines to respect**
+- Exit gate §5 met exactly: `make check` green, `go test -race ./...` green,
+  goldens byte-identical except the 6 reconciled command-enumerating frames +
+  2 new overlay fixtures (parent decision A, N6 precedent).
+- One review layer only (router: no review chains); fixes parent-verified.
+- Worker mutation-capable: no toolBudget blocking; 60-min cap held.
+
+**Blockers / open decisions**
+- None for this step. Residual risks carried from design §7 (batch-JSON
+  reliability, review-overlay density at 16 ops, run_command undo gap) — all
+  mitigations per design; symlink-alias `.git` residual now documented here.
+
+**Next action**
+- Fresh session, owner picks the next step from the backlog (§10/§12 menu).

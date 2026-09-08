@@ -11,17 +11,18 @@ import (
 // ToolPolicy is the opt-in workspace tool trust policy (v0.1 hardening).
 //
 // A Runner built through NewRunnerWithPolicy carries a policy: it advertises
-// the six jailed V2c tools (Tools) and refuses to execute any path-based tool
-// on a path AuthorizePath rejects. A Runner built through the compatibility
-// constructor NewRunner carries no policy and is plain chat — no tool
-// definition ever reaches the model, so nothing the model says can turn into
-// a filesystem operation. The zero value is a fully armed policy; arming is
-// expressed by which constructor the caller uses.
+// the seven jailed V2e tools (Tools) and refuses to execute any path-based
+// tool on a path AuthorizePath rejects. A Runner built through the
+// compatibility constructor NewRunner carries no policy and is plain chat —
+// no tool definition ever reaches the model, so nothing the model says can
+// turn into a filesystem operation. The zero value is a fully armed policy;
+// arming is expressed by which constructor the caller uses.
 type ToolPolicy struct{}
 
-// Tools returns the six V2c tools: read-only read_file/list_dir/grep, the
-// confirmed write_file/edit_file, and the confirmed sandboxed run_command.
-// The set is closed — no shell or interpreter is directly exposed.
+// Tools returns the seven V2e tools: read-only read_file/list_dir/grep, the
+// confirmed write_file/edit_file, the write_files batch tool, and the
+// confirmed sandboxed run_command. The set is closed — no shell or
+// interpreter is directly exposed.
 func (ToolPolicy) Tools() []ollama.ToolDefinition {
 	return AgentTools()
 }
@@ -29,13 +30,17 @@ func (ToolPolicy) Tools() []ollama.ToolDefinition {
 // sensitiveDirs are path components whose presence anywhere in a requested
 // path is refused: these trees hold credentials (SSH keys, GPG keys, cloud
 // provider and Kubernetes configs) that no workspace tool request may touch,
-// even when the workspace itself would resolve inside them.
+// even when the workspace itself would resolve inside them. .git is refused
+// too (V2e): git internals are never writable workspace content — a model
+// write into .git/hooks could otherwise reach the approval dialog with only
+// containment protection.
 var sensitiveDirs = map[string]bool{
 	".ssh":   true,
 	".gnupg": true,
 	".aws":   true,
 	".azure": true,
 	".kube":  true,
+	".git":   true,
 }
 
 // forbiddenBasenames are credential file names rejected wherever they appear
@@ -52,10 +57,10 @@ var forbiddenBasenames = map[string]bool{
 // lexical and independent of the canonical workspace containment in
 // securePath/canonicalRoot — containment answers "can this path resolve
 // inside the workspace?", this answers "is this path ever worth touching?".
-// A path containing a sensitive component (.ssh, .gnupg, .aws, .azure, .kube
-// or the .config/gcloud composite), or whose basename is a credential file
-// (.env*, credentials, credentials.json), is refused; .env.example is the one
-// dotenv file that stays allowed.
+// A path containing a sensitive component (.ssh, .gnupg, .aws, .azure, .kube,
+// .git or the .config/gcloud composite), or whose basename is a credential
+// file (.env*, credentials, credentials.json), is refused; .env.example is
+// the one dotenv file that stays allowed.
 func (ToolPolicy) AuthorizePath(requested string) error {
 	comps := splitPathComponents(requested)
 	// A path that cleans to nothing (".", "./") has no named component to

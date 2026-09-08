@@ -404,8 +404,8 @@ func TestAgentViewResumeErrorsSurfaceOnce(t *testing.T) {
 
 func TestResumeSlashCommandListed(t *testing.T) {
 	cmds := slashCommandList()
-	if len(cmds) != 9 {
-		t.Fatalf("%d slash commands, want 9 (menu cap tracks the set)", len(cmds))
+	if len(cmds) != 11 {
+		t.Fatalf("%d slash commands, want 11 (menu cap tracks the set)", len(cmds))
 	}
 	found := false
 	for _, c := range cmds {

@@ -37,6 +37,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/MerverliPy/SelfTUI/internal/agent"
 	"github.com/MerverliPy/SelfTUI/internal/config"
 	"github.com/MerverliPy/SelfTUI/internal/logsink"
 	"github.com/MerverliPy/SelfTUI/internal/ollama"
@@ -132,6 +133,8 @@ func buildLightFrame(t *testing.T, name string, w, h int) App {
 		return buildAgentModal(t, w, h, openHelp)
 	case "agent-clear-confirm-compact", "agent-clear-confirm-wide":
 		return buildAgentModal(t, w, h, openClearConfirm)
+	case "agent-batch-compact", "agent-batch-wide":
+		return buildAgentBatchReview(t, w, h)
 	case "agent-resume-picker-compact", "agent-resume-picker-wide":
 		return buildAgentResumePicker(t, w, h)
 	case "agent-resumed-compact", "agent-resumed-wide":
@@ -256,6 +259,41 @@ func openClearConfirm(t *testing.T, m App) App {
 	return updateTab(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 }
 
+// buildAgentBatchReview frames the write_files review overlay (V2e): a
+// deterministic multi-file batch is parked as the pending review so the new
+// overlay's geometry is pinned at both canonical sizes. Diffs are canned
+// rows (the runner computes real ones from the live tree); the fixture pins
+// the overlay layout, not the diff algorithm.
+func buildAgentBatchReview(t *testing.T, w, h int) App {
+	m := buildAgent(t, w, h)
+	m.agent.batchReview = &agent.BatchReviewMsg{
+		Name:      "write_files",
+		Workspace: "/tmp",
+		Timeout:   120 * time.Second,
+		Files: []agent.BatchFileReview{
+			{
+				Path: "internal/agent/runner.go", Kind: "edit",
+				Summary: "M internal/agent/runner.go  +2 −1",
+				Rows: []string{
+					"  // M-06 gate",
+					"-if err := ctx.Err(); err != nil {",
+					"+if err := ctx.Err(); err != nil { return err }",
+				},
+			},
+			{
+				Path: "docs/v2e.md", Kind: "create",
+				Summary: "A docs/v2e.md  +3",
+				Rows: []string{
+					"+# Multi-file batches",
+					"+",
+					"+All-or-nothing.",
+				},
+			},
+		},
+	}
+	return m
+}
+
 func openPalette(t *testing.T, m App) App {
 	return updateTab(t, m, tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
 }
@@ -326,6 +364,7 @@ var goldenFrames = []goldenFrame{
 	{"agent-slash-compact", 72, 30, func(t *testing.T, w, h int) App { return buildAgentModal(t, w, h, openSlashMenu) }},
 	{"agent-help-compact", 72, 30, func(t *testing.T, w, h int) App { return buildAgentModal(t, w, h, openHelp) }},
 	{"agent-clear-confirm-compact", 72, 30, func(t *testing.T, w, h int) App { return buildAgentModal(t, w, h, openClearConfirm) }},
+	{"agent-batch-compact", 72, 30, buildAgentBatchReview},
 	{"palette-compact", 72, 30, func(t *testing.T, w, h int) App { return buildAgentModal(t, w, h, openPalette) }},
 	{"agent-logs-drawer-compact", 72, 30, buildAgentLogsDrawer},
 	{"settings-compact", 72, 30, buildSettingsEditing},
@@ -339,6 +378,7 @@ var goldenFrames = []goldenFrame{
 	{"agent-slash-wide", 120, 40, func(t *testing.T, w, h int) App { return buildAgentModal(t, w, h, openSlashMenu) }},
 	{"agent-help-wide", 120, 40, func(t *testing.T, w, h int) App { return buildAgentModal(t, w, h, openHelp) }},
 	{"agent-clear-confirm-wide", 120, 40, func(t *testing.T, w, h int) App { return buildAgentModal(t, w, h, openClearConfirm) }},
+	{"agent-batch-wide", 120, 40, buildAgentBatchReview},
 	{"palette-wide", 120, 40, func(t *testing.T, w, h int) App { return buildAgentModal(t, w, h, openPalette) }},
 	{"agent-logs-drawer-wide", 120, 40, buildAgentLogsDrawer},
 	{"settings-wide", 120, 40, buildSettingsEditing},
@@ -639,6 +679,10 @@ func TestLightThemeRendersEveryTab(t *testing.T) {
 		case "agent-clear-confirm-compact", "agent-clear-confirm-wide":
 			if !strings.Contains(stripped, "clear") {
 				t.Errorf("light %s: confirm modal missing confirm action", f.name)
+			}
+		case "agent-batch-compact", "agent-batch-wide":
+			if !strings.Contains(stripped, "write_files") || !strings.Contains(stripped, "apply all") {
+				t.Errorf("light %s: batch review overlay missing its content", f.name)
 			}
 		case "agent-resume-picker-compact", "agent-resume-picker-wide":
 			if !strings.Contains(stripped, "saved chats") {

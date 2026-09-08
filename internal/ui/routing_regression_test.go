@@ -167,6 +167,90 @@ func TestAppRoutingDeclineSkipsWrite(t *testing.T) {
 	}
 }
 
+func TestAppRoutingBatchReviewApprovesAndJournals(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "b.txt"), []byte("old text\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	undoDir := t.TempDir()
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/tags":
+			w.Header().Set("Content-Type", "application/json")
+			io.WriteString(w, uiTagsBody)
+		case "/api/chat":
+			calls++
+			w.Header().Set("Content-Type", "application/x-ndjson")
+			if calls == 1 {
+				args, _ := json.Marshal(map[string]any{"ops": []any{
+					map[string]any{"path": "a.txt", "kind": "create", "content": "hello\n"},
+					map[string]any{"path": "b.txt", "kind": "edit", "old": "old text", "new": "new text"},
+				}})
+				call := fmt.Sprintf(`{"function":{"name":"write_files","arguments":%s}}`, string(args))
+				io.WriteString(w, fmt.Sprintf(`{"message":{"role":"assistant","tool_calls":[%s]},"done":true,"done_reason":"tool_calls"}`+"\n", call))
+			} else {
+				io.WriteString(w, chatEvent("applied the batch", true)+"\n")
+			}
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	cfg := config.Default()
+	cfg.WorkspaceRoot = root
+	cfg.ToolsEnabled = true
+	m := New(&cfg, NewStyles("dark"), ollama.New(srv.URL, ""))
+	m = m.WithUndoDir(undoDir)
+	m = updateTab(t, m, tea.WindowSizeMsg{Width: 88, Height: 40})
+	m = updateTab(t, m, agentEventMsg{msg: agentModelsLoadedMsg{models: sampleModels()}})
+	m = updateTab(t, m, tea.KeyPressMsg{Text: "2"})
+	for _, r := range "write the batch" {
+		m = updateTab(t, m, tea.KeyPressMsg{Text: string(r)})
+	}
+	m = updateTab(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	// The review overlay must surface through App routing (routing bug class).
+	for i := 0; i < 20 && m.agent.batchReview == nil; i++ {
+		m = pumpAgent(t, &m)
+	}
+	if m.agent.batchReview == nil || !m.agent.ModalOpen() {
+		t.Fatal("batch review never surfaced through App routing")
+	}
+	if !strings.Contains(stripANSI(m.agent.View()), "Review write_files batch") {
+		t.Fatalf("batch overlay missing:\n%s", stripANSI(m.agent.View()))
+	}
+	m = updateTab(t, m, tea.KeyPressMsg{Text: "y"}) // approve all
+	for i := 0; i < 30 && m.agent.streaming; i++ {
+		m = pumpAgent(t, &m)
+	}
+	if m.agent.streaming {
+		t.Fatal("turn did not finish after batch approval")
+	}
+	if b, err := os.ReadFile(filepath.Join(root, "a.txt")); err != nil || string(b) != "hello\n" {
+		t.Errorf("batch did not create a.txt: %q %v", b, err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(root, "b.txt")); string(b) != "new text\n" {
+		t.Errorf("batch did not edit b.txt: %q", b)
+	}
+	// The batch is one journal entry: /undo restores both files.
+	if m.agent.undo == nil || !m.agent.undo.CanUndo() {
+		t.Fatal("approved batch was not journaled")
+	}
+	if _, err := m.agent.undo.Undo(); err != nil {
+		t.Fatalf("undo after batch: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "a.txt")); !os.IsNotExist(err) {
+		t.Error("undo left the created a.txt behind")
+	}
+	if b, _ := os.ReadFile(filepath.Join(root, "b.txt")); string(b) != "old text\n" {
+		t.Errorf("undo did not restore b.txt: %q", b)
+	}
+	if calls != 2 {
+		t.Errorf("chat calls = %d, want 2", calls)
+	}
+}
+
 // --- Phase 6: envelope routing ---------------------------------------------
 
 // routingRow is one table row of the envelope routing test: an async child
@@ -273,6 +357,13 @@ func TestAppEnvelopeRoutingTable(t *testing.T) {
 				func(m App) error {
 					if m.agent.confirmation == nil || m.agent.confirmation.Name != "write_file" || !m.agent.ModalOpen() {
 						return errf("confirmation = %+v ModalOpen=%v, want pending approval", m.agent.confirmation, m.agent.ModalOpen())
+					}
+					return nil
+				}},
+			{"agent.BatchReviewMsg (write_files review)", envAgent, agent.BatchReviewMsg{Name: "write_files", Workspace: "/tmp/ws", Timeout: 120 * time.Second, Files: []agent.BatchFileReview{{Path: "a.go", Summary: "M a.go  +1 −1"}}}, nil,
+				func(m App) error {
+					if m.agent.batchReview == nil || !m.agent.ModalOpen() {
+						return errf("batchReview = %+v ModalOpen=%v, want pending batch review", m.agent.batchReview, m.agent.ModalOpen())
 					}
 					return nil
 				}},
