@@ -6575,3 +6575,67 @@ this session's pre-fix probing).
 **Next action**
 - Fresh session: next feature work per §10 (V2/N-series backlog) — owner picks the
   milestone; spike/n8-scrollback may be resumed or `-D`-deleted as part of that choice.
+
+## Session — 2026-09-08 (pick/hygiene): milestone pick invalidated — F-07 already landed; spike/n8 deleted (orchestrator run, DIRECT)
+
+**Work done**
+- Triage: DIRECT — backlog presentation + owner pick; zero agents. Owner picked
+  **F-07 agent_view split** from the session menu and ordered **`-D` deletion of
+  `spike/n8-scrollback`** (second menu question).
+- **Pick invalidated by evidence:** recon showed `agent_view.go` at 943 lines with
+  the split family already present. F-07 was landed **2026-09-08 12:37** via
+  **PR #29** (`refactor/f07-agent-view-split`, commit `bb1171d`, merge `1345020`)
+  — before the v0.3.0 release — and recorded in the F-07 session entry above.
+  The bad menu came from the stale PLAN §12 line ("Remaining audit items: F-07 …"),
+  never ticked when F-07 landed; the AUDIT.md scorecard likewise still shows F-07
+  open (◐). This session corrects PLAN §12 (status-level fix); AUDIT.md stays
+  unedited per the F-03 convention.
+- **F-07 landed state independently re-verified on clean main (`03fd761` =
+  origin/main):** `wc -l` → all seven `agent_*.go` < 1,000
+  (943/685/615/474/369/314/154); `make check` (pinned-toolchain PATH) → **exit 0**
+  (build, uncached tests all ok incl. `internal/ui` 6.99s, vet clean).
+- **Owner-gated deletion executed:** `spike/n8-scrollback` deleted (`git branch
+  -D`, rc 0). Its single unique commit `4fe788e` touched only the throwaway probe
+  (`cmd/n8-scrollback-probe/main.go`, 215 lines) + the declined-spike test sheet
+  (`docs/n8-device-test.md`, 72 lines) — verified via
+  `git log main..spike/n8-scrollback` + `git diff --stat` before deletion; no
+  remote counterpart (`git ls-remote` empty). Patch saved to
+  `/tmp/n8-scrollback-probe-4fe788e.patch` (311 lines) for session-scope
+  recoverability; reflog retains the tip. Local branches now: `main` +
+  `docs/ledger-audit-residue-closeout` (merged PR #32; left in place — outside
+  this session's confirmed scope).
+- PLAN §12 P0 line corrected: "Remaining audit items: F-07 …, F-09/F-10
+  owner-optional" → "Audit findings all closed" with the F-07 evidence.
+
+**Commands + exit codes**
+- `git log --oneline main..spike/n8-scrollback` → `4fe788e` only;
+  `git diff --stat main...spike/n8-scrollback` → 2 files, +287;
+  `git ls-remote --heads origin | rg -i spike` → empty (rc 1);
+  `git branch -D spike/n8-scrollback` → rc 0;
+  `git show 4fe788e > /tmp/n8-scrollback-probe-4fe788e.patch` → 311 lines.
+- `git rev-parse main origin/main` → both `03fd761…`; `git status --porcelain`
+  → empty; `make check` → **exit 0**.
+- Docs ride a PR per branch protection: `docs/f07-stale-line-closeout` → PR →
+  required check → merge-commit merge → pull main (result recorded in next
+  entry if the session continues past the re-pick).
+
+**Decisions / lines to respect**
+- **Menu hygiene (process fix):** future pick menus must reconcile candidates
+  against the LEDGER session index, not just PLAN §10/§12 lines — a landed
+  session can leave its §-line unticked and poison the next menu.
+- Spike branch deletion is final per owner click; the LEDGER + PLAN §12 N8 entry
+  remain the durable record of the declined spike (the /tmp patch is
+  session-scope only).
+- No AUDIT.md edit (F-03 convention).
+
+**Blockers / open decisions**
+- The owner's picked milestone does not exist as open work — **re-pick
+  required**. True remaining backlog: mobile residuals (landscape/rotation
+  geometry + reconnect probe m6-live-1b, excluded from v0.2), V2d-deferred agent
+  breadth (multi-file edits / undo-redo — touches the V2c jail, design pass
+  first), N7 continuous upstream tracking (no code now), or an owner-defined
+  new cut.
+
+**Next action**
+- Owner re-picks the next §10 milestone from the true backlog (menu
+  re-presented in this session; otherwise fresh session).

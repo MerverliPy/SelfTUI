@@ -707,8 +707,12 @@ v0.39.0 → v0.58.0 — govulncheck reports 0 vulnerabilities. Live smoke
 re-enabled: fixed the pull-delete smoke's dialog-exit detection (the v0.2 N3
 status-bar ctx meter "0%" defeated the former bare-`%` pattern) and its
 fail-path diagnostics (3 new pattern tests, 12 total); `make smoke-model
-MODEL=all-minilm` PASS. Remaining audit items: F-07 agent_view split (P2),
-F-09/F-10 owner-optional. **F-03 module rename landed 2026-09-08 (PR #28,
+MODEL=all-minilm` PASS. **Audit findings all closed:** F-07 agent_view split
+landed (PR #29, merge `1345020`; same-package seam split — `agent_view.go`
+943 + `agent_paint.go` 685 + `agent_menu.go` 615 + `agent_transcript.go` 474 +
+`agent_composer.go` 369 + `agent_session.go` 314 + `agent_tools_display.go`
+154, all < 1,000 lines, `make check` green — ships in v0.3.0); F-09/F-10
+closed in the 2026-09-08 residue session. **F-03 module rename landed 2026-09-08 (PR #28,
 merge `b5df1ae`)**: module `github.com/MerverliPy/SelfTUI`, all import paths
 rewritten, `make check` + `go test -race` green; `go install
 github.com/MerverliPy/SelfTUI/cmd/self-tui@latest` resolves from the next
