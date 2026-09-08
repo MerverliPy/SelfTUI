@@ -20,10 +20,20 @@ func (v AgentView) handleKey(msg tea.KeyMsg) (AgentView, tea.Cmd) {
 	}
 	k := msg.Key()
 
-	// Hard modals own every key: a pending mutation approval, the model
-	// selector, the /clear confirmation, and the /help overlay.
+	// Hard modals own every key: a pending mutation approval, the write_files
+	// batch review, the model selector, the /clear and /undo//redo
+	// confirmations, and the /help overlay.
 	if v.confirmation != nil {
 		return v.confirmKey(k)
+	}
+	if v.batchReview != nil {
+		return v.batchKey(k)
+	}
+	if v.undoConfirm {
+		return v.undoConfirmKey(k, false)
+	}
+	if v.redoConfirm {
+		return v.undoConfirmKey(k, true)
 	}
 	if v.selectorOpen {
 		return v.selectorKey(k)
@@ -173,6 +183,27 @@ func (v AgentView) confirmKey(k tea.Key) (AgentView, tea.Cmd) {
 		v.confirmation.Respond(false)
 		v.notice = "declined " + v.confirmation.Name
 		v.confirmation = nil
+	}
+	return v, nil
+}
+
+// batchKey owns the write_files review overlay's keys: y or enter approves
+// the whole batch (all-or-nothing), n or esc declines it (nothing applied).
+// There is no per-file accept/reject in this cut (design §4.2).
+func (v AgentView) batchKey(k tea.Key) (AgentView, tea.Cmd) {
+	b := v.batchReview
+	if b == nil {
+		return v, nil
+	}
+	switch {
+	case k.Text == "y" || k.Code == tea.KeyEnter:
+		b.Respond(true)
+		v.notice = "applying batch"
+		v.batchReview = nil
+	case k.Text == "n" || k.Code == tea.KeyEsc:
+		b.Respond(false)
+		v.notice = "declined batch"
+		v.batchReview = nil
 	}
 	return v, nil
 }

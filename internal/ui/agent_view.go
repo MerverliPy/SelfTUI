@@ -143,6 +143,26 @@ type AgentView struct {
 	workspace    string
 	host         string
 
+	// V2e session undo journal. Owned here (not by the runner) because the
+	// runner is rebuilt on every settings save (ApplyConfig) while the
+	// journal must survive the whole session: every rebuilt runner re-attaches
+	// the same journal via WithJournal. Created memory-only by default; main
+	// wires the crash-artifact dir through App.WithUndoDir.
+	undo *agent.UndoJournal
+
+	// batchReview is the pending write_files review overlay (V2e). The runner
+	// emitted a BatchReviewMsg instead of the generic raw-args confirm; while
+	// this is set the Agent tab owns every key and the modal renders the
+	// per-file diffs. Approve applies the whole batch, decline applies
+	// nothing (y/enter vs n/esc, mirroring the single-file confirm).
+	batchReview *agent.BatchReviewMsg
+
+	// undoConfirm / redoConfirm are the y/esc confirm guards for the /undo
+	// and /redo commands (design §4.3: each guarded by the standard confirm;
+	// result surfaces as a status-bar notice). Only one is set at a time.
+	undoConfirm bool
+	redoConfirm bool
+
 	// Input + feedback.
 	input   textarea.Model
 	chatErr string
@@ -307,10 +327,12 @@ func newAgentView(ctx context.Context, client *ollama.Client, styles Styles, the
 	ta.Placeholder = "/ for commands, or chat with the selected model…"
 	ta.ShowLineNumbers = false // line numbers waste width on a phone
 	ta.Focus()                 // the input is the Agent tab's primary surface
+	undo, _ := agent.NewUndoJournal("")
 	return AgentView{
 		client:       client,
 		ctx:          ctx,
-		runner:       runnerFor(client, root, systemPrompt, agentCfg.MaxToolIterations, toolsEnabled),
+		runner:       runnerFor(client, root, systemPrompt, agentCfg.MaxToolIterations, toolsEnabled).WithJournal(undo),
+		undo:         undo,
 		styles:       styles,
 		dark:         theme != "light",
 		loading:      true,
@@ -714,7 +736,8 @@ func (v AgentView) waitChatCmd() tea.Cmd {
 // uses it so the 1/2/3 tab-jump keys cannot steal from an approval dialog, a
 // confirmation, or the help overlay.
 func (v AgentView) ModalOpen() bool {
-	return v.selectorOpen || v.confirmation != nil || v.helpOpen || v.clearConfirm ||
+	return v.selectorOpen || v.confirmation != nil || v.batchReview != nil ||
+		v.helpOpen || v.clearConfirm || v.undoConfirm || v.redoConfirm ||
 		v.resumeOpen || v.resumeConfirm
 }
 
@@ -875,6 +898,31 @@ func (v AgentView) Update(msg tea.Msg) (AgentView, tea.Cmd) {
 		msg.Input = sanitizeTerminalText(msg.Input)
 		v.confirmation = &msg
 		return v, v.waitChatCmd()
+
+	case agent.BatchReviewMsg:
+		// V2e: the write_files review stage. The diffs and summaries echo
+		// workspace content and model text; sanitize the display copy like the
+		// raw-args confirm above (the runner keeps the authoritative copy).
+		msg.Name = sanitizeTerminalText(msg.Name)
+		msg.Workspace = sanitizeTerminalText(msg.Workspace)
+		msg.Note = sanitizeTerminalText(msg.Note)
+		for i := range msg.Files {
+			f := &msg.Files[i]
+			f.Path = sanitizeTerminalText(f.Path)
+			f.Kind = sanitizeTerminalText(f.Kind)
+			f.Summary = sanitizeTerminalText(f.Summary)
+			for j := range f.Rows {
+				f.Rows[j] = sanitizeTerminalText(f.Rows[j])
+			}
+		}
+		v.batchReview = &msg
+		return v, v.waitChatCmd()
+
+	case undoDoneMsg:
+		// A /undo or /redo finished (host-side journal op, ran in a command
+		// off the update loop). Surface the result as a status-bar notice.
+		v.applyUndoDone(msg)
+		return v, nil
 
 	case agent.FallbackMsg:
 		v.notice = sanitizeTerminalText(msg.Reason)

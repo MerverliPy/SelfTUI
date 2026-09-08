@@ -65,6 +65,28 @@ func AgentTools() []ollama.ToolDefinition {
 			},
 		}},
 		{Type: "function", Function: ollama.ToolFunction{
+			Name: "write_files", Description: "Propose one coherent multi-file change as a batch. All-or-nothing: approve applies every op, decline applies none. Each op is {path, kind: create|overwrite|edit, content?, old?, new?}; edit requires an exact one-match of old at apply time. At most 16 ops; per-op content/old/new up to 262144 bytes. The batch is refused in full if any op is invalid, targets a sensitive or .git path, or would need a pre-image over 8 MiB. run_command effects are never undoable.",
+			Parameters: map[string]any{
+				"type": "object", "properties": map[string]any{
+					"ops": map[string]any{
+						"type": "array",
+						"items": map[string]any{
+							"type": "object", "properties": map[string]any{
+								"path":    map[string]any{"type": "string"},
+								"kind":    map[string]any{"type": "string"},
+								"content": map[string]any{"type": "string"},
+								"old":     map[string]any{"type": "string"},
+								"new":     map[string]any{"type": "string"},
+							},
+							"required": []string{"path", "kind"},
+						},
+					},
+					"note": map[string]any{"type": "string"},
+				},
+				"required": []string{"ops"},
+			},
+		}},
+		{Type: "function", Function: ollama.ToolFunction{
 			Name: "run_command", Description: "Run an approved command inside the bubblewrap sandbox. Requires user approval.",
 			Parameters: map[string]any{
 				"type": "object", "properties": map[string]any{

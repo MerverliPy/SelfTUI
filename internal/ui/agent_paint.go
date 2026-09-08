@@ -13,14 +13,24 @@ import (
 )
 
 // View renders transcript + hint + input per the current geometry. A modal
-// (model selector, mutation approval, /help, /clear confirm) replaces the
-// body with a centered overlay; the slash-command menu (M7-A) floats between
-// the transcript and the input while a "/" draft is being composed.
+// (model selector, mutation approval, write_files batch review, /help, /clear,
+// /undo confirm) replaces the body with a centered overlay; the slash-command
+// menu (M7-A) floats between the transcript and the input while a "/" draft is
+// being composed.
 func (v AgentView) View() string {
 	bodyH := maxInt(v.h-2, 1)
 
 	if v.confirmation != nil {
 		return v.renderConfirmationOverlay(bodyH)
+	}
+	if v.batchReview != nil {
+		return v.renderBatchReviewOverlay(bodyH)
+	}
+	if v.undoConfirm {
+		return v.renderUndoOverlay(bodyH, false)
+	}
+	if v.redoConfirm {
+		return v.renderUndoOverlay(bodyH, true)
 	}
 	if v.selectorOpen {
 		return v.renderSelectorOverlay(bodyH)
@@ -360,12 +370,50 @@ func (v AgentView) renderConfirmationOverlay(bodyH int) string {
 	return v.renderOverlayTitle(bodyH, title, lines)
 }
 
-// slashMenuMaxRows fits the whole command set (nine commands as of the
-// N6 /details + /thinking additions) so the menu never needs its own
-// scroll. Raised from 7: every command must stay reachable through the
-// menu, and a ninth row still leaves the chat pane usable at the measured
-// phone geometry (the pane shrinks by exactly one more row).
-const slashMenuMaxRows = 9
+// renderBatchReviewOverlay is the write_files review stage (V2e §4.2): one
+// summary row per file plus its rendered one-column unified diff, with the
+// whole payload height-capped by the shared overlay helper so the decision
+// legend stays on screen. y/enter approves the whole batch, n/esc declines.
+func (v AgentView) renderBatchReviewOverlay(bodyH int) string {
+	b := v.batchReview
+	if b == nil {
+		return ""
+	}
+	lines := []string{}
+	if b.Note != "" {
+		lines = append(lines, "note: "+b.Note)
+	}
+	for _, f := range b.Files {
+		lines = append(lines, f.Summary)
+		lines = append(lines, f.Rows...)
+		lines = append(lines, "")
+	}
+	lines = append(lines, "y / enter apply all · n / esc decline · window "+b.Timeout.String())
+	return v.renderOverlayTitle(bodyH, "Review write_files batch", lines)
+}
+
+// renderUndoOverlay is the /undo and /redo confirm guard (same shape as the
+// /clear dialog): y/enter runs the journal op, n/esc cancels, nothing happens
+// on a stray key.
+func (v AgentView) renderUndoOverlay(bodyH int, redo bool) string {
+	title := "Undo"
+	action := "undo the agent's last file change"
+	if redo {
+		title = "Redo"
+		action = "redo the last undone change"
+	}
+	lines := []string{
+		action + "?",
+		"",
+		"y / enter " + title + " · n / esc cancel",
+	}
+	return v.renderOverlayTitle(bodyH, title, lines)
+}
+
+// slashMenuMaxRows fits the whole command set (eleven commands as of the
+// V2e /undo + /redo additions) so the menu never needs its own scroll.
+// Raised from 9: every command must stay reachable through the menu.
+const slashMenuMaxRows = 11
 
 // renderSelectorOverlay centers the model picker over the body. The picker
 // filters as you type (any printable key extends the filter across name,
@@ -427,6 +475,8 @@ func (v AgentView) renderHelpOverlay(bodyH int) string {
 	lines := []string{
 		"slash commands",
 		" /clear    clear the conversation (asks first)",
+		" /undo     undo the agent's last file change",
+		" /redo     redo the last undone change",
 		" /model    pick a model",
 		" /resume   resume a saved chat transcript",
 		" /theme    toggle dark/light for this session",
@@ -665,7 +715,7 @@ func (v AgentView) ApplyConfig(cfg config.Config, c *ollama.Client, reload bool)
 	v.toolsEnabled = cfg.ToolsEnabled
 	v.host = cfg.Host
 	v.workspace = canonicalWorkspaceLabel(root)
-	v.runner = runnerFor(c, root, cfg.Agent.SystemPrompt, cfg.Agent.MaxToolIterations, cfg.ToolsEnabled)
+	v.runner = runnerFor(c, root, cfg.Agent.SystemPrompt, cfg.Agent.MaxToolIterations, cfg.ToolsEnabled).WithJournal(v.undo)
 	if v.logger != nil {
 		v.runner = v.runner.WithLogger(v.logger)
 	}

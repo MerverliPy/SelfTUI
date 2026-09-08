@@ -9,23 +9,23 @@
                                                                                                                         
                                                                                                                         
                                                                                                                         
+                                                                                                                        
   ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮  
-  │Command palette                                                                                                   │  
+  │Review write_files batch                                                                                          │  
   │                                                                                                                  │  
-  │filter:                                                                                                           │  
-  │❯ Models  go to the Models tab                                                                                    │  
-  │  Agent  go to the Agent tab                                                                                      │  
-  │  Settings  go to the Settings tab                                                                                │  
-  │  Change model  open the Agent model picker                                                                       │  
-  │  Clear conversation  wipe the Agent transcript (asks first)                                                      │  
-  │  Undo last change  revert the agent's last file change (asks first)                                              │  
-  │  Redo last undo  reapply the last undone change (asks first)                                                     │  
-  │  Toggle theme  switch dark ↔ light for this session                                                              │  
-  │  Refresh models  reload the model list                                                                           │  
-  │  Logs drawer  toggle the debug log drawer (ctrl+o)                                                               │  
-  │  Command list  open the slash-command reference                                                                  │  
-  │type to filter · ↑/↓ or j/k move · enter run · esc close                                                          │  
+  │M internal/agent/runner.go  +2 −1                                                                                 │  
+  │  // M-06 gate                                                                                                    │  
+  │-if err := ctx.Err(); err != nil {                                                                                │  
+  │+if err := ctx.Err(); err != nil { return err }                                                                   │  
+  │                                                                                                                  │  
+  │A docs/v2e.md  +3                                                                                                 │  
+  │+# Multi-file batches                                                                                             │  
+  │+                                                                                                                 │  
+  │+All-or-nothing.                                                                                                  │  
+  │                                                                                                                  │  
+  │y / enter apply all · n / esc decline · window 2m0s                                                               │  
   ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯  
+                                                                                                                        
                                                                                                                         
                                                                                                                         
                                                                                                                         

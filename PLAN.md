@@ -576,9 +576,14 @@ undo/redo journal (aider-style refuse-guards, Claude-Code-style bounds: 25 entri
 checker NEEDS WORK (B+ substance) → all six findings parent-verified and fixed;
 re-check trigger closed with grep evidence. Owner decisions resolved in session:
 review window 120 s/300 s, undo covers all confirmed mutations, `/redo` included,
-session-scoped journal, rollback-failure = stop + retain entry. *Implementation is
-the next session, owner-assigned per the one-step rule; exit criteria = the design's
-§5 test strategy.*
+session-scoped journal, rollback-failure = stop + retain entry. ✅ *implemented
+2026-09-08 (next session, owner-assigned): §5 exit green — `make check` exit 0,
+`go test -race ./...` exit 0, existing frames byte-identical except the 6
+command-enumerating fixtures that grew with the mandated `/undo` `/redo` rows
+(parent-approved reconciliation, N6 precedent `35c0ace`) + 2 new `agent-batch`
+overlay fixtures (72×30 / 120×40); one reviewer pass BLOCK → 3 P1s parent-
+verified and fixed (per-op caps across all schema fields, redo-clear byte/
+disk accounting, §4.3 meta.json contract); details in LEDGER.*
 
 ---
 
