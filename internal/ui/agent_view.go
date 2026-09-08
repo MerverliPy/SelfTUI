@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -155,6 +156,38 @@ type AgentView struct {
 	helpOpen     bool
 	clearConfirm bool
 
+	// N6 display toggles (session-scoped, default off — no leader key: the
+	// palette and slash menu stay the discoverable paths). showThinking
+	// renders per-turn reasoning blocks; showDetails renders tool-activity
+	// blocks. Both gate display only: neither changes what the agent loop
+	// sends to the model. Reasoning and tool lines are stored regardless of
+	// the toggles so a mid-session flip reveals past turns too, while a
+	// toggle-off frame stays byte-identical to the pre-N6 renderer.
+	showThinking bool
+	showDetails  bool
+
+	// Per-turn extras of the in-flight turn (N6). thinkingText/pendingThinking
+	// mirror the N2 token batching (deltas land in pendingThinking, merge on
+	// the repaint tick, never touch streamText); streamTools collects one
+	// sanitized line per tool start/result. Both commit with the turn so the
+	// transcript keeps them behind the toggles after the turn ends.
+	thinkingText    string
+	pendingThinking string
+	streamTools     []string
+
+	// @-file picker (N6): a fresh "@" in the composer lists the jailed
+	// workspace's files (fetched off the update loop, M-04 discipline);
+	// picking inserts "@path " into the draft and the send path expands the
+	// references through the jailed read_file. The filter is derived from
+	// the draft tail after the last '@' (word-bounded), so the picker can
+	// never desync from what the user sees; fileOpen is the armed flag (esc
+	// or a word end closes it until the next "@").
+	fileOpen    bool
+	fileLoading bool
+	fileList    []string
+	fileIdx     int
+	fileFilter  string // last-seen filter text (a change resets the highlight)
+
 	// Transcript scroll: follow auto-tails the newest content while
 	// streaming or after a new turn; u/d scroll away from the tail.
 	scroll int
@@ -203,6 +236,16 @@ type turn struct {
 	model  string
 	meta   string
 	render string
+	// N6 per-turn extras, committed from the in-flight turn. thinking is the
+	// turn's raw reasoning text (as relayed by agent.ThinkingMsg); tools are
+	// the sanitized tool-activity lines. Both are stored always and rendered
+	// only behind the showThinking/showDetails toggles (default off →
+	// byte-identical frames). wire, when set on a user turn, is the expanded
+	// @-reference content the runner will send — the transcript still renders
+	// the displayed draft (msg.Content).
+	thinking string
+	tools    []string
+	wire     string
 }
 
 // NewAgentView builds the Agent tab using the current directory as its
@@ -334,6 +377,13 @@ type agentThemeMsg struct{ theme string }
 // shell's default case and never reach this view.
 type streamTickMsg struct{}
 
+// fileListMsg reports the @-file picker's workspace listing (N6): the
+// workspace-relative file paths, walked off the update loop (M-04 discipline;
+// the composer frame never blocks on the filesystem). An unreadable
+// workspace lists as empty — the picker degrades to "no files", never an
+// error surface.
+type fileListMsg struct{ files []string }
+
 // streamTickInterval is the streaming repaint cadence. Ollama streams deltas
 // every ~10–50 ms; 60 ms coalesces 1–6 deltas per repaint (≈17 fps), keeps
 // the caret visually smooth (well under the ~100 ms perception threshold for
@@ -410,6 +460,11 @@ func (v AgentView) startChat() (AgentView, tea.Cmd) {
 	v.streaming = true
 	v.streamText = ""
 	v.pendingStream = "" // N2: a fresh turn starts with an empty delta batch
+	v.thinkingText = ""  // N6: fresh per-turn extras
+	pendingThinking := ""
+	_ = pendingThinking
+	v.pendingThinking = ""
+	v.streamTools = nil
 	v.resetStreamRender()
 	v.stopRequest = false
 	v.stopArmed = false
@@ -422,7 +477,13 @@ func (v AgentView) startChat() (AgentView, tea.Cmd) {
 	model := v.model
 	msgs := make([]ollama.ChatMessage, 0, len(v.turns))
 	for _, t := range v.turns {
-		msgs = append(msgs, t.msg)
+		// N6: a turn with @-references carries its expanded wire content —
+		// exactly what the runner will send — instead of the displayed draft.
+		content := t.msg.Content
+		if t.msg.Role == ollama.RoleUser && t.wire != "" {
+			content = t.wire
+		}
+		msgs = append(msgs, ollama.ChatMessage{Role: t.msg.Role, Content: content})
 	}
 
 	go func() {
@@ -577,6 +638,16 @@ func (v AgentView) Update(msg tea.Msg) (AgentView, tea.Cmd) {
 	case sessionLoadedMsg:
 		return v.applySessionLoaded(msg), nil
 
+	case fileListMsg:
+		// N6: the @-picker's workspace listing landed. The list is taken as
+		// offered (the walk is jail-bounded by construction); a picked path is
+		// re-verified through the jailed read at expansion time, so even a
+		// hostile listing can only produce a visible "unavailable" note.
+		v.fileLoading = false
+		v.fileList = msg.files
+		v.fileIdx = 0
+		return v, nil
+
 	case tea.WindowSizeMsg:
 		v.w, v.h = msg.Width, msg.Height
 		// Wrap width changed: recompose the textarea fit and force a renderer
@@ -621,18 +692,33 @@ func (v AgentView) Update(msg tea.Msg) (AgentView, tea.Cmd) {
 	case streamTickMsg:
 		// N2 repaint tick: flush accumulated deltas, re-prime the active-block
 		// cache once per content change, and re-arm while the turn streams.
+		// N6: the same tick merges thinking deltas so a reasoning burst costs
+		// one composed block per repaint, never one per delta.
 		v.mergeStreamDeltas()
+		v.mergeThinkingDeltas()
 		v.primeStreamRender()
 		if v.streaming {
 			return v, v.streamTickCmd()
 		}
 		return v, nil
 
+	case agent.ThinkingMsg:
+		// N6: reasoning deltas queue for the repaint tick (same batching the
+		// content stream uses). They are stored always — the /thinking toggle
+		// gates rendering, not storage — and never enter streamText, so the
+		// assistant's answer and the M7-B caret behavior are untouched.
+		if v.streaming {
+			v.pendingThinking += msg.Text
+		}
+		return v, v.waitChatCmd()
+
 	case agent.ToolStartMsg:
 		if v.streaming {
 			// The tool name and its argument JSON come from the remote model's
 			// tool call; sanitize before the statusline shows them (H-05).
 			v.toolStatus = sanitizeTerminalText("⚙ " + msg.Name + " " + msg.Input)
+			// N6: the /details block keeps one bounded line per tool event.
+			v.streamTools = append(v.streamTools, boundedToolLine("⚙ "+msg.Name+" "+msg.Input))
 		}
 		return v, v.waitChatCmd()
 
@@ -645,6 +731,7 @@ func (v AgentView) Update(msg tea.Msg) (AgentView, tea.Cmd) {
 			// Summary can carry bytes read from the workspace at a hostile
 			// model's request; sanitize the composed status row as one value.
 			v.toolStatus = sanitizeTerminalText(prefix + msg.Name + ": " + firstLine(msg.Summary))
+			v.streamTools = append(v.streamTools, boundedToolLine(prefix+msg.Name+": "+msg.Summary))
 		}
 		return v, v.waitChatCmd()
 
@@ -727,6 +814,37 @@ func (v AgentView) onModelsLoaded(models []ollama.Model) (AgentView, tea.Cmd) {
 	return v, nil
 }
 
+// mergeThinkingDeltas folds pendingThinking into thinkingText (N6). Pure
+// state merge on the repaint tick, mirroring mergeStreamDeltas; thinking
+// never touches streamText so the assistant content stream stays aligned
+// with the N2 render cache.
+func (v *AgentView) mergeThinkingDeltas() {
+	if v.pendingThinking == "" {
+		return
+	}
+	v.thinkingText += v.pendingThinking
+	v.pendingThinking = ""
+}
+
+// boundedToolLine caps one tool-activity line's stored length so a 64 KiB
+// tool result cannot flood the /details block (the full result already went
+// back to the model through ToolResultMsg).
+func boundedToolLine(s string) string {
+	s = sanitizeTerminalText(s)
+	const max = 2048
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "…[truncated]"
+}
+
+// reasoningBlock composes a turn's reasoning for display (N6): a muted
+// marker row above the raw reasoning text. Plain text, no glamour —
+// reasoning is verbose and the block must stay cheap to compose per frame.
+func (v AgentView) reasoningBlock(thinking string) string {
+	return v.styles.mutedText().Render("· reasoning\n" + thinking)
+}
+
 // onChatDone finalizes a turn: commits the streamed text as an assistant
 // message whose header carries elapsed + terminal reason right-aligned
 // (M7-B/opencode-style), then surfaces an error unless the user stopped the
@@ -767,16 +885,22 @@ func (v AgentView) onChatDone(m agent.AgentDoneMsg) (AgentView, tea.Cmd) {
 		// The Ollama done_reason on the done event is remote text rendered on
 		// the assistant header; sanitize it before it becomes turn meta.
 		// N3: when the final chunk carried generation metrics, the measured
-		// tok/s rides the same meta row.
+		// tok/s rides the same meta row. The N6 extras (reasoning, tool
+		// lines) commit with the content; a turn that produced no content
+		// (error mid-loop) commits nothing, exactly as before N6.
 		meta := turnFooter(v.turnStart, sanitizeTerminalText(m.Reason), v.stopRequest, turnTokPerSec(m.Metrics))
 		v.turns = append(v.turns, turn{
-			msg:    ollama.ChatMessage{Role: ollama.RoleAssistant, Content: v.streamText},
-			model:  v.model,
-			meta:   meta,
-			render: v.renderBlock(v.assistantHeaderRow(v.model, meta), v.streamText),
+			msg:      ollama.ChatMessage{Role: ollama.RoleAssistant, Content: v.streamText},
+			model:    v.model,
+			meta:     meta,
+			render:   v.renderBlock(v.assistantHeaderRow(v.model, meta), v.streamText),
+			thinking: v.thinkingText,
+			tools:    v.streamTools,
 		})
 		v, recCmd = v.enqueueSessionTurn("assistant", v.model, v.streamText, meta, time.Now())
 		v.streamText = ""
+		v.thinkingText = "" // N6: the turn's extras committed with it
+		v.streamTools = nil
 		v.resetStreamRender() // the active block committed; nothing cached to show
 	}
 
@@ -829,6 +953,16 @@ func (v AgentView) handleKey(msg tea.KeyMsg) (AgentView, tea.Cmd) {
 
 	// While a slash draft is showing, the draft's keys steer the menu
 	// (slashDraftKey); every other key keeps editing the draft below.
+	// The @-file picker (N6) sits one priority above it: while armed, its
+	// nav keys steer the file list and every other key keeps editing the
+	// draft (which is also the live filter).
+	if v.fileMenuActive() {
+		av, handled, cmd := v.filePickerKey(k)
+		if handled {
+			return av, cmd
+		}
+		v = av
+	}
 	if v.slashMenu() {
 		av, handled, cmd := v.slashDraftKey(k)
 		if handled {
@@ -872,6 +1006,7 @@ func (v AgentView) handleKey(msg tea.KeyMsg) (AgentView, tea.Cmd) {
 			v.input = ti
 			v.slashQuery = ""
 			v.slashIdx = 0
+			v.fileOpen = false // N6: a cleared draft disarms the @-picker
 			return v.fitComposer(), nil
 		}
 		return v, nil
@@ -912,6 +1047,23 @@ func (v AgentView) handleKey(msg tea.KeyMsg) (AgentView, tea.Cmd) {
 
 	ta, cmd := v.input.Update(msg)
 	v.input = ta
+	// N6: a fresh "@" arms the file picker (typing, not streaming — the
+	// slash menu follows the same rule). Every other edit re-checks the
+	// trigger word so the picker closes itself when the '@' or the query is
+	// edited away.
+	if k.Text == "@" && !v.streaming && !v.fileOpen {
+		v.fileOpen = true
+		v.fileLoading = true
+		v.fileList = nil
+		v.fileIdx = 0
+		v.fileFilter = ""
+		return v.fitComposer(), v.listFilesCmd()
+	}
+	if v.fileOpen {
+		if _, _, ok := v.atQuery(); !ok {
+			v.fileOpen = false
+		}
+	}
 	return v.fitComposer(), cmd
 }
 
@@ -1057,17 +1209,38 @@ func (v AgentView) sendInput() (AgentView, tea.Cmd) {
 	i := v.input
 	i.Reset()
 	v.input = i
+	v.fileOpen = false
 	v = v.fitComposer()
 	v.measuredPromptTokens = 0 // a new draft/send: budget check is approximate again
+
+	// N6: expand @-references through the jailed read_file. The transcript
+	// renders the draft; the wire content carries the inline file blocks.
+	// The reads are bounded by the read_file ceiling (maxReadBytes per file)
+	// and run synchronously here — a send is the turn's start, and an
+	// unexpanded payload would silently lie to the context meter.
+	wire := ""
+	remoteAttachWarn := ""
+	if refs := agent.FileRefTokens(text); len(refs) > 0 {
+		wire = agent.ExpandFileRefs(v.ctx, v.runner.Root(), text)
+		if wire != text && v.host != "" && !config.LoopbackHost(v.host) {
+			remoteAttachWarn = "⚠ attached workspace content sent to " + v.host
+		}
+	}
 
 	v.turns = append(v.turns, turn{
 		msg:    ollama.ChatMessage{Role: ollama.RoleUser, Content: text},
 		model:  v.model,
 		render: v.renderBlock(v.userHeader(), text),
+		wire:   wire,
 	})
 	v.checkContextBudget()
 	v, recCmd := v.enqueueSessionTurn("user", v.model, text, "", time.Now())
 	av, chatCmd := v.startChat()
+	// The remote-attachment warning rides after startChat (which resets the
+	// notice for the new turn) so it survives to the post-turn statusline.
+	if remoteAttachWarn != "" {
+		av.notice = remoteAttachWarn
+	}
 	return av, tea.Batch(recCmd, chatCmd)
 }
 
@@ -1387,6 +1560,8 @@ func slashCommandList() []slashCommand {
 		{"model", "pick a model (m)"},
 		{"resume", "resume a saved chat transcript"},
 		{"theme", "toggle dark/light for this session"},
+		{"details", "toggle tool-output blocks"},
+		{"thinking", "toggle reasoning blocks"},
 		{"export", "flush + reveal the transcript file path"},
 		{"help", "list slash commands and keys"},
 		{"refresh", "reload the model list (r)"},
@@ -1438,6 +1613,7 @@ func (v AgentView) runSlashCommand() (AgentView, tea.Cmd) {
 	v.input = ti
 	v.slashQuery = ""
 	v.slashIdx = 0
+	v.fileOpen = false
 	v = v.fitComposer() // the draft was consumed; shrink the composer back
 
 	switch name {
@@ -1463,6 +1639,18 @@ func (v AgentView) runSlashCommand() (AgentView, tea.Cmd) {
 	case "help":
 		v.helpOpen = true
 		return v, nil
+	case "details":
+		// N6: gate the tool-activity blocks (display only — the agent loop's
+		// wire payload is untouched). Session-scoped, default off.
+		v.showDetails = !v.showDetails
+		v.notice = "tool-output blocks " + toggleWord(v.showDetails)
+		return v, nil
+	case "thinking":
+		// N6: surface per-turn reasoning blocks (qwen3 thinking; stored
+		// always, shown only behind this toggle). Session-scoped, default off.
+		v.showThinking = !v.showThinking
+		v.notice = "reasoning blocks " + toggleWord(v.showThinking)
+		return v, nil
 	case "export":
 		return v.exportSession()
 	case "refresh":
@@ -1471,6 +1659,232 @@ func (v AgentView) runSlashCommand() (AgentView, tea.Cmd) {
 		return v, v.loadModelsCmd()
 	}
 	return v, nil
+}
+
+// toggleWord renders a toggle state for notices.
+func toggleWord(on bool) string {
+	if on {
+		return "on"
+	}
+	return "off"
+}
+
+// --- @-file picker (N6) ---------------------------------------------------
+
+// fileMenuMaxRows caps the @-picker's file rows so the menu never needs its
+// own scroll and the chat pane keeps room at the phone geometry.
+const fileMenuMaxRows = 7
+
+// atQuery reports the composer's live @-trigger: the byte index of the last
+// '@' in the draft and the word after it. The trigger is word-bounded — any
+// whitespace after the '@' ends it — so the filter is always exactly the
+// text the user can see and the picker can never desync from the draft.
+func (v AgentView) atQuery() (at int, query string, ok bool) {
+	val := v.input.Value()
+	i := strings.LastIndexByte(val, '@')
+	if i < 0 {
+		return 0, "", false
+	}
+	tail := val[i+1:]
+	if strings.ContainsAny(tail, " \t\n\r") {
+		return 0, "", false
+	}
+	return i, tail, true
+}
+
+// fileMenuActive reports whether the @-picker owns navigation keys: armed
+// and the trigger word still intact.
+func (v AgentView) fileMenuActive() bool {
+	if !v.fileOpen || v.confirmation != nil {
+		return false
+	}
+	_, _, ok := v.atQuery()
+	return ok
+}
+
+// fileMatches applies the live filter (the trigger word) to the workspace
+// listing. Ranking is fuzzy but predictable: substring matches first (by
+// position, then path length), then subsequence matches (fuzzy, by path
+// length, then lexicographic). The list is already jail-bounded — the walk
+// never leaves the workspace — and every picked path is re-verified through
+// the jailed read at expansion time.
+func (v AgentView) fileMatches() []string {
+	_, q, ok := v.atQuery()
+	if !ok || (v.fileLoading && len(v.fileList) == 0) {
+		return nil
+	}
+	q = strings.ToLower(q)
+	type scored struct {
+		path  string
+		class int // 0 = substring, 1 = subsequence
+		index int // substring position (lower ranks earlier)
+	}
+	out := make([]scored, 0, len(v.fileList))
+	for _, p := range v.fileList {
+		low := strings.ToLower(p)
+		if q == "" {
+			out = append(out, scored{p, 0, 0})
+			continue
+		}
+		if i := strings.Index(low, q); i >= 0 {
+			out = append(out, scored{p, 0, i})
+			continue
+		}
+		if isFuzzySubsequence(low, q) {
+			out = append(out, scored{p, 1, 0})
+		}
+	}
+	sort.Slice(out, func(a, b int) bool {
+		x, y := out[a], out[b]
+		if x.class != y.class {
+			return x.class < y.class
+		}
+		if x.class == 0 && x.index != y.index {
+			return x.index < y.index
+		}
+		if len(x.path) != len(y.path) {
+			return len(x.path) < len(y.path)
+		}
+		return x.path < y.path
+	})
+	paths := make([]string, len(out))
+	for i, s := range out {
+		paths[i] = s.path
+	}
+	return paths
+}
+
+// isFuzzySubsequence reports whether q appears in low as an in-order
+// subsequence (byte-wise; the filter is lowercased on both sides).
+func isFuzzySubsequence(low, q string) bool {
+	i := 0
+	for j := 0; j < len(low) && i < len(q); j++ {
+		if low[j] == q[i] {
+			i++
+		}
+	}
+	return i == len(q)
+}
+
+// filePickerKey owns the composer keys while the @-picker is active:
+// arrows/j-k steer the highlighted row, enter attaches the selection, esc
+// disarms (the draft keeps the typed query). Every other key keeps editing
+// the draft — which is the live filter (handled=false falls through to the
+// textarea; the trigger re-check closes the picker when the word ends).
+// Navigation and enter claim a key only while the filtered list has rows:
+// with nothing to act on (listing still loading, no match), the keys fall
+// through so enter still sends the draft instead of dying in an empty menu.
+func (v AgentView) filePickerKey(k tea.Key) (AgentView, bool, tea.Cmd) {
+	matches := v.fileMatches()
+	switch {
+	case k.Code == tea.KeyEsc:
+		v.fileOpen = false
+		v.fileIdx = 0
+		v.fileFilter = ""
+		return v, true, nil
+	case k.Code == tea.KeyEnter && !k.Mod.Contains(tea.ModShift) && len(matches) > 0:
+		av, cmd := v.pickFile()
+		return av, true, cmd
+	case (k.Text == "j" || k.Code == tea.KeyDown) && len(matches) > 0:
+		if v.fileIdx < len(matches)-1 {
+			v.fileIdx++
+		}
+		return v, true, nil
+	case (k.Text == "k" || k.Code == tea.KeyUp) && len(matches) > 0:
+		if v.fileIdx > 0 {
+			v.fileIdx--
+		}
+		return v, true, nil
+	}
+	// Draft text changed: reset the highlight to the top row when the
+	// filter changed (same convention as the slash menu).
+	if _, q, ok := v.atQuery(); ok && q != v.fileFilter {
+		v.fileFilter = q
+		v.fileIdx = 0
+	}
+	return v, false, nil
+}
+
+// pickFile inserts the highlighted file as "@path " in place of the typed
+// query and disarms the picker. The send path — not the picker — does the
+// attachment: the reference is expanded through the jailed read_file when
+// the draft is sent, so what the user picked and what the model receives
+// always go through the same gate.
+func (v AgentView) pickFile() (AgentView, tea.Cmd) {
+	matches := v.fileMatches()
+	v.fileOpen = false
+	v.fileIdx = 0
+	v.fileFilter = ""
+	if len(matches) == 0 {
+		return v, nil
+	}
+	at, _, ok := v.atQuery()
+	if !ok {
+		return v, nil
+	}
+	path := matches[v.fileIdx]
+	ta := v.input
+	ta.SetValue(v.input.Value()[:at] + "@" + path + " ")
+	v.input = ta
+	return v.fitComposer(), nil
+}
+
+// listFilesCmd walks the jailed workspace off the update loop (M-04
+// discipline: no filesystem work in Update). The listing is advisory; a
+// failure lists as empty ("no files"), never an error surface.
+func (v AgentView) listFilesCmd() tea.Cmd {
+	root := v.runner.Root()
+	ctx := v.ctx
+	return func() tea.Msg {
+		return agentEventMsg{msg: fileListMsg{files: agent.WorkspaceFiles(ctx, root)}}
+	}
+}
+
+// fileMenuHeight is the bordered menu's row budget while the @-picker is
+// active (rows + hint row + box borders).
+func (v AgentView) fileMenuHeight() int {
+	rows := len(v.fileMatches())
+	if rows > fileMenuMaxRows {
+		rows = fileMenuMaxRows
+	}
+	if rows == 0 {
+		rows = 1 // the "listing…" / "no files" row
+	}
+	return rows + 3
+}
+
+// renderFileMenu draws the bordered @-file menu between the transcript and
+// the input (same anatomy as the slash menu): the windowed, filtered file
+// rows plus one hint row.
+func (v AgentView) renderFileMenu() string {
+	matches := v.fileMatches()
+	innerW := maxInt(v.w-2, 16)
+
+	var rows []string
+	if len(matches) == 0 {
+		label := "no files match"
+		if v.fileLoading {
+			label = "listing workspace…"
+		}
+		rows = append(rows, v.styles.Placeholder.Render(truncateToWidth(label, innerW)))
+	} else {
+		start := clampInt(v.fileIdx-fileMenuMaxRows/2, 0, maxInt(0, len(matches)-fileMenuMaxRows))
+		end := start + fileMenuMaxRows
+		if end > len(matches) {
+			end = len(matches)
+		}
+		for i := start; i < end; i++ {
+			marker := "  "
+			row := marker + matches[i]
+			if i == v.fileIdx {
+				marker = "❯ "
+				row = marker + lipgloss.NewStyle().Bold(true).Foreground(v.styles.accent).Render(matches[i])
+			}
+			rows = append(rows, truncateToWidth(row, innerW))
+		}
+	}
+	rows = append(rows, v.styles.Placeholder.Render(truncateToWidth("type to filter · ↑/↓ or j/k move · enter attach · esc close", innerW)))
+	return v.styles.Pane.Width(v.w).Height(v.fileMenuHeight()).Render(strings.Join(rows, "\n"))
 }
 
 // --- model selector (M7-C: filter as you type) ----------------------------
@@ -1595,7 +2009,13 @@ func (v AgentView) payloadMessages() []ollama.ChatMessage {
 		msgs = append(msgs, ollama.ChatMessage{Role: ollama.RoleSystem, Content: v.systemPrompt})
 	}
 	for i := range v.turns {
-		msgs = append(msgs, v.turns[i].msg)
+		// N6: a user turn with @-references sends its expanded wire content,
+		// so the meter and truncation marker budget against the true payload.
+		content := v.turns[i].msg.Content
+		if v.turns[i].msg.Role == ollama.RoleUser && v.turns[i].wire != "" {
+			content = v.turns[i].wire
+		}
+		msgs = append(msgs, ollama.ChatMessage{Role: v.turns[i].msg.Role, Content: content})
 	}
 	// N2: budget against the complete stream (deltas awaiting the tick
 	// included) — the payload must match what the runner would send.
@@ -1910,12 +2330,40 @@ func (t turn) effectiveBlock() string {
 	return sanitizeTerminalText(t.msg.Content)
 }
 
+// turnBlock composes one committed turn's full display block (N6): its
+// gated extras — the reasoning block behind /thinking, the tool-activity
+// lines behind /details, in that order (reasoning precedes the tool calls,
+// the tool calls precede the final answer) — prepended to the effective
+// content block. With both toggles off or empty extras this is exactly
+// effectiveBlock, so default frames are byte-identical to the pre-N6
+// renderer by construction.
+func (v AgentView) turnBlock(i int) string {
+	t := v.turns[i]
+	block := t.effectiveBlock()
+	var extras []string
+	if v.showThinking && t.thinking != "" {
+		extras = append(extras, v.reasoningBlock(t.thinking))
+	}
+	if v.showDetails {
+		for _, l := range t.tools {
+			extras = append(extras, v.styles.mutedText().Render(l))
+		}
+	}
+	if len(extras) == 0 {
+		return block
+	}
+	if block == "" {
+		return strings.Join(extras, "\n")
+	}
+	return strings.Join(extras, "\n") + "\n" + block
+}
+
 // turnDisplayLines returns the display lines one committed turn contributes
-// to the transcript: its effective block split on newlines plus the trailing
+// to the transcript: its composed block split on newlines plus the trailing
 // separator row. An empty block contributes nothing at all — not even the
 // separator — so blank turns never leave a gap in the transcript.
-func (t turn) turnDisplayLines() []string {
-	block := t.effectiveBlock()
+func (v AgentView) turnDisplayLines(i int) []string {
+	block := v.turnBlock(i)
 	if block == "" {
 		return nil
 	}
@@ -1923,45 +2371,78 @@ func (t turn) turnDisplayLines() []string {
 	return append(lines, "") // separator after each message
 }
 
-// lineCount is the row count turnDisplayLines would produce, computed by
-// newline arithmetic on the effective block: a non-empty block splits into
-// Count("\n")+1 lines plus the separator row. Zero allocs, no splitting —
+// turnLineCount is the row count turnDisplayLines would produce, computed by
+// newline arithmetic on the composed block: a non-empty block splits into
+// Count("\n")+1 lines plus the separator row. With the toggles off this
+// composes nothing new (turnBlock returns the cached block directly), so
 // chatLineCount walks a 2,000-turn transcript with this alone.
-func (t turn) lineCount() int {
-	block := t.effectiveBlock()
+func (v AgentView) turnLineCount(i int) int {
+	block := v.turnBlock(i)
 	if block == "" {
 		return 0
 	}
 	return strings.Count(block, "\n") + 2
 }
 
-// streamDisplayLines renders the live streaming block: header + content
-// split on newlines, the streaming caret riding the last line while a turn
-// streams (M7-B), and the trailing separator. Rendered only once the model
-// is actually producing text — no phantom empty header/caret while a tool
-// runs or during qwen3's thinking phase (that state lives on the statusline).
+// streamExtrasVisible reports whether the in-flight turn currently has
+// gated extras to render (N6): live reasoning behind /thinking or tool
+// activity behind /details. The content stream is not part of this.
+func (v AgentView) streamExtrasVisible() bool {
+	return (v.showThinking && v.thinkingText != "") || (v.showDetails && len(v.streamTools) > 0)
+}
+
+// streamDisplayLines renders the live streaming block: the gated extras
+// (reasoning behind /thinking, tool lines behind /details), then header +
+// content split on newlines, the streaming caret riding the last line while
+// a turn streams (M7-B), and the trailing separator. Rendered only once the
+// model is actually producing something — no phantom empty header/caret
+// while a tool runs (that state lives on the statusline; N6 moves thinking
+// behind the toggle instead of leaving it invisible).
 func (v AgentView) streamDisplayLines() []string {
-	if v.streamText == "" {
+	if v.streamText == "" && !v.streamExtrasVisible() {
 		return nil
 	}
-	sb := strings.Split(v.streamBlockRender(), "\n") // N2: cache-backed
-	if v.streaming {
-		sb = withStreamingCaret(sb)
+	var sb []string
+	if v.showThinking && v.thinkingText != "" {
+		sb = append(sb, strings.Split(v.reasoningBlock(v.thinkingText), "\n")...)
+	}
+	if v.showDetails {
+		for _, l := range v.streamTools {
+			sb = append(sb, v.styles.mutedText().Render(l))
+		}
+	}
+	if v.streamText != "" {
+		block := strings.Split(v.streamBlockRender(), "\n") // N2: cache-backed
+		if v.streaming {
+			block = withStreamingCaret(block)
+		}
+		sb = append(sb, block...)
 	}
 	return append(sb, "")
 }
 
-// streamLineCount is the row count streamDisplayLines would produce. The
-// caret appends a row only when the block's last split line is blank (the
-// block ends with "\n"); otherwise it rides that line.
+// streamLineCount is the row count streamDisplayLines would produce, by
+// newline arithmetic on the same sources (no composition on the count path):
+// the reasoning block is one marker row plus its body lines, tool lines
+// count one each, and the content block is cache-backed. Zero when the turn
+// contributes nothing.
 func (v AgentView) streamLineCount() int {
-	if v.streamText == "" {
-		return 0
+	n := 0
+	if v.showThinking && v.thinkingText != "" {
+		n += 2 + strings.Count(v.thinkingText, "\n")
 	}
-	block := v.streamBlockRender()      // N2: cache-backed
-	n := strings.Count(block, "\n") + 1 // split lines
-	if v.streaming && strings.HasSuffix(block, "\n") {
-		n++ // caret becomes its own row after the blank last line
+	if v.showDetails {
+		n += len(v.streamTools)
+	}
+	if v.streamText != "" {
+		block := v.streamBlockRender()      // N2: cache-backed
+		n += strings.Count(block, "\n") + 1 // split lines
+		if v.streaming && strings.HasSuffix(block, "\n") {
+			n++ // caret becomes its own row after the blank last line
+		}
+	}
+	if n == 0 {
+		return 0
 	}
 	return n + 1 // separator
 }
@@ -1972,15 +2453,17 @@ func (v AgentView) streamLineCount() int {
 // followed by the next source's header, and empty sources contribute
 // nothing. Only the tail source is examined.
 func (v AgentView) trailingBlankCount() int {
-	if v.streamText != "" {
-		if v.streaming {
-			return 1 // the caret keeps the last line non-empty; separator only
+	if tail := v.streamDisplayLines(); len(tail) > 0 {
+		// The stream source contributes: count its trailing blanks (the
+		// separator row included — it is what the tail trim drops).
+		n := 0
+		for i := len(tail) - 1; i >= 0 && tail[i] == ""; i-- {
+			n++
 		}
-		block := v.streamBlockRender() // N2: cache-backed
-		return strings.Count(block[len(strings.TrimRight(block, "\n")):], "\n") + 1
+		return n
 	}
 	for i := len(v.turns) - 1; i >= 0; i-- {
-		block := v.turns[i].effectiveBlock()
+		block := v.turnBlock(i)
 		if block == "" {
 			continue
 		}
@@ -1999,7 +2482,7 @@ func (v AgentView) trailingBlankCount() int {
 func (v AgentView) chatLineCount() int {
 	total := len(v.truncationMarkerLines())
 	for i := range v.turns {
-		total += v.turns[i].lineCount()
+		total += v.turnLineCount(i)
 	}
 	total += v.streamLineCount()
 	if blanks := v.trailingBlankCount(); blanks > 0 {
@@ -2057,7 +2540,7 @@ func (v AgentView) chatWindowTotal(start, end, total int) []string {
 		if pos >= end {
 			break
 		}
-		n := v.turns[i].lineCount()
+		n := v.turnLineCount(i)
 		if n == 0 {
 			continue
 		}
@@ -2065,7 +2548,7 @@ func (v AgentView) chatWindowTotal(start, end, total int) []string {
 			pos += n // entirely before the window: skip the split
 			continue
 		}
-		take(v.turns[i].turnDisplayLines())
+		take(v.turnDisplayLines(i))
 	}
 	if pos < end {
 		take(v.streamDisplayLines())
@@ -2129,9 +2612,13 @@ func (v AgentView) View() string {
 	// Bottom region (opencode footer anatomy): the composer pane (a header
 	// row with model chip + context usage, then the auto-growing prompt),
 	// below it a one-row statusline (spinner/status · interrupt, legend).
-	// The slash menu floats between the transcript and the composer.
+	// The slash menu or the @-file picker (N6) floats between the transcript
+	// and the composer while its draft is being composed.
 	menuH := 0
-	if v.slashMenu() {
+	switch {
+	case v.fileMenuActive():
+		menuH = v.fileMenuHeight()
+	case v.slashMenu():
 		menuH = v.slashMenuHeight()
 	}
 	composerH := v.composerRows() + 3
@@ -2143,7 +2630,11 @@ func (v AgentView) View() string {
 
 	out := chatPane
 	if menuH > 0 {
-		out += "\n" + v.renderSlashMenu()
+		menu := v.renderSlashMenu()
+		if v.fileMenuActive() {
+			menu = v.renderFileMenu()
+		}
+		out += "\n" + menu
 	}
 	return out + "\n" + composer + "\n" + status
 }
@@ -2436,12 +2927,12 @@ func (v AgentView) renderConfirmationOverlay(bodyH int) string {
 	return v.renderOverlayTitle(bodyH, title, lines)
 }
 
-// slashMenuMaxRows fits the whole command set (seven commands as of the
-// /resume addition) so the menu never needs its own scroll. Raised from 6
-// for /resume: every command must stay reachable through the menu, and a
-// seventh row still keeps the chat pane roomy at the measured phone
-// geometry (the pane shrinks by exactly one row).
-const slashMenuMaxRows = 7
+// slashMenuMaxRows fits the whole command set (nine commands as of the
+// N6 /details + /thinking additions) so the menu never needs its own
+// scroll. Raised from 7: every command must stay reachable through the
+// menu, and a ninth row still leaves the chat pane usable at the measured
+// phone geometry (the pane shrinks by exactly one more row).
+const slashMenuMaxRows = 9
 
 // renderSelectorOverlay centers the model picker over the body. The picker
 // filters as you type (any printable key extends the filter across name,
@@ -2506,6 +2997,8 @@ func (v AgentView) renderHelpOverlay(bodyH int) string {
 		" /model    pick a model",
 		" /resume   resume a saved chat transcript",
 		" /theme    toggle dark/light for this session",
+		" /details  toggle tool-output blocks",
+		" /thinking toggle reasoning blocks",
 		" /export   flush + reveal the transcript file path",
 		" /help     show this reference",
 		" /refresh  reload the model list",

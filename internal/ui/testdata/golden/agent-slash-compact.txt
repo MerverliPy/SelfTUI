@@ -10,14 +10,14 @@
 │                                                                      │
 │                                                                      │
 │                                                                      │
-│                                                                      │
-│                                                                      │
 ╰──────────────────────────────────────────────────────────────────────╯
 ╭──────────────────────────────────────────────────────────────────────╮
 │❯ /clear  clear the conversation (asks first)                         │
 │  /model  pick a model (m)                                            │
 │  /resume  resume a saved chat transcript                             │
 │  /theme  toggle dark/light for this session                          │
+│  /details  toggle tool-output blocks                                 │
+│  /thinking  toggle reasoning blocks                                  │
 │  /export  flush + reveal the transcript file path                    │
 │  /help  list slash commands and keys                                 │
 │  /refresh  reload the model list (r)                                 │

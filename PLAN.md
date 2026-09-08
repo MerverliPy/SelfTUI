@@ -829,7 +829,22 @@ reconnect events, agent loop decisions (tool calls, budget, truncation markers).
 k9s-style pattern; ships with a `selftui --log-file` flag so drawer + file share one
 sink. Read-only; no secrets (redact bearer tokens).
 
-### N6 — Chat composer upgrades (U)
+### N6 — Chat composer upgrades (U) — **LANDED 2026-09-07**
+Landed: `@`-file fuzzy reference (palette-style picker over a jail-bounded
+`WorkspaceFiles()` walk; send-path `@token` expansion through the jailed
+`ReadFile` — missing file leaves prose untouched, jail/size violations render a
+visible `[file: … — unavailable: …]` note, never content); `/details` +
+`/thinking` session-scoped toggles (default OFF, so goldens byte-identical
+except the 4 slash/help fixtures that intentionally grew with the command set);
+qwen3 reasoning now relays unconditionally as `agent.ThinkingMsg` (message-level
+first, top-level fallback, never concatenated) and renders only behind
+`/thinking`; tool-output gating is display-only — the wire payload is budgeted
+from the expanded content while the transcript shows the draft; no leader key
+(palette stays the discoverable path, per spec). 13 new N6 tests
+(6 agent + 7 ui incl. jail-escape and remote-host-meter-warning pins). Toggles
+are session-scoped by design (no config.toml widening). See LEDGER 2026-09-07.
+
+Spec detail kept for reference:
 - `@`-file fuzzy reference in the agent input (opencode pattern): pick a workspace
   file, inline it into the draft/agent context (SelfTUI's jailed read_file already
   defines the path safety rules).

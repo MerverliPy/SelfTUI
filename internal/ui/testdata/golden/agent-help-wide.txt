@@ -3,7 +3,6 @@
                                                                                                                         
                                                                                                                         
                                                                                                                         
-                                                                                                                        
   ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮  
   │Help                                                                                                              │  
   │                                                                                                                  │  
@@ -12,6 +11,8 @@
   │ /model    pick a model                                                                                           │  
   │ /resume   resume a saved chat transcript                                                                         │  
   │ /theme    toggle dark/light for this session                                                                     │  
+  │ /details  toggle tool-output blocks                                                                              │  
+  │ /thinking toggle reasoning blocks                                                                                │  
   │ /export   flush + reveal the transcript file path                                                                │  
   │ /help     show this reference                                                                                    │  
   │ /refresh  reload the model list                                                                                  │  
@@ -32,7 +33,6 @@
   │                                                                                                                  │  
   │y / enter approve · n / esc decline                                                                               │  
   ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯  
-                                                                                                                        
                                                                                                                         
                                                                                                                         
                                                                                                                         

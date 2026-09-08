@@ -10,7 +10,9 @@ import (
 )
 
 // chatLinesNaive is a frozen copy of the pre-N1 O(total) transcript assembly
-// (agent_view.go before the render-window change). The windowed path
+// (agent_view.go before the render-window change), extended for the N6
+// gated extras (reasoning behind /thinking, tool lines behind /details)
+// with the same composition the windowed path uses. The windowed path
 // (chatLineCount / chatWindow) must produce byte-identical output; these
 // tests pin that equivalence so golden frames and scroll behavior cannot
 // drift while only the visible rows are materialized.
@@ -21,24 +23,15 @@ func chatLinesNaive(v AgentView) []string {
 		lines = append(lines, "")
 	}
 	for i := range v.turns {
-		t := v.turns[i]
-		block := t.render
-		if block == "" {
-			block = sanitizeTerminalText(t.msg.Content)
-		}
+		block := v.turnBlock(i) // N6: gated extras composed exactly as the windowed path does
 		if block == "" {
 			continue
 		}
 		lines = append(lines, strings.Split(block, "\n")...)
 		lines = append(lines, "")
 	}
-	if v.streamText != "" {
-		sb := strings.Split(v.renderBlock(v.assistantHeader(v.model), v.streamText), "\n")
-		if v.streaming {
-			sb = withStreamingCaret(sb)
-		}
-		lines = append(lines, sb...)
-		lines = append(lines, "")
+	if tail := v.streamDisplayLines(); len(tail) > 0 {
+		lines = append(lines, tail...)
 	}
 	for len(lines) > 0 && lines[len(lines)-1] == "" {
 		lines = lines[:len(lines)-1]
@@ -103,6 +96,49 @@ func windowScenarios() []windowScenario {
 			v.turns = append(v.turns, turn{render: block}, turn{render: ""})
 			v.streamText = "live"
 			v.streaming = true
+		}},
+		// N6: gated extras — stored extras with both toggles off must render
+		// byte-identically to the pre-N6 shapes; each toggle on composes its
+		// own block. The extras-only stream (thinking streaming before any
+		// content) exercises the composer-count arithmetic too.
+		{"thinking-and-tools-stored-toggles-off", func(v *AgentView) {
+			v.turns = append(v.turns,
+				turn{render: block, thinking: "hidden reasoning\nrow two", tools: []string{"⚙ read_file a.txt", "✓ read_file: ok"}},
+				turn{render: "plain"},
+			)
+		}},
+		{"thinking-toggle-on", func(v *AgentView) {
+			v.showThinking = true
+			v.turns = append(v.turns,
+				turn{render: block, thinking: "step one\nstep two\n"},
+				turn{render: "answer"},
+			)
+		}},
+		{"details-toggle-on", func(v *AgentView) {
+			v.showDetails = true
+			v.turns = append(v.turns,
+				turn{render: block, tools: []string{"⚙ grep pattern .", "⚠ grep: denied"}},
+			)
+		}},
+		{"both-toggles-on-with-extras-only-turn", func(v *AgentView) {
+			v.showThinking = true
+			v.showDetails = true
+			v.turns = append(v.turns,
+				turn{thinking: "only reasoning", tools: []string{"⚙ list_dir ."}}, // no content block at all
+				turn{render: block},
+			)
+		}},
+		{"thinking-streaming-extras-only", func(v *AgentView) {
+			v.showThinking = true
+			v.streaming = true
+			v.thinkingText = "live reasoning\nsecond line\n"
+			v.streamTools = []string{"⚙ read_file big.txt"}
+		}},
+		{"details-streaming-with-content", func(v *AgentView) {
+			v.showDetails = true
+			v.streaming = true
+			v.streamTools = []string{"⚙ grep x .", "✓ grep: 3 matches"}
+			v.streamText = "partial answer\n"
 		}},
 	}
 }
@@ -181,8 +217,8 @@ func TestChatWindowSkipsFarBlocks(t *testing.T) {
 			v := benchAgentView(t)
 			sc.build(&v)
 			for i := range v.turns {
-				if got, want := v.turns[i].lineCount(), len(v.turns[i].turnDisplayLines()); got != want {
-					t.Fatalf("turn %d: lineCount() = %d, turnDisplayLines len = %d", i, got, want)
+				if got, want := v.turnLineCount(i), len(v.turnDisplayLines(i)); got != want {
+					t.Fatalf("turn %d: turnLineCount() = %d, turnDisplayLines len = %d", i, got, want)
 				}
 			}
 		})
