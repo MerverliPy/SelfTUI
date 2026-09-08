@@ -23,8 +23,12 @@ in-person observation.
 
 ## Scenario results (SC-01 … SC-26)
 
-All scenarios **PASS / exercised**; nothing clipped, no repaint bursts, no
-decision row pushed off-screen at 72×30.
+24 of the 26 scenarios were exercised live with **PASS** results; nothing
+clipped, no repaint bursts, no decision row pushed off-screen at 72×30.
+SC-25 (clean quit) was not exercised — the app was kept running for the
+session — and SC-26 (drop + reattach) was not re-exercised; the table below
+marks both exclusions explicitly (SC-26 was already verified live in M6,
+`docs/reconnect.md`).
 
 | # | Scenario | Result | Evidence / note |
 |---|----------|--------|-----------------|
@@ -57,8 +61,11 @@ decision row pushed off-screen at 72×30.
 
 ## Verdict
 
-**OVERALL PASS** — first live validation of the M7/v0.2/N-series surface since
-M6; the shipped surface holds at the measured 72×30 device geometry.
+**OVERALL PASS for the exercised surface** (SC-01…SC-24, plus SC-26 carried
+from its live M6 verification in `docs/reconnect.md`); SC-25 (clean quit) was
+not exercised — the app was intentionally kept running — and is excluded from
+this pass's verdict. First live validation of the M7/v0.2/N-series surface
+since M6; the shipped surface holds at the measured 72×30 device geometry.
 
 Top observations:
 1. No clipping, repaint bursts, or off-screen decision rows at 72×30 across the walk.
