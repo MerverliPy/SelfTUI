@@ -171,6 +171,37 @@ def discard_capture():
         capture_dir = None
 
 
+def in_dialog_re(model):
+    """Regex matching pty text that proves the pull dialog is still open.
+
+    Deliberately has NO bare-percent alternative: since the v0.2 N3 token
+    meter, the Models status bar always renders "ctx ░░░░░ 0%", so any
+    "%" pattern matches every frame forever and the dialog could never be
+    detected as exited (the 2026-09-08 stall). Percent evidence is already
+    covered by the one-shot progress wait; bytes ("B / ") still signal
+    live progress here.
+    """
+    return re.compile(
+        r"Pulling %s|esc cancel|pulling [0-9a-f]{6,}|verifying sha256"
+        r"|writing manifest|success|B / " % re.escape(model)
+    )
+
+
+def dialog_states(seen):
+    """Distinct progress-shaped strings seen, for failure diagnostics.
+
+    All groups are non-capturing so re.findall returns full-match strings;
+    capture groups made it return tuples, which crashed fail()'s join and
+    masked the real diagnosis.
+    """
+    return sorted(set(re.findall(
+        r"pulling [^\r\n]*"
+        r"|\d+(?:\.\d+)? ?[KMG]?B / \d+(?:\.\d+)? ?[KMG]?B"
+        r"|\d+%",
+        seen,
+    )))
+
+
 def fail(msg):
     path = write_capture(seen)
     print(f"SMOKE FAIL: {msg} (capture: {path})")
@@ -230,7 +261,7 @@ def main(argv=None):
         #    stay in the recent capture while it is open; when they fall
         #    silent for a sustained beat the dialog is gone. A surfaced
         #    "⚠ <error>" aborts first.
-        in_dialog = re.compile(r"Pulling %s|esc cancel|pulling [0-9a-f]{6,}|verifying sha256|writing manifest|success|B / |%%" % re.escape(MODEL))
+        in_dialog = in_dialog_re(MODEL)
         end = time.time() + watch
         quiet_since = None
         while time.time() < end:
@@ -249,7 +280,7 @@ def main(argv=None):
                 print(f"[debug] t={time.time()-started:.0f}s quiet={quiet_since is not None} tail: {clean[-160:]!r}", flush=True)
             time.sleep(0.2)
         else:
-            states = sorted(set(re.findall(r"pulling [^\r\n]*|\d+(\.\d+)? ?[KMG]?B / \d+(\.\d+)? ?[KMG]?B|\d+%%", seen)))
+            states = dialog_states(seen)
             fail("pull dialog never exited within %ds (UI last showed: %s)" % (watch, " | ".join(states)))
         pump(master, time.time() + 0.6)
 
