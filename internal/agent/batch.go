@@ -583,6 +583,9 @@ func applyOne(v validatedOp, write func(path string, content []byte, mode os.Fil
 // rollbackApplied restores the already-applied ops from their pre-images (or
 // removes files a create op added). Returns an error only when the restore
 // itself failed — the caller then retains the journal entry and reports loud.
+// Both the pre-image restores and the removals go through the no-follow
+// primitives (atomicWrite / removeNoFollow), so a symlink swap since
+// validation fails the rollback closed instead of redirecting it.
 func rollbackApplied(applied []validatedOp, write func(path string, content []byte, mode os.FileMode, tool, requested string) error) error {
 	if write == nil {
 		write = atomicWrite
@@ -592,10 +595,7 @@ func rollbackApplied(applied []validatedOp, write func(path string, content []by
 		v := applied[i]
 		var err error
 		if !v.existed {
-			err = os.Remove(v.path)
-			if err != nil && os.IsNotExist(err) {
-				err = nil
-			}
+			err = removeNoFollow(v.path)
 		} else if v.pre != nil {
 			tool := v.op.tool
 			if tool == "" {

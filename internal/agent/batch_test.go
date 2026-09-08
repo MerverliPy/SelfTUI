@@ -609,3 +609,79 @@ func TestJournalDiskMetaContract(t *testing.T) {
 // deterministic injection seam — Prepare has no writer hook to fault-inject
 // through, and the failure mode is benign: a false stale report that Close
 // GCs. Covered by inspection, not a contrived test.)
+
+// Symlink-swap fail-closed regressions (audit c2): the commit path resolves
+// each path component O_NOFOLLOW inside atomicWrite, so a workspace tree
+// swapped between validation and commit must error instead of writing
+// outside. The swap is injected through the applyMutationSet write-callback
+// seam, which runs after validateMutationOp and before the real atomicWrite
+// — exactly the window the audit describes.
+
+// TestAtomicWriteRejectsAncestorSymlinkSwapAfterValidation: an ancestor
+// directory of the validated target is renamed away and replaced with a
+// symlink to an outside directory before the commit write runs. The write
+// must fail closed and the outside directory must stay untouched.
+func TestAtomicWriteRejectsAncestorSymlinkSwapAfterValidation(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	mustWrite(t, root, "sub/f", "original\n")
+	ops := []mutationOp{{kind: "overwrite", path: "sub/f", content: []byte("p"), verb: "overwrote"}}
+	write := func(path string, content []byte, mode os.FileMode, tool, requested string) error {
+		// Simulate the attacker: move the validated sub/ away and point sub/
+		// at the outside directory, then let the real commit primitive run.
+		if err := os.Rename(filepath.Join(root, "sub"), filepath.Join(root, "sub-moved")); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(outside, filepath.Join(root, "sub")); err != nil {
+			t.Skipf("symlinks unavailable: %v", err)
+		}
+		return atomicWrite(path, content, mode, tool, requested)
+	}
+	_, err := applyMutationSet(context.Background(), root, ops, nil, nil, write)
+	if err == nil || !strings.Contains(err.Error(), "changed since validation") {
+		t.Fatalf("apply error = %v, want a fail-closed symlink-swap rejection", err)
+	}
+	if got := readFile(t, root, "sub-moved/f"); got != "original\n" {
+		t.Errorf("validated file changed through the swap = %q", got)
+	}
+	if exists(outside, "f") {
+		t.Error("ancestor symlink swap wrote outside the workspace")
+	}
+}
+
+// TestAtomicWriteRejectsFinalSymlinkSwapAfterValidation: the final component
+// of the validated target is replaced with a symlink to an outside file
+// before the commit write runs. The write must fail closed and neither the
+// outside file nor the swap itself may change.
+func TestAtomicWriteRejectsFinalSymlinkSwapAfterValidation(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	mustWrite(t, root, "sub/f", "original\n")
+	outsidePath := filepath.Join(outside, "f")
+	if err := os.WriteFile(outsidePath, []byte("outside-original\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ops := []mutationOp{{kind: "overwrite", path: "sub/f", content: []byte("p"), verb: "overwrote"}}
+	write := func(path string, content []byte, mode os.FileMode, tool, requested string) error {
+		// Simulate the attacker: replace the validated final component with a
+		// symlink to an outside file, then let the commit primitive run.
+		real := filepath.Join(root, "sub", "f")
+		if err := os.Remove(real); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(outsidePath, real); err != nil {
+			t.Skipf("symlinks unavailable: %v", err)
+		}
+		return atomicWrite(path, content, mode, tool, requested)
+	}
+	_, err := applyMutationSet(context.Background(), root, ops, nil, nil, write)
+	if err == nil || !strings.Contains(err.Error(), "changed since validation") {
+		t.Fatalf("apply error = %v, want a fail-closed symlink-swap rejection", err)
+	}
+	if got := readFile(t, outside, "f"); got != "outside-original\n" {
+		t.Errorf("outside file modified through the swap = %q", got)
+	}
+	if info, lerr := os.Lstat(filepath.Join(root, "sub", "f")); lerr != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("swap symlink was followed or replaced (info=%v, err=%v)", info, lerr)
+	}
+}
