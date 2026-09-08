@@ -6458,3 +6458,61 @@ this session's pre-fix probing).
   refactor — release session = README go-install quick-start line, CHANGELOG
   date, tag cut, end-to-end `go install …@latest` verification. Owner's call
   per the one-step rule.
+
+## Session — 2026-09-08 (release): v0.3.0 tagged + published (orchestrator run, DIRECT)
+
+**Work done**
+- Triage: DIRECT — release chore (docs line, changelog date, tag, one end-to-end
+  verification); zero agents; parent-local tools per router §1. Fresh session, owner
+  assigned the release step per the one-step rule.
+- Owner clicked **v0.3.0** (ask_user_question — the human gate before the publish):
+  module rename is "Changed" → minor per Keep a Changelog, not a patch.
+- PR #30 (`chore/release-v0.3.0`, commit `f57c6c2`): README Install section gained the
+  go-install quick-start line (`go install github.com/MerverliPy/SelfTUI/cmd/self-tui@latest`
+  — the F-03 deferred close-out promised at release time); CHANGELOG `[Unreleased]` →
+  `[0.3.0] - 2026-09-08` (no empty stub kept, v0.2.0 convention). No code changes.
+- Required check pass (1m0s, run 34263168503); merge-commit merge (repo convention) as
+  **`65da984`**; branch kept; main fast-forwarded, clean, in sync with origin/main.
+- Full gate on clean main: `VERSION=v0.3.0 make release-check` → **PASSED, exit 0**
+  (toolchain pin, `go mod verify`, gofmt, vet, uncached + race tests all ok, govulncheck
+  "No vulnerabilities found", both CGO-disabled builds stamped `selftui v0.3.0`,
+  deterministic archives + `dist/SHA256SUMS`).
+- Signed tag **`v0.3.0`** cut (`git tag -s`, message "SelfTUI v0.3.0", EDDSA key
+  `5F74A36F7B5C1670`, `git verify-tag` → Good signature) and pushed; points at `65da984`.
+- `release.yml` green end-to-end (run 34263499785): GPG signature verified, full gate
+  re-run, tag==stamp check, release published 2026-09-08T18:32Z with assets
+  `selftui-v0.3.0-linux-{amd64,arm64}.tar.gz` + `SHA256SUMS` (3 assets, non-draft).
+- **F-03 deferred check CLOSED**: fresh `mktemp -d` env (scratch GOPATH/GOMODCACHE/GOBIN)
+  `go install github.com/MerverliPy/SelfTUI/cmd/self-tui@latest` → exit 0; binary runs;
+  `go version -m` shows `mod github.com/MerverliPy/SelfTUI v0.3.0` (resolved via default
+  proxy.golang.org, ~2 min after tag push). `-version` prints `selftui dev` — expected:
+  go-install builds don't apply the release `-ldflags -X` stamp (the shipped archives are
+  stamped; `var Version = "dev"` is the documented default). Build used host go 1.26.8 —
+  fine, go.mod requires ≥ 1.25.8.
+
+**Commands + exit codes**
+- `git push -u origin chore/release-v0.3.0` → rc 0; `gh pr create` → PR #30;
+  `gh pr checks 30 --watch` → pass; `gh pr merge 30 --merge` → MERGED;
+  `git checkout main && git pull --no-edit` → fast-forward `65da984`, clean.
+- Gate run 1: exit 2 (fail-fast, gofmt identity pin — system gofmt ≠ pinned 1.27.1).
+  Gate run 2: exit 2 (fail-fast, govulncheck not on PATH). **Gate run 3: exit 0 PASSED**
+  with `PATH="/home/calvin/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.1.linux-amd64/bin:/home/calvin/go/bin:$PATH"`.
+- `git tag -s v0.3.0 -m "SelfTUI v0.3.0"` + `git verify-tag` → Good signature; `git push origin v0.3.0` → rc 0.
+- `gh run watch 34263499785 --exit-status` → all green; `gh release view v0.3.0` → published, 3 assets.
+- Scratch `go install …@latest` → exit 0; `go version -m` → `… v0.3.0`.
+
+**Decisions / lines to respect**
+- v0.3.0 minor bump (owner click): consumer-visible module-path change = "Changed" → minor.
+- No AUDIT.md edit (F-03 convention: finding status lives in LEDGER residuals).
+- Gate toolchain pins are environment-level, not repo changes: pinned-toolchain gofmt dir
+  and `~/go/bin` must lead PATH for `make release-check` (recorded above for the next release).
+- Tag cutting stays a deliberate owner-gated act (this session: explicit task + version click).
+
+**Blockers / open decisions**
+- None for this step. Audit residuals: F-09/F-10 owner-optional. Standing owner click:
+  GPG public key upload at github.com/settings/keys (release.yml already verifies via the
+  committed `docs/release-signing-key.asc`; the upload only enables GitHub's Verified badge).
+
+**Next action**
+- Fresh session: remaining audit items are owner-optional (F-09/F-10); the release train
+  is done — next feature work per §10 (V2/N-series backlog) or owner's choice.
