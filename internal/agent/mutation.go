@@ -224,6 +224,11 @@ func createTempInDir(dirfd int, mode os.FileMode) (string, *os.File, error) {
 		}
 		if err := unix.Fchmod(fd, uint32(mode.Perm())); err != nil {
 			unix.Close(fd)
+			// The temp file exists but the caller never learns its name, so
+			// its deferred cleanup cannot run: unlink it here (best-effort;
+			// the chmod error is the meaningful failure) so a failed mutation
+			// leaves no .selftui-* residue in the pinned directory.
+			_ = unix.Unlinkat(dirfd, name, 0)
 			return "", nil, err
 		}
 		return name, os.NewFile(uintptr(fd), name), nil
