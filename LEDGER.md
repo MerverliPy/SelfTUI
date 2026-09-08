@@ -7129,3 +7129,42 @@ Codex re-review was clean ("Didn't find any major issues. Chef's kiss." on
 - Owner: push the 6 local main commits via the next PR (no direct origin/main push),
   then delete the audit-squad/c1 + c2 branches once origin confirms; nothing further
   queued from this session.
+
+---
+
+## 2026-09-08 — landing PR #38 opened: c1+c2 → origin/main via landing/audit-squad-c1-c2
+
+**Work done**
+- Same-session continuation on explicit owner instruction (confirmed via questionnaire:
+  landing branch + PR via gh; delete candidate branches now; leave PR open for owner
+  review). Pushed `landing/audit-squad-c1-c2` (7 commits: 2 prior docs + 2 branch
+  heads + 2 merges + 1 docs) — no direct origin/main push at any point.
+- Opened **PR #38** (https://github.com/MerverliPy/SelfTUI/pull/38): perf(agent) c1
+  incremental token accounting + fix(agent) c2 symlink-swap fail-closed writes, with
+  gate evidence and packet caveats in the body.
+- Safe-deleted both candidate branches (`git branch -d` — verified merged):
+  `audit-squad/c1` (was `4afeaf7`) and `audit-squad/c2` (was `8527d23`); commits stay
+  reachable via merge commits `64b82d3` / `4fa7636` and via this PR branch.
+- This LEDGER entry is committed on the PR branch, per the convention that ledger
+  appends ride the next PR.
+
+**Commands + exit codes**
+- `gh auth status` → logged in as MerverliPy, repo scope (exit 0).
+- `git fetch origin` + `git rev-list --left-right --count origin/main...main` → 0/7
+  (origin unmoved; clean PR).
+- `git checkout -b landing/audit-squad-c1-c2 main` + `git push -u origin …` → exit 0.
+- `gh pr create --base main --head landing/audit-squad-c1-c2 …` → PR #38 (exit 0).
+- `git branch -d audit-squad/c1 audit-squad/c2` → both deleted (exit 0).
+
+**Decisions**
+- PR left open for owner review/merge (repo convention; no auto-merge).
+- Local `main` remains at `27cd82c`; after #38 merges, fast-forward local main from
+  origin — do not re-merge or squash (history includes the two audit-squad merge
+  commits).
+
+**Blockers / open decisions**
+- None.
+
+**Next action**
+- Owner: review + merge PR #38, then `git pull --ff-only` on local main; the landing
+  branch can be deleted on origin after merge (owner click).
