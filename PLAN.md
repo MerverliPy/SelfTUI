@@ -695,6 +695,21 @@ may now go public at the owner's discretion.
 `fix/v0.1.1-audit-remediation` (merged to main via PR #6). No remaining
 correctness blockers.
 
+**P0 public-readiness — landed 2026-09-08 (PR #27)** from the public-GitHub
+readiness audit (`AUDIT.md` §6): README Install quick-start (prebuilt
+binaries + SHA256SUMS verify; commands empirically tested against the real
+v0.2.0 release assets), status line → v0.2.0 + "Product contract" retitle
+(+ adjacent release-engineering staleness), LICENSE copyright filled
+("the SelfTUI authors"), `CODE_OF_CONDUCT.md` (Contributor Covenant v2.1),
+bug/feature/PR templates. P0.5 dependency hygiene: `golang.org/x/net`
+v0.39.0 → v0.58.0 — govulncheck reports 0 vulnerabilities. Live smoke
+re-enabled: fixed the pull-delete smoke's dialog-exit detection (the v0.2 N3
+status-bar ctx meter "0%" defeated the former bare-`%` pattern) and its
+fail-path diagnostics (3 new pattern tests, 12 total); `make smoke-model
+MODEL=all-minilm` PASS. Remaining audit items: F-03 module rename (P1 —
+before the next tag, so `go install` resolves), F-07 agent_view split (P2),
+F-09/F-10 owner-optional.
+
 ---
 
 ## 13. Project ledger (`LEDGER.md`)

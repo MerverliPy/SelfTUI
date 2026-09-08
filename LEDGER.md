@@ -6202,3 +6202,85 @@ this session's pre-fix probing).
   stub mutex, so a concurrent duplicate delivery could race unsynchronized callback state
   (`calls++`, `secondMessages`) — fix: phase assignment AND respond serialized under one mutex.
   Post-fix: `make check` rc 0, `make race` ×2 rc 0, `gofmt -l .` clean.
+
+---
+
+## Session — 2026-09-08 (P0 public-readiness, orchestrator run): audit P0 plan executed + P0.5 x/net bump + smoke-harness fix
+
+**Work done**
+- Triage: **DIRECT** (parent-local, zero agents) per the canonical router —
+  every fix was pre-specified by `AUDIT.md` §6, single writer, verification is
+  the repo's canonical targets.
+- **P0 executed** (F-01/F-02/F-04/F-05/F-06): README `## Install` quick-start
+  (curl one-liners + `sha256sum -c` for amd64/arm64 against the real v0.2.0
+  assets, `make build` kept as from-source); status line v0.1.1 → v0.2.0;
+  `## v0.1 product contract` → `## Product contract`; adjacent same-class
+  staleness fixed (`## Release engineering (v0.1)` heading, `VERSION=v0.1.1`
+  examples, "`v0.1.1` is next") and the iPhone guide cross-linked to Install;
+  LICENSE Apache-2.0 appendix copyright filled (`Copyright 2026 the SelfTUI
+  authors`); `CODE_OF_CONDUCT.md` (Contributor Covenant v2.1, contact routed
+  via @MerverliPy on GitHub); `.github/ISSUE_TEMPLATE/{bug_report,
+  feature_request}.md` + `.github/PULL_REQUEST_TEMPLATE.md` (make check
+  checklist).
+- **P0.5**: `golang.org/x/net` v0.39.0 → v0.58.0 (companion x/text → v0.41.0;
+  go/toolchain directives untouched) — clears the entire advisory set
+  (GO-2026-5025…5030, 4440/4441, 4918, 5942); `govulncheck ./...` → **No
+  vulnerabilities found**. CHANGELOG `[Unreleased]` Security entry added.
+- **Live smoke was impossible → root-caused + fixed.** The pull-delete smoke's
+  in-dialog pattern had a bare `%` alternative (from `%%` after %-formatting)
+  that matches the v0.2 N3 status-bar ctx meter (`ctx ░░░░░ 0%`) on every
+  frame — quiet detection could never trigger, the pull watch always ran to
+  its 300s timeout; then `fail()` crashed on a TypeError (`re.findall`
+  returned tuples from capture groups), masking the diagnosis AND skipping
+  the capture retain. Fix: extracted `in_dialog_re(model)` (bare-% removed;
+  percent evidence stays covered by the one-shot progress wait, bytes `B / `
+  still signal live progress) and `dialog_states(seen)` (non-capturing
+  groups), both module-level per the script's import-safe test contract; 3
+  new pattern regression tests. Post-fix live run: **SMOKE PASS in 14s**
+  (`all-minilm`: pull with progress evidence → lands in /api/tags → delete
+  confirmed through the TUI → host clean).
+- **Quick-start empirically validated**: the exact README commands were run
+  in a clean mktemp dir against the real GitHub assets — `grep linux-amd64
+  SHA256SUMS | sha256sum -c -` → OK; extraction yields `selftui` at 0755 (no
+  chmod needed); `./selftui -version` → `selftui v0.2.0`. (Diagnostic found
+  en route: `curl` **without** `-L` gets GitHub's 302 and silently writes an
+  empty file with exit 0 — the README correctly uses `-LO`.)
+- `AUDIT.md` committed as the plan-of-record (repo pattern: audit artifacts
+  live in-tree). **PR #27** opened (`docs/p0-public-readiness`, 3 atomic
+  commits + this handoff); owner merges.
+
+**Commands + exit codes**
+- `make check` → rc 0; `make race` → rc 0.
+- `GOBIN=/tmp/gobin GOTOOLCHAIN=go1.27.1 go install golang.org/x/vuln/cmd/govulncheck@v1.7.0` → rc 0
+  (unpinned install reproduces the audit's F-08 go1.26.8 drift — the addendum's
+  fix wording is correct); `govulncheck ./...` → "No vulnerabilities found".
+- `python3 -m unittest scripts/pull_delete_smoke_test.py` → 12/12 OK.
+- `make smoke-model MODEL=all-minilm` → SMOKE PASS in 14s (pre-fix run: watch
+  timeout + TypeError crash, rc 1; host verified clean — all-minilm absent).
+- Quick-start commands (above) → checksum OK + `selftui v0.2.0`.
+- `git push -u origin docs/p0-public-readiness` + `gh pr create` → rc 0, PR #27.
+
+**Decisions / lines to respect**
+- Host mutation (smoke) owner-authorized in-session ("run make smoke once you
+  approve host mutation") and bounded by the script's H-04 non-destructive
+  contract. `MODEL=all-minilm` (~46 MB official library model) chosen because
+  the default `qwen3:0.6b` is installed and the harness refuses by design.
+- Branch + PR per repo rhythm (protected main); no direct main push attempted.
+- The smoke-harness fix is verification-infrastructure repair required by the
+  assigned step; the bare-`%` alternative must NOT be re-added — any `%` now
+  permanently matches the N3 status bar.
+- LICENSE copyright uses the audit's sanctioned neutral fallback ("the SelfTUI
+  authors") — owner may substitute a legal name; CoC contact may gain a
+  dedicated email later.
+
+**Blockers / open decisions**
+- None for the step. `actionlint`/`gitleaks` not installed locally (CI runs
+  both on the PR). Audit residuals unchanged: F-03 module rename (P1, must
+  land before the next tag), F-07 agent_view god-file split (P2), F-09/F-10
+  owner-optional. Standing owner clicks: merge PR #27; GPG key upload at
+  github.com/settings/keys.
+
+**Next action**
+- Owner merges PR #27. Next session: **P1 — module rename to
+  `github.com/MerverliPy/SelfTUI`** (before the next tag, so `go install
+  …/cmd/self-tui@latest` works), or the next owner-assigned step.

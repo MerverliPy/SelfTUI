@@ -387,6 +387,52 @@ class SmokeSafetyTest(unittest.TestCase):
         self.assert_private_capture(self.capture_path(printed))
         # Retained capture actually exists at the printed path.
         self.assertTrue(os.path.exists(smoke.capture_path))
+class SmokePatternTest(unittest.TestCase):
+    """Unit tests for the pull-dialog watch patterns (2026-09-08 stall).
+
+    The v0.2 N3 token meter put "ctx ░░░░░ 0%" on the Models status bar, so
+    the in-dialog pattern's former bare-percent alternative matched every
+    frame and the dialog was never detected as exited; the fail-path
+    diagnostics regex used capture groups, so re.findall returned tuples and
+    fail() crashed before printing the diagnosis or retaining the capture.
+    Both are pinned here.
+    """
+
+    def setUp(self):
+        self.smoke = load_smoke()
+
+    def test_in_dialog_matches_open_dialog_evidence(self):
+        rx = self.smoke.in_dialog_re("all-minilm")
+        for text in (
+            "Pulling all-minilm",
+            "esc cancel",
+            "pulling a1b2c3d4e5f6",
+            "verifying sha256 digest",
+            "writing manifest",
+            "success",
+            "12 KB / 46 MB",
+        ):
+            self.assertTrue(rx.search(text), f"must match open-dialog evidence: {text!r}")
+
+    def test_in_dialog_ignores_status_bar_ctx_meter(self):
+        rx = self.smoke.in_dialog_re("all-minilm")
+        # The v0.2 N3 status bar always renders a percent — it must never
+        # count as pull-dialog evidence.
+        status_bar = "ctx \u2591\u2591\u2591\u2591\u2591 0% · \u23fb http://localhost:11434 · tools on"
+        self.assertIsNone(rx.search(status_bar))
+        full_frame = "\u2554\u2550\u2557 Models list \u255a\u2550\u255d\n" + status_bar
+        self.assertIsNone(rx.search(full_frame[-2500:]))
+
+    def test_dialog_states_returns_strings_for_join(self):
+        seen = "pulling a1b2c3d4e5f6\r\n42%\r\n1.2 MB / 3.4 MB\r\nsuccess"
+        states = self.smoke.dialog_states(seen)
+        self.assertTrue(states)
+        for item in states:
+            self.assertIsInstance(item, str)
+        # The exact operation that crashed fail() before the fix.
+        joined = " | ".join(states)
+        self.assertIn("42%", joined)
+        self.assertIn("1.2 MB / 3.4 MB", joined)
 
 
 if __name__ == "__main__":
