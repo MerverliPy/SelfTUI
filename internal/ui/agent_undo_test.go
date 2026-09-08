@@ -68,7 +68,8 @@ func pendingBatchReviewView(t *testing.T) AgentView {
 func TestBatchReviewOverlayRendersAndApproves(t *testing.T) {
 	v := pendingBatchReviewView(t)
 	out := stripANSI(v.View())
-	for _, want := range []string{"Review write_files batch", "a.txt", "b.txt", "hello", "y / enter apply all · n / esc decline"} {
+	// Page 1 of 2 shows the first file (a.txt create) with the page indicator.
+	for _, want := range []string{"Review write_files batch", "file 1/2", "a.txt", "hello", "y / enter apply all · n / esc decline · pgup/pgdn"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("batch overlay missing %q:\n%s", want, out)
 		}
@@ -77,7 +78,23 @@ func TestBatchReviewOverlayRendersAndApproves(t *testing.T) {
 		t.Fatal("a pending batch review must block modal input")
 	}
 
-	// y approves the whole batch; the runner applies and finishes the turn.
+	// pgdn pages to file 2/2 (the b.txt edit); the second file is reachable
+	// even though page 1 rendered only the first (V2e residual: paging).
+	v, _ = v.Update(tea.KeyPressMsg{Code: tea.KeyPgDown})
+	if v.batchPage != 1 {
+		t.Fatalf("pgdn did not page: batchPage = %d, want 1", v.batchPage)
+	}
+	out = stripANSI(v.View())
+	for _, want := range []string{"file 2/2", "b.txt"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("page 2 missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "a.txt") {
+		t.Errorf("page 2 must show only the second file, still showing a.txt:\n%s", out)
+	}
+
+	// y approves the whole batch (all pages); the runner applies both files.
 	v, _ = v.Update(tea.KeyPressMsg{Text: "y"})
 	if v.batchReview != nil {
 		t.Fatal("approve did not clear the pending review")
@@ -89,6 +106,62 @@ func TestBatchReviewOverlayRendersAndApproves(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(filepath.Join(root, "b.txt")); string(b) != "x new y\n" {
 		t.Errorf("approved batch did not edit b.txt: %q", b)
+	}
+}
+
+// TestBatchReviewPagesClamp: pgup/pgdn page the review and clamp at both
+// ends; the modal stays open on a clamped key.
+func TestBatchReviewPagesClamp(t *testing.T) {
+	v := pendingBatchReviewView(t) // 2 files
+	if v.batchPage != 0 {
+		t.Fatalf("fresh review batchPage = %d, want 0", v.batchPage)
+	}
+	// pgup on page 1 clamps to page 1.
+	v, _ = v.Update(tea.KeyPressMsg{Code: tea.KeyPgUp})
+	if v.batchPage != 0 || v.batchReview == nil {
+		t.Fatalf("pgup on page 1 must clamp: page=%d modal=%v", v.batchPage, v.batchReview != nil)
+	}
+	// pgdn to the last page, then pgdn clamps there.
+	v, _ = v.Update(tea.KeyPressMsg{Code: tea.KeyPgDown})
+	v, _ = v.Update(tea.KeyPressMsg{Code: tea.KeyPgDown})
+	if v.batchPage != 1 || v.batchReview == nil {
+		t.Fatalf("pgdn past the last page must clamp: page=%d modal=%v", v.batchPage, v.batchReview != nil)
+	}
+}
+
+// TestBatchReviewNoteOnFirstPageOnly: the batch note renders on page 1 and
+// is dropped when the review pages past it.
+func TestBatchReviewNoteOnFirstPageOnly(t *testing.T) {
+	v := pendingBatchReviewView(t)
+	v.batchReview.Note = "rename everything"
+	out := stripANSI(v.View())
+	if !strings.Contains(out, "note: rename everything") {
+		t.Fatalf("page 1 missing the batch note:\n%s", out)
+	}
+	v, _ = v.Update(tea.KeyPressMsg{Code: tea.KeyPgDown})
+	out = stripANSI(v.View())
+	if strings.Contains(out, "note: rename everything") {
+		t.Errorf("page 2 must not repeat the page-1 note:\n%s", out)
+	}
+}
+
+// TestBatchReviewModalOwnsKeys: while the review is open every other key is
+// swallowed — a letter that would open the picker or a digit that would jump
+// tabs must not escape the modal.
+func TestBatchReviewModalOwnsKeys(t *testing.T) {
+	v := pendingBatchReviewView(t)
+	for _, k := range []tea.KeyPressMsg{
+		{Text: "m"}, // model picker hotkey
+		{Text: "3"}, // digit tab jump
+		{Text: "f"}, // follow toggle
+	} {
+		v, _ = v.Update(k)
+	}
+	if v.batchReview == nil || !v.ModalOpen() {
+		t.Fatal("stray keys must leave the batch review open")
+	}
+	if v.selectorOpen || v.batchPage != 0 {
+		t.Fatalf("stray keys escaped the modal (selector=%v page=%d)", v.selectorOpen, v.batchPage)
 	}
 }
 
@@ -306,5 +379,35 @@ func TestJournalLifecycleViaAppClose(t *testing.T) {
 	}
 	if entries, _ := os.ReadDir(undoDir); len(entries) != 0 {
 		t.Errorf("clean close left %d artifacts", len(entries))
+	}
+}
+
+// TestBatchReviewEmptyFilesRendersDeclineShell pins the reviewer P1 fix
+// (V2e residual session): a BatchReviewMsg with an empty Files slice must
+// render the decline shell, never panic on the page clamp + index. The
+// runner refuses empty batches at proposal, so this is purely defensive.
+func TestBatchReviewEmptyFilesRendersDeclineShell(t *testing.T) {
+	v := testAgent(t, nil)
+	v.batchReview = &agent.BatchReviewMsg{
+		Name:      "write_files",
+		Workspace: "/tmp",
+		Timeout:   120 * time.Second,
+		Files:     nil,
+	}
+	out := v.View()
+	if !strings.Contains(out, "empty batch — nothing to apply") ||
+		!strings.Contains(out, "n / esc decline") {
+		t.Errorf("empty batch overlay missing decline shell:\n%s", out)
+	}
+	if strings.Contains(out, "file 1/0") {
+		t.Errorf("empty batch must not show a page indicator:\n%s", out)
+	}
+	// Keys stay modal-owned and harmless on the empty shell.
+	v, _ = v.Update(tea.KeyPressMsg{Code: tea.KeyPgDown})
+	if v.batchPage != 0 {
+		t.Errorf("pgdn on an empty batch moved the page: %d", v.batchPage)
+	}
+	if v.batchReview == nil {
+		t.Fatal("pgdn must not dismiss the review")
 	}
 }

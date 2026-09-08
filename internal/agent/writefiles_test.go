@@ -195,6 +195,66 @@ func TestBatchOverCapsRejectedInFullBeforeDialog(t *testing.T) {
 	}
 }
 
+func TestWriteFilesBadPayloadErrorsAreActionable(t *testing.T) {
+	// Design §7 residual: model reliability emitting valid batch JSON. Every
+	// malformed payload must fail BEFORE the review dialog with an error that
+	// names the offending op index and/or field, so the model can self-correct
+	// inside its bounded iteration loop. The failure text below is exactly the
+	// ToolResultMsg summary the model receives.
+	root := t.TempDir()
+	huge := strings.Repeat("x", maxWriteFilesOpBytes+1)
+	cases := []struct {
+		name string
+		ops  string // raw arguments JSON for write_files
+		want []string
+	}{
+		{"unknown field in args", `{"ops":[{"path":"a.txt","kind":"create","content":"x"}],"bogus":true}`,
+			[]string{`unknown field "bogus"`}},
+		{"unknown field inside op", `{"ops":[{"path":"a.txt","kind":"create","content":"x","typo":1}]}`,
+			[]string{`unknown field "typo"`}},
+		{"missing ops key", `{}`,
+			[]string{"at least one op"}},
+		{"empty ops array", `{"ops":[]}`,
+			[]string{"at least one op"}},
+		{"unknown kind on second op", `{"ops":[{"path":"a.txt","kind":"create","content":"x"},{"path":"b.txt","kind":"delete"}]}`,
+			[]string{"write_files op 2 (b.txt)", "unknown kind"}},
+		{"edit missing old", `{"ops":[{"path":"a.txt","kind":"edit","new":"n"}]}`,
+			[]string{"write_files op 1 (a.txt)", "old is required"}},
+		{"oversized content on second op", `{"ops":[{"path":"a.txt","kind":"create","content":"x"},{"path":"b.txt","kind":"create","content":"` + huge + `"}]}`,
+			[]string{"write_files op 2 (b.txt)", "content exceeds"}},
+		{"oversized old on an edit", `{"ops":[{"path":"a.txt","kind":"edit","old":"` + huge + `","new":"n"}]}`,
+			[]string{"write_files op 1 (a.txt)", "old exceeds"}},
+		{"oversized new on an edit", `{"ops":[{"path":"a.txt","kind":"edit","old":"o","new":"` + huge + `"}]}`,
+			[]string{"write_files op 1 (a.txt)", "new exceeds"}},
+		{".git path on second op", `{"ops":[{"path":"a.txt","kind":"create","content":"x"},{"path":".git/hooks/pre-commit","kind":"create","content":"x"}]}`,
+			[]string{"write_files op 2 (.git/hooks/pre-commit)", ".git"}},
+		{"sensitive .env path", `{"ops":[{"path":".env","kind":"create","content":"x"}]}`,
+			[]string{"write_files op 1 (.env)", ".env"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			reviewed := false
+			failure, err := runBatchTurn(t, root, "", tc.ops, func(BatchReviewMsg) {
+				reviewed = true
+			})
+			if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			if failure == "" {
+				t.Fatal("malformed payload succeeded")
+			}
+			if reviewed {
+				t.Fatal("a malformed batch reached the review dialog")
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(failure, want) {
+					t.Errorf("failure %q does not name %q", failure, want)
+				}
+			}
+		})
+	}
+}
+
 func TestWriteFilesRejectsGitAndSensitivePathsPreDialog(t *testing.T) {
 	root := t.TempDir()
 	cases := []struct {

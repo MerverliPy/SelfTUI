@@ -452,7 +452,11 @@ func (j *UndoJournal) undoPartialLocked(e *undoEntry) (UndoResult, error) {
 
 // checkPostLocked is the undo refuse-guard: every file's current content
 // must match the post (applied) content recorded at commit. Any mismatch
-// refuses the whole undo with the file named.
+// refuses the whole undo with the file named. The hint names the two ways a
+// file can legitimately diverge from the journal: an approved run_command's
+// write (command effects are never journaled — see
+// docs/run-command-containment.md) or the user's own edit. Both are visible
+// refusals, never a silent clobber.
 func (j *UndoJournal) checkPostLocked(e *undoEntry) error {
 	for i := range e.files {
 		f := &e.files[i]
@@ -461,7 +465,7 @@ func (j *UndoJournal) checkPostLocked(e *undoEntry) error {
 			return fmt.Errorf("undo refused: %s: %w (external change since the mutation?)", f.Requested, err)
 		}
 		if sha256.Sum256(cur) != sha256.Sum256(f.Post) {
-			return fmt.Errorf("undo refused: %s changed after the agent mutation — undoing would clobber your edit", f.Requested)
+			return fmt.Errorf("undo refused: %s changed after the agent mutation — undoing would clobber your edit (an approved run_command or your own change?)", f.Requested)
 		}
 	}
 	return nil

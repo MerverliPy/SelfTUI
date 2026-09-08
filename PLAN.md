@@ -583,7 +583,15 @@ command-enumerating fixtures that grew with the mandated `/undo` `/redo` rows
 (parent-approved reconciliation, N6 precedent `35c0ace`) + 2 new `agent-batch`
 overlay fixtures (72×30 / 120×40); one reviewer pass BLOCK → 3 P1s parent-
 verified and fixed (per-op caps across all schema fields, redo-clear byte/
-disk accounting, §4.3 meta.json contract); details in LEDGER.*
+disk accounting, §4.3 meta.json contract); details in LEDGER. **Residual §7
+hardening landed 2026-09-08 (next session, owner-selected):** batch review
+overlays one file per page (pgup/pgdn, clamped, approve-all semantics
+unchanged), batch-JSON reliability regression tests (actionable per-op
+errors), run_command undo gap resolved as the documented gap (refusal hint
+"approved run_command or your own change?" + containment-doc + README
+notes); reviewer P1 (empty-batch render panic) fixed parent-side with a
+defensive decline shell + regression test; `make check` + `go test -race`
+green.*
 
 ---
 

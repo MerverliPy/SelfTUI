@@ -189,7 +189,11 @@ func (v AgentView) confirmKey(k tea.Key) (AgentView, tea.Cmd) {
 
 // batchKey owns the write_files review overlay's keys: y or enter approves
 // the whole batch (all-or-nothing), n or esc declines it (nothing applied).
-// There is no per-file accept/reject in this cut (design §4.2).
+// pgup/pgdn pages between files when the batch has more than one (V2e
+// residual: overlay density at 72×30 for a 16-op batch — each page shows
+// one file's summary + diff, so approving never happens over files that
+// were cut from the screen). There is no per-file accept/reject in this cut
+// (design §4.2).
 func (v AgentView) batchKey(k tea.Key) (AgentView, tea.Cmd) {
 	b := v.batchReview
 	if b == nil {
@@ -204,6 +208,16 @@ func (v AgentView) batchKey(k tea.Key) (AgentView, tea.Cmd) {
 		b.Respond(false)
 		v.notice = "declined batch"
 		v.batchReview = nil
+	case k.Code == tea.KeyPgUp:
+		// One file per page: paging back clamps at the first file.
+		if v.batchPage > 0 {
+			v.batchPage--
+		}
+	case k.Code == tea.KeyPgDown:
+		// paging forward clamps at the last file.
+		if v.batchPage+1 < len(b.Files) {
+			v.batchPage++
+		}
 	}
 	return v, nil
 }

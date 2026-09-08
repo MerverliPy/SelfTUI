@@ -135,6 +135,8 @@ func buildLightFrame(t *testing.T, name string, w, h int) App {
 		return buildAgentModal(t, w, h, openClearConfirm)
 	case "agent-batch-compact", "agent-batch-wide":
 		return buildAgentBatchReview(t, w, h)
+	case "agent-batch-paged-compact", "agent-batch-paged-wide":
+		return buildAgentBatchPaged(t, w, h)
 	case "agent-resume-picker-compact", "agent-resume-picker-wide":
 		return buildAgentResumePicker(t, w, h)
 	case "agent-resumed-compact", "agent-resumed-wide":
@@ -260,16 +262,20 @@ func openClearConfirm(t *testing.T, m App) App {
 }
 
 // buildAgentBatchReview frames the write_files review overlay (V2e): a
-// deterministic multi-file batch is parked as the pending review so the new
-// overlay's geometry is pinned at both canonical sizes. Diffs are canned
-// rows (the runner computes real ones from the live tree); the fixture pins
-// the overlay layout, not the diff algorithm.
+// deterministic multi-file batch is parked as the pending review so the
+// overlay's geometry is pinned at both canonical sizes. The overlay pages
+// one file at a time (V2e residual hardening), so the fixture pins the
+// first page: the batch note (shown on page 1 only), the file 1/N
+// indicator, the first file's diff, and the decision legend. Diffs are
+// canned rows (the runner computes real ones from the live tree); the
+// fixture pins the overlay layout, not the diff algorithm.
 func buildAgentBatchReview(t *testing.T, w, h int) App {
 	m := buildAgent(t, w, h)
 	m.agent.batchReview = &agent.BatchReviewMsg{
 		Name:      "write_files",
 		Workspace: "/tmp",
 		Timeout:   120 * time.Second,
+		Note:      "tighten the M-06 gate and document the batch tool",
 		Files: []agent.BatchFileReview{
 			{
 				Path: "internal/agent/runner.go", Kind: "edit",
@@ -291,6 +297,36 @@ func buildAgentBatchReview(t *testing.T, w, h int) App {
 			},
 		},
 	}
+	return m
+}
+
+// buildAgentBatchPaged frames a later page of a multi-file batch review
+// (V2e residual hardening: the overlay pages one file at a time so a 16-op
+// batch never hides files behind the fitContent cut). The fixture parks a
+// four-file batch on its last page (batchPage 3/4) so the "file i/N"
+// indicator, a deep page's diff, and the paging legend are pinned at both
+// canonical sizes.
+func buildAgentBatchPaged(t *testing.T, w, h int) App {
+	m := buildAgent(t, w, h)
+	mk := func(path, summary string, rows ...string) agent.BatchFileReview {
+		return agent.BatchFileReview{Path: path, Kind: "edit", Summary: summary, Rows: rows}
+	}
+	m.agent.batchReview = &agent.BatchReviewMsg{
+		Name:      "write_files",
+		Workspace: "/tmp",
+		Timeout:   120 * time.Second,
+		Files: []agent.BatchFileReview{
+			mk("internal/a.go", "M internal/a.go  +1 −1",
+				"-old one", "+new one"),
+			mk("internal/b.go", "M internal/b.go  +1 −1",
+				"-old two", "+new two"),
+			mk("internal/c.go", "M internal/c.go  +1 −1",
+				"-old three", "+new three"),
+			mk("internal/d.go", "M internal/d.go  +1 −1",
+				"-old four", "+new four"),
+		},
+	}
+	m.agent.batchPage = 3 // last page: 4/4
 	return m
 }
 
@@ -365,6 +401,7 @@ var goldenFrames = []goldenFrame{
 	{"agent-help-compact", 72, 30, func(t *testing.T, w, h int) App { return buildAgentModal(t, w, h, openHelp) }},
 	{"agent-clear-confirm-compact", 72, 30, func(t *testing.T, w, h int) App { return buildAgentModal(t, w, h, openClearConfirm) }},
 	{"agent-batch-compact", 72, 30, buildAgentBatchReview},
+	{"agent-batch-paged-compact", 72, 30, buildAgentBatchPaged},
 	{"palette-compact", 72, 30, func(t *testing.T, w, h int) App { return buildAgentModal(t, w, h, openPalette) }},
 	{"agent-logs-drawer-compact", 72, 30, buildAgentLogsDrawer},
 	{"settings-compact", 72, 30, buildSettingsEditing},
@@ -379,6 +416,7 @@ var goldenFrames = []goldenFrame{
 	{"agent-help-wide", 120, 40, func(t *testing.T, w, h int) App { return buildAgentModal(t, w, h, openHelp) }},
 	{"agent-clear-confirm-wide", 120, 40, func(t *testing.T, w, h int) App { return buildAgentModal(t, w, h, openClearConfirm) }},
 	{"agent-batch-wide", 120, 40, buildAgentBatchReview},
+	{"agent-batch-paged-wide", 120, 40, buildAgentBatchPaged},
 	{"palette-wide", 120, 40, func(t *testing.T, w, h int) App { return buildAgentModal(t, w, h, openPalette) }},
 	{"agent-logs-drawer-wide", 120, 40, buildAgentLogsDrawer},
 	{"settings-wide", 120, 40, buildSettingsEditing},
@@ -680,7 +718,7 @@ func TestLightThemeRendersEveryTab(t *testing.T) {
 			if !strings.Contains(stripped, "clear") {
 				t.Errorf("light %s: confirm modal missing confirm action", f.name)
 			}
-		case "agent-batch-compact", "agent-batch-wide":
+		case "agent-batch-compact", "agent-batch-wide", "agent-batch-paged-compact", "agent-batch-paged-wide":
 			if !strings.Contains(stripped, "write_files") || !strings.Contains(stripped, "apply all") {
 				t.Errorf("light %s: batch review overlay missing its content", f.name)
 			}
