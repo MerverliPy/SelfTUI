@@ -5466,3 +5466,33 @@ owner-selected v0.2 set (V2a–V2d). DIRECT execution, zero agents.
 **Next action**
 - Fresh session at `/home/calvin/SelfTUI`; next N-item per §12 sequencing:
   **N5 — debug/log drawer** (`charmbracelet/log`, keybind-toggled, redacted).
+
+## Session — 2026-09-07 (late, same session): owner-approved push of N6 → origin (PR #22)
+
+**Work done**
+- Owner instructed: "I give you permission to Push N6 to origin." Triaged
+  DIRECT (zero agents), routed through the repo's PR pattern (main protected).
+- `git checkout -b feat/n6-composer` (carries N6 35c0ace + ledger ad1a6e2) →
+  push → PR #22 → required check `Go fmt · vet · test · race · vuln ·
+  cross-build` PASS first try (1m05s, run 34173394762; no #21-style CI
+  fixture flake) → `gh pr merge 22 --merge --delete-branch` → main
+  fast-forwarded to 19f4b93.
+
+**Commands + exit codes**
+- `git push -u origin feat/n6-composer` → 0; `gh pr create --fill` → 0
+  (https://github.com/MerverliPy/SelfTUI/pull/22); `gh pr checks 22 --watch`
+  → 0 (pass 1m5s); `gh pr merge 22 --merge --delete-branch` → 0.
+- Post-merge: `main...origin/main` in sync, working tree clean.
+
+**Decisions / lines to respect**
+- This ledger commit is local-only again (protected branch); it rides the
+  next PR branch (same carry pattern as ad1a6e2 rode #22).
+
+**Blockers / open decisions**
+- None new. Owner decisions still pending: V2d scope (decide at that
+  session's start), optional GPG key upload, N8 on-device spike (owner-run).
+
+**Next action**
+- Fresh session at `/home/calvin/SelfTUI`; next N-item per §12 sequencing:
+  **N5 — debug/log drawer** (`charmbracelet/log`, keybind-toggled, shared
+  sink via `--log-file`, redact bearer tokens).
