@@ -5951,3 +5951,32 @@ review round on the open fix branch).
 **Blockers / open decisions**
 - None. **Next:** owner merges PR #24 (or requests further changes); the N1 glamour
   width-bucketing micro-item remains queued; N7 stays continuous watch.
+
+### 2026-09-08 — PR #24 merged to origin/main (F1 fallback-marker + README V2a landing, owner-authorized)
+**Milestone:** owner-assigned step — merge PR #24 · **Result:** done — PR #24
+`fix/f1-fallback-marker` → `main` merged via `gh pr merge 24 --merge`; merge commit
+`995f147` (parents `63f589d` + `e4b7d64`). The F1 persistent plain-chat fallback
+marker, the README V2a `/resume` corrections, and the carried docs commits (device
+acceptance + ledger + plan follow-up notes, incl. the SC-25/SC-26 P2 qualification)
+are now on `origin/main`. Local `main` fast-forwarded cleanly (`5dee61a..995f147`);
+branch `fix/f1-fallback-marker` kept (auditable history, repo convention).
+
+**Commands + exit codes**
+- `gh pr view 24` (state/checks/mergeable preflight) → OPEN, MERGEABLE/CLEAN; CI check
+  `Go fmt · vet · test · race · vuln · cross-build` PASS on head `e4b7d64` (head_sha
+  verified via check-runs API). Codex review round 2 clean; required reviews 0.
+- `gh pr merge 24 --merge` → rc 0. `gh pr view 24` → state MERGED, mergeCommit `995f147`.
+- Post-merge CI on the merge commit `995f147` → **success** (polled to completion).
+- `git fetch` + `git checkout main` + `git merge --ff-only origin/main` → rc 0
+  (`5dee61a..995f147`, fast-forward).
+- `make check` on merged main → rc 0 (build + full uncached suite + vet).
+
+**Decisions / lines to respect**
+- Standard merge commit (not squash) — matches all origin/main first-parent history.
+- Branch kept after merge per repo convention (`feat/n5-pr22-review-fixes` precedent).
+- N1 glamour width-bucketing micro-item (round width to 5 cols, N7 tracking note)
+  remains **queued** — out of this session's scope; N7 upstream watch unchanged.
+
+**Blockers / open decisions**
+- None. **Next:** N1 glamour width-bucketing micro-item (queued) or next
+  owner-assigned step; N7 stays continuous watch.

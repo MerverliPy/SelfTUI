@@ -765,6 +765,16 @@ commit; N5 debug/log drawer + the 7/7 PR #22 Codex review fixes are now on
 docs commits remain local to ride the next PR. Branch
 `feat/n5-pr22-review-fixes` kept (auditable history).
 
+**PR #24 merged to main (2026-09-08):** `gh pr merge 24 --merge` → merge
+commit `995f147` (parents `63f589d` + `e4b7d64`). Branch-protection check
+(`Go fmt · vet · test · race · vuln · cross-build`) PASSED on the merge
+commit; the F1 persistent plain-chat fallback marker + README V2a `/resume`
+corrections (device-acceptance follow-up) are now on `origin/main`, riding
+with the carried docs commits (SC-25/SC-26 P2 qualification included).
+Local `main` fast-forwarded cleanly (`5dee61a..995f147`); branch
+`fix/f1-fallback-marker` kept (auditable history). N1 glamour width-bucketing
+(round width to 5 cols) remains the queued micro-item under N7.
+
 ## 12. Next-level TUI plan — performance · usability · visibility (PROPOSAL, planning-only, 2026-09-07)
 
 Status: **proposal, not committed scope.** Owner-selected v0.2 (V2a–V2d) stays
