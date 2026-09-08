@@ -6405,3 +6405,56 @@ this session's pre-fix probing).
 - Fresh session: next owner step — the next `v*` tag can now carry a working
   `go install` (add the README quick-start line at release time), or F-07
   (P2) if the owner prefers. Owner's call per the one-step rule.
+
+## Session — 2026-09-08 (P2): F-07 agent_view.go split (orchestrator run, SINGLE_AGENT)
+
+**Work done**
+- Triage: SINGLE_AGENT — one specialist (builtin `worker`, worktree-isolated, fork
+  context, cost-router model deepseek-v4-flash) for a mechanical 3,483-line
+  same-package split; parent verified every claim independently afterwards.
+- Owner decision (fresh-session click): F-07 agent_view split chosen over cutting
+  the next tag.
+- Split `internal/ui/agent_view.go` (3,483 lines, 132 funcs) into same-package
+  siblings along real seams: `agent_composer.go` (369), `agent_menu.go` (615),
+  `agent_paint.go` (685), `agent_session.go` (314), `agent_tools_display.go` (154),
+  `agent_transcript.go` (474); `agent_view.go` retains a cohesive 943-line
+  remainder. Partition deviates from the audit's 4 suggested names (menu + paint
+  split out) — seams-driven.
+- Verbatim-move discipline: function count 132 → 132 with **identical** sorted
+  signature lists (parent-verified); only package clauses + per-file imports
+  differ. Diff touches no file outside `internal/ui`. All agent_*.go < 1,000 lines.
+- **Worker's Brief was missing** (0-byte output artifact); parent verification
+  replaced it — every gate result below re-run by the orchestrator.
+- PR #29 opened from `refactor/f07-agent-view-split` (carried prior handoff
+  `a4c2762`); required check **pass** (1m0s, run 34258594599); merged (merge
+  commit) as **`1345020`**; branch kept; main fast-forwarded, tree clean, in
+  sync with origin/main.
+
+**Commands + exit codes**
+- Worker gates (baseline + post): `make check` && `go test -race -count=1
+  ./internal/ui/` → green.
+- Parent: `git diff a4c2762..HEAD --name-only` → 0 files outside internal/ui;
+  `wc -l` → max 943; `gofmt -l .` → clean; func-parity diff → IDENTICAL.
+- Parent gate: `make check` → **exit 0**; `go test -race -count=1 ./internal/ui/`
+  → ok 13.261s (17 golden frames uncached); `go test -race ./...` → **exit 0**.
+- `git push -u` → rc 0; `gh pr create` → PR #29; `gh pr checks 29 --watch` →
+  pass; `gh pr merge 29 --merge` → MERGED, mergeCommit `1345020`;
+  `git checkout main && git pull --no-edit` → fast-forward, clean.
+
+**Decisions / lines to respect**
+- Merge-commit merge, branch kept (repo convention).
+- No CHANGELOG entry: pure internal refactor, no user-visible change (LEDGER is
+  the record). AUDIT.md left unedited (F-03 convention: finding status lives in
+  LEDGER residuals, not the audit doc).
+- Worker: no toolBudget (bounded-launch posture is for read-only advisors, not
+  mutation workers); 30m timeout; managed worktree isolation.
+
+**Blockers / open decisions**
+- None for this step. Audit residuals: F-09/F-10 owner-optional. Standing owner
+  click: GPG public key upload at github.com/settings/keys.
+
+**Next action**
+- Fresh session: the next `v*` tag now carries both the F-03 rename and this
+  refactor — release session = README go-install quick-start line, CHANGELOG
+  date, tag cut, end-to-end `go install …@latest` verification. Owner's call
+  per the one-step rule.
