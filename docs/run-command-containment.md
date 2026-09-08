@@ -62,10 +62,17 @@ rejected before the sandbox runs:
   file under `/workspace` — is never allowed. Because git accepts any unique
   prefix of a long option, abbreviations such as `--out=...` are rejected the
   same way: the allowlist matches exact spellings only;
-- **external-helper execution is closed:** `--ext-diff` and `--textconv`
-  (which make git run helpers defined in repository config/attributes) are
-  rejected. Only `--no-ext-diff`, which disables the external helper, is
-  allowed for `diff`;
+- **external-helper execution is closed, including git's default-on
+  drivers:** `--ext-diff` and `--textconv` (which make git run helpers defined
+  in repository config/attributes) are rejected — and because git enables
+  textconv filters (by default for `diff` and `log`) and external diff
+  drivers (for `diff`) without any flag when a repository's `.gitattributes`
+  and `.git/config` define a driver, `run_command` additionally **forces
+  `--no-textconv --no-ext-diff`** right after the subcommand for the whole
+  diff family (`diff`, `log`, `show`). An approved read-only argv therefore
+  executes no repository-configured helper even when the argv itself names no
+  helper option (git-diff(1): "textconv filters are enabled by default only
+  for git-diff and git-log");
 - **config and work-tree isolation is retained:** `-c`, `--config-env`,
   `--git-dir`, `--work-tree`, and their `=`-attached spellings are rejected
   wherever they appear (git only honors them before the subcommand, and the

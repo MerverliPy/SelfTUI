@@ -37,6 +37,15 @@ func RunCommand(ctx context.Context, root string, argv []string, timeoutSeconds 
 	if err := validateCommand(argv); err != nil {
 		return "", err
 	}
+	// The deny-by-default validator rejects the option spellings that ENABLE
+	// repository-configured helpers (--ext-diff, --textconv), but git enables
+	// textconv filters and external diff drivers by default for the diff
+	// family when .gitattributes/.git/config define one — rejecting the
+	// enabling flags alone is not a no-helper-execution guarantee. Force the
+	// negations here, after validation, so an approved read-only git argv
+	// never executes a repository-configured helper inside the writable
+	// /workspace mount (Codex review P1 on the cB landing).
+	argv = applyReadOnlyGitGuards(argv)
 
 	timeout := defaultCommandTimeout
 	if timeoutSeconds > 0 {
@@ -186,6 +195,14 @@ var gitSubcommands = map[string]bool{
 // supersedes that pass-through and prefix matching must not return: these
 // lists contain exact spellings only, and a new option is added to them
 // deliberately rather than inferred by abbreviation.
+//
+// Rejecting the enabling spellings is only half the defense. git runs
+// repository-configured textconv filters and external diff drivers BY DEFAULT
+// for the diff family when .gitattributes/.git/config define one, so the two
+// negations (--no-textconv, --no-ext-diff) are allowlisted here and, more
+// importantly, forced onto every diff/log/show invocation at execution time
+// (applyReadOnlyGitGuards) — absence of an enabling flag must not mean a
+// helper can run.
 var (
 	gitOptionFlags = map[string]map[string]bool{
 		"status": {
@@ -193,20 +210,20 @@ var (
 		},
 		"diff": {
 			"--name-only": true, "--name-status": true, "--no-ext-diff": true,
-			"--numstat": true, "--shortstat": true, "--stat": true,
+			"--no-textconv": true, "--numstat": true, "--shortstat": true, "--stat": true,
 		},
 		"log": {
 			"-n": true, "-p": true, "--abbrev-commit": true, "--all": true,
 			"--decorate": true, "--graph": true, "--merges": true, "--name-only": true,
-			"--name-status": true, "--no-color": true, "--no-merges": true,
-			"--numstat": true, "--oneline": true, "--patch": true, "--shortstat": true,
-			"--stat": true,
+			"--name-status": true, "--no-color": true, "--no-ext-diff": true,
+			"--no-merges": true, "--no-textconv": true, "--numstat": true, "--oneline": true,
+			"--patch": true, "--shortstat": true, "--stat": true,
 		},
 		"show": {
 			"-p": true, "--abbrev-commit": true, "--name-only": true,
-			"--name-status": true, "--no-color": true, "--no-patch": true,
-			"--numstat": true, "--oneline": true, "--patch": true,
-			"--shortstat": true, "--stat": true,
+			"--name-status": true, "--no-color": true, "--no-ext-diff": true,
+			"--no-patch": true, "--no-textconv": true, "--numstat": true, "--oneline": true,
+			"--patch": true, "--shortstat": true, "--stat": true,
 		},
 		"branch": {
 			"-a": true, "-r": true, "-v": true, "-vv": true, "--all": true,
@@ -244,6 +261,33 @@ var (
 	}
 )
 
+// gitDiffFamily is the set of allowlisted git subcommands whose patch
+// machinery can run repository-configured helpers by default (see
+// applyReadOnlyGitGuards).
+var gitDiffFamily = map[string]bool{"diff": true, "log": true, "show": true}
+
+// applyReadOnlyGitGuards forces git's helper-execution negations onto the
+// diff-family subcommands (diff, log, show). The deny-by-default validator
+// rejects the spellings that enable repository-configured helpers, but git
+// runs those helpers WITHOUT any enabling flag when .gitattributes and
+// .git/config define a driver for a path: textconv filters are enabled by
+// default for git-diff and git-log (git-diff(1)), and external diff drivers
+// run by default for git diff. Rejection alone therefore cannot deliver the
+// executor's no-helper-execution promise, so both negations are inserted
+// right after the subcommand — always in force inside the sandbox — for every
+// diff-family invocation. The guards are no-ops for invocations that never
+// reach the patch machinery (git log --oneline, git show <rev>:<path>, git
+// diff --name-only) and idempotent when the argv already carries them.
+func applyReadOnlyGitGuards(argv []string) []string {
+	if len(argv) < 2 || argv[0] != "git" || !gitDiffFamily[argv[1]] {
+		return argv
+	}
+	guarded := make([]string, 0, len(argv)+2)
+	guarded = append(guarded, argv[0], argv[1], "--no-textconv", "--no-ext-diff")
+	guarded = append(guarded, argv[2:]...)
+	return guarded
+}
+
 // validateGitArgs enforces the read-only git option policy for one allowlisted
 // subcommand.
 //
@@ -261,6 +305,10 @@ var (
 // diff/log/show writes files for "--output=<file>" (relative to /workspace),
 // and "--ext-diff"/"--textconv" make git execute external diff or textconv
 // helpers that a repository's .git/config and .gitattributes can define.
+// Option-level rejection alone is not the whole defense, because git enables
+// those helpers by default for the diff family — applyReadOnlyGitGuards
+// (called by RunCommand after this validator accepts the argv) forces the
+// negations onto every diff/log/show invocation.
 func validateGitArgs(subcommand string, args []string) error {
 	flags := gitOptionFlags[subcommand]
 	values := gitOptionValues[subcommand]
