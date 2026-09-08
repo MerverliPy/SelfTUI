@@ -5,6 +5,16 @@ All notable changes to SelfTUI are recorded here. Format follows
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 for tagged releases.
 
+## [Unreleased]
+
+### Security
+
+- Dependency hygiene: bumped `golang.org/x/net` v0.39.0 → v0.58.0 (and
+  transitive `golang.org/x/text` → v0.41.0), clearing the full advisory set
+  govulncheck reported against the old pin (GO-2026-5025…5030, 4440/4441,
+  4918, 5942 — all in `x/net`, all unreachable from SelfTUI code in v0.2.0).
+  `govulncheck ./...` now reports no vulnerabilities.
+
 ## [0.2.0] - 2026-09-07
 
 ### Added
