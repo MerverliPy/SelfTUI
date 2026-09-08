@@ -36,6 +36,10 @@ import (
 //   - Responses are served by body-identity phase, so a redelivered request
 //     receives exactly the response its original got — the runner's view of
 //     the conversation stays consistent.
+//   - Phase assignment AND the respond callback run under one mutex: a
+//     duplicate delivery can arrive while the original is still being
+//     served, and callbacks capture unsynchronized test state (counters,
+//     captured messages), so overlapping callbacks must be serialized.
 type chatStub struct {
 	t       *testing.T
 	mu      sync.Mutex
@@ -62,13 +66,13 @@ func newChatStub(t *testing.T, respond func(phase int, req ollama.ChatRequest, w
 		}
 		sum := sha256.Sum256(raw)
 		stub.mu.Lock()
+		defer stub.mu.Unlock()
 		phase, seen := stub.phaseOf[string(sum[:])]
 		if !seen {
 			phase = stub.logical
 			stub.logical++
 			stub.phaseOf[string(sum[:])] = phase
 		}
-		stub.mu.Unlock()
 		respond(phase, req, w)
 	}))
 	t.Cleanup(srv.Close)

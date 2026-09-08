@@ -702,7 +702,7 @@ func TestContextMeterSwitchesToMeasuredTokens(t *testing.T) {
 }
 
 func TestAssistantHeaderCarriesRightAlignedMeta(t *testing.T) {
-	v := testAgent(t, nil) // 88x40: chat inner width is 86
+	v := testAgent(t, nil) // 88x40: chat inner width 86 → bucketed render width 85 (N1)
 	h := v.assistantHeaderRow("qwen3:8b", "0.4s · stop")
 	plain := strings.TrimSpace(stripANSI(h))
 	if !strings.HasPrefix(plain, "◈ qwen3:8b") {
@@ -711,8 +711,15 @@ func TestAssistantHeaderCarriesRightAlignedMeta(t *testing.T) {
 	if !strings.HasSuffix(plain, "0.4s · stop") {
 		t.Errorf("header should end with right-aligned meta: %q", plain)
 	}
-	if w := lipgloss.Width(h); w != v.w-2 {
-		t.Errorf("header width = %d, want chat inner width %d", w, v.w-2)
+	// The header pads to the bucketed render width (N1 micro-item): it is
+	// baked into cached blocks, so its padding must be a pure function of the
+	// same bucket the markdown used — never the exact pane, which resize
+	// jitter would leave stale. The bucket always fits the real pane.
+	if w := lipgloss.Width(h); w != chatRenderWidth(v.w-2) {
+		t.Errorf("header width = %d, want bucketed chat render width %d", w, chatRenderWidth(v.w-2))
+	}
+	if w := lipgloss.Width(h); w > v.w-2 {
+		t.Errorf("header width = %d, exceeds chat inner width %d", w, v.w-2)
 	}
 	// A header without meta stays short (no right-padding noise).
 	plain = strings.TrimSpace(stripANSI(v.assistantHeaderRow("qwen3:8b", "")))

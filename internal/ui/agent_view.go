@@ -2370,7 +2370,14 @@ func (v AgentView) assistantHeaderRow(model, meta string) string {
 	if meta == "" {
 		return left
 	}
-	inner := maxInt(v.w-2, 10)
+	// Pad to the bucketed render width (N1 micro-item), not the exact pane:
+	// the header is baked into each cached block, so its padding must be a
+	// pure function of the same bucket the markdown used. A same-bucket
+	// resize then leaves every cached header still correct (bucket ≤ pane,
+	// so it can never exceed the pane), and a cross-bucket rebuild realigns
+	// it. Cost: right-aligned meta may sit a few columns short of the margin
+	// on non-bucket-aligned panes; the 72×30 device pane (70) is exact.
+	inner := chatRenderWidth(maxInt(v.w-2, 10))
 	pad := inner - lipgloss.Width(left) - lipgloss.Width(meta)
 	if pad < 1 {
 		return left + "  " + v.styles.mutedText().Render(meta)

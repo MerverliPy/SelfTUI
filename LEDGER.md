@@ -6190,3 +6190,15 @@ this session's pre-fix probing).
 
 **Next action**
 - Owner merges the landing PR; then N7 continuous watch or the next owner-assigned step.
+  **Codex review round 1 on `d75787c` (2 P2, both verified valid, fixed fix-forward):**
+  (1) cached assistant blocks bake `assistantHeaderRow` padding at the EXACT pane width, so a
+  same-bucket shrink left stale headers exceeding the pane by up to 4 cols — fix: the header now
+  pads to the bucketed render width too (`chatRenderWidth(maxInt(v.w-2, 10))`), making every cached
+  block a pure function of its bucket (bucket ≤ pane ⇒ the exceed case is impossible; same-bucket
+  jitter changes nothing visible; 72×30 pane 70 exact; documented cost: right-aligned meta may sit
+  a few cols short of the margin on non-bucket-aligned panes). Two wide goldens regenerated
+  (agent-resumed-wide, agent-turn-wide: meta 3 cols short); `TestAssistantHeaderCarriesRightAlignedMeta`
+  updated to the bucketed contract + a pane-fit guard. (2) chatStub called `respond` outside the
+  stub mutex, so a concurrent duplicate delivery could race unsynchronized callback state
+  (`calls++`, `secondMessages`) — fix: phase assignment AND respond serialized under one mutex.
+  Post-fix: `make check` rc 0, `make race` ×2 rc 0, `gofmt -l .` clean.
