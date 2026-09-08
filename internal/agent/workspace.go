@@ -118,10 +118,22 @@ func WorkspaceFiles(ctx context.Context, root string) []string {
 			return fs.SkipAll
 		}
 		if d.IsDir() {
+			// Sensitive trees (.ssh, .aws, …) are never offered and never
+			// descended into: the picker must not advertise paths the
+			// workspace tool policy refuses to touch.
+			if (ToolPolicy{}).AuthorizePath(rel) != nil {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		if !d.Type().IsRegular() {
 			return nil // sockets/devices/symlinks: never offered
+		}
+		// Sensitive files (.env, credentials.json, …) stay out of the picker
+		// for the same reason: what the picker offers, expansion must be
+		// able to read.
+		if (ToolPolicy{}).AuthorizePath(rel) != nil {
+			return nil
 		}
 		files = append(files, rel)
 		return nil

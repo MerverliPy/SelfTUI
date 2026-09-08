@@ -175,11 +175,20 @@ type AgentView struct {
 	// Per-turn extras of the in-flight turn (N6). thinkingText/pendingThinking
 	// mirror the N2 token batching (deltas land in pendingThinking, merge on
 	// the repaint tick, never touch streamText); streamTools collects one
-	// sanitized line per tool start/result. Both commit with the turn so the
-	// transcript keeps them behind the toggles after the turn ends.
+	// sanitized row per tool start/result (a multi-line summary is stored as
+	// one row per line so the count and the render agree). Both commit with
+	// the turn so the transcript keeps them behind the toggles after the
+	// turn ends.
 	thinkingText    string
 	pendingThinking string
 	streamTools     []string
+
+	// Attachment expansion (N6): when a send carries @-references, the file
+	// reads run in a command off the update loop (slow/network filesystems
+	// and FIFOs must never block a repaint or Esc); the landing message
+	// starts the turn. expandPending disarms the composer while expansion is
+	// in flight so a second send cannot race the first.
+	expandPending bool
 
 	// @-file picker (N6): a fresh "@" in the composer lists the jailed
 	// workspace's files (fetched off the update loop, M-04 discipline);
@@ -400,6 +409,15 @@ type streamTickMsg struct{}
 // workspace lists as empty — the picker degrades to "no files", never an
 // error surface.
 type fileListMsg struct{ files []string }
+
+// attachExpandedMsg lands the deferred @-reference expansion (N6): the draft
+// text as sent and its expanded wire content, resolved off the update loop
+// by the send command. It triggers beginTurn, which commits the user turn
+// and starts the chat.
+type attachExpandedMsg struct {
+	draft string
+	wire  string
+}
 
 // streamTickInterval is the streaming repaint cadence. Ollama streams deltas
 // every ~10–50 ms; 60 ms coalesces 1–6 deltas per repaint (≈17 fps), keeps
@@ -635,6 +653,12 @@ func (v AgentView) Update(msg tea.Msg) (AgentView, tea.Cmd) {
 		// the same switch.
 		return v.Update(msg.msg)
 
+	case attachExpandedMsg:
+		// The deferred @-reference expansion has landed: commit the turn and
+		// start the chat. The reads already happened on the command goroutine,
+		// so this stays repaint-cheap.
+		return v.beginTurn(msg.draft, msg.wire)
+
 	case sessionAppendMsg:
 		// One recorder error disables the transcript once and surfaces one
 		// notice; later identical outcomes (jobs accepted before the view
@@ -734,8 +758,8 @@ func (v AgentView) Update(msg tea.Msg) (AgentView, tea.Cmd) {
 			// The tool name and its argument JSON come from the remote model's
 			// tool call; sanitize before the statusline shows them (H-05).
 			v.toolStatus = sanitizeTerminalText("⚙ " + msg.Name + " " + msg.Input)
-			// N6: the /details block keeps one bounded line per tool event.
-			v.streamTools = append(v.streamTools, boundedToolLine("⚙ "+msg.Name+" "+msg.Input))
+			// N6: the /details block keeps one bounded row per tool event.
+			v.streamTools = append(v.streamTools, toolDetailRows("⚙ "+msg.Name+" "+msg.Input)...)
 		}
 		return v, v.waitChatCmd()
 
@@ -748,7 +772,7 @@ func (v AgentView) Update(msg tea.Msg) (AgentView, tea.Cmd) {
 			// Summary can carry bytes read from the workspace at a hostile
 			// model's request; sanitize the composed status row as one value.
 			v.toolStatus = sanitizeTerminalText(prefix + msg.Name + ": " + firstLine(msg.Summary))
-			v.streamTools = append(v.streamTools, boundedToolLine(prefix+msg.Name+": "+msg.Summary))
+			v.streamTools = append(v.streamTools, toolDetailRows(prefix+msg.Name+": "+msg.Summary)...)
 		}
 		return v, v.waitChatCmd()
 
@@ -839,7 +863,11 @@ func (v *AgentView) mergeThinkingDeltas() {
 	if v.pendingThinking == "" {
 		return
 	}
-	v.thinkingText += v.pendingThinking
+	// Reasoning comes off the remote response and can carry control bytes
+	// like any model text; sanitize at the merge so every stored copy — the
+	// live block and the committed turn — is clean (same discipline as
+	// boundedToolLine).
+	v.thinkingText += sanitizeTerminalText(v.pendingThinking)
 	v.pendingThinking = ""
 }
 
@@ -853,6 +881,15 @@ func boundedToolLine(s string) string {
 		return s
 	}
 	return s[:max] + "…[truncated]"
+}
+
+// toolDetailRows bounds one tool-event line and splits it into one stored
+// element per display row: streamLineCount accounts one row per element, so
+// a multi-line tool summary stored as a single element would render taller
+// than its count and push the composer/status area off-screen during the
+// live tool phase.
+func toolDetailRows(s string) []string {
+	return strings.Split(boundedToolLine(s), "\n")
 }
 
 // reasoningBlock composes a turn's reasoning for display (N6): a muted
@@ -871,6 +908,7 @@ func (v AgentView) onChatDone(m agent.AgentDoneMsg) (AgentView, tea.Cmd) {
 	// the final chunk must flush immediately (no tick-interval tail latency
 	// for the committed turn or the N3 footer metrics riding its meta row).
 	v.mergeStreamDeltas()
+	v.mergeThinkingDeltas() // a ThinkingMsg racing AgentDoneMsg flushes here too
 	v.streaming = false
 	v.stopCancel = nil
 	v.stopArmed = false
@@ -1223,6 +1261,12 @@ func (v AgentView) sendInput() (AgentView, tea.Cmd) {
 		v.notice = "no model selected — press m or pull one in the Models tab"
 		return v, nil
 	}
+	if v.expandPending {
+		// The previous send's @-references are still expanding off the update
+		// loop; a second send would race the first turn's start.
+		v.notice = "attachments are still expanding — try again in a moment"
+		return v, nil
+	}
 	i := v.input
 	i.Reset()
 	v.input = i
@@ -1232,18 +1276,43 @@ func (v AgentView) sendInput() (AgentView, tea.Cmd) {
 
 	// N6: expand @-references through the jailed read_file. The transcript
 	// renders the draft; the wire content carries the inline file blocks.
-	// The reads are bounded by the read_file ceiling (maxReadBytes per file)
-	// and run synchronously here — a send is the turn's start, and an
-	// unexpanded payload would silently lie to the context meter.
-	wire := ""
-	remoteAttachWarn := ""
+	// The reads are bounded by the read_file ceiling (maxReadBytes per file).
+	// When the draft carries references the expansion runs in a command —
+	// one filesystem read per token must never block the update loop (a
+	// slow/network filesystem or a referenced FIFO would freeze repaint and
+	// even Esc) — and beginTurn starts the turn when it lands.
 	if refs := agent.FileRefTokens(text); len(refs) > 0 {
-		wire = agent.ExpandFileRefs(v.ctx, v.runner.Root(), text)
-		if wire != text && v.host != "" && !config.LoopbackHost(v.host) {
-			remoteAttachWarn = "⚠ attached workspace content sent to " + v.host
+		root := v.runner.Root()
+		ctx := v.ctx
+		v.expandPending = true
+		return v, func() tea.Msg {
+			return attachExpandedMsg{draft: text, wire: agent.ExpandFileRefs(ctx, root, text)}
 		}
 	}
+	return v.beginTurn(text, "")
+}
 
+// beginTurn commits the user turn and starts the chat. It is the landing
+// path for the deferred attachment expansion (attachExpandedMsg) and the
+// direct path when the draft carries no @-references. The remote-attachment
+// warning rides after startChat (which resets the notice for the new turn)
+// so it survives to the post-turn statusline.
+func (v AgentView) beginTurn(text, wire string) (AgentView, tea.Cmd) {
+	v.expandPending = false
+	if v.resumePending {
+		// A transcript load raced the (now async) expansion: refuse the send
+		// and put the draft back — same rule as sendInput — instead of
+		// letting the import destroy it on landing.
+		ta := v.input
+		ta.SetValue(text)
+		v.input = ta
+		v.notice = "resume in progress — the transcript is still loading"
+		return v, nil
+	}
+	warn := ""
+	if wire != "" && wire != text && v.host != "" && !config.LoopbackHost(v.host) {
+		warn = "⚠ attached workspace content sent to " + v.host
+	}
 	v.turns = append(v.turns, turn{
 		msg:    ollama.ChatMessage{Role: ollama.RoleUser, Content: text},
 		model:  v.model,
@@ -1255,8 +1324,8 @@ func (v AgentView) sendInput() (AgentView, tea.Cmd) {
 	av, chatCmd := v.startChat()
 	// The remote-attachment warning rides after startChat (which resets the
 	// notice for the new turn) so it survives to the post-turn statusline.
-	if remoteAttachWarn != "" {
-		av.notice = remoteAttachWarn
+	if warn != "" {
+		av.notice = warn
 	}
 	return av, tea.Batch(recCmd, chatCmd)
 }
@@ -1829,19 +1898,26 @@ func (v AgentView) filePickerKey(k tea.Key) (AgentView, bool, tea.Cmd) {
 // always go through the same gate.
 func (v AgentView) pickFile() (AgentView, tea.Cmd) {
 	matches := v.fileMatches()
+	if len(matches) == 0 {
+		v.fileOpen = false
+		v.fileIdx = 0
+		v.fileFilter = ""
+		return v, nil
+	}
+	// Read the highlighted entry before resetting the picker state: the
+	// reset must not clobber which row the user picked.
+	path := matches[v.fileIdx]
 	v.fileOpen = false
 	v.fileIdx = 0
 	v.fileFilter = ""
-	if len(matches) == 0 {
-		return v, nil
-	}
 	at, _, ok := v.atQuery()
 	if !ok {
 		return v, nil
 	}
-	path := matches[v.fileIdx]
 	ta := v.input
-	ta.SetValue(v.input.Value()[:at] + "@" + path + " ")
+	// Spaces are escaped ("\ ") so the send-path tokenizer keeps the whole
+	// path as one reference (paths with spaces are offered by the picker).
+	ta.SetValue(v.input.Value()[:at] + "@" + agent.EscapeFileRef(path) + " ")
 	v.input = ta
 	return v.fitComposer(), nil
 }

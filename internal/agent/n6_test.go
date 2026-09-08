@@ -273,4 +273,77 @@ func TestExpandFileRefs(t *testing.T) {
 			t.Errorf("plain text changed: %q", got)
 		}
 	})
+	t.Run("escaped-space-path-expands", func(t *testing.T) {
+		if err := os.WriteFile(filepath.Join(root, "design notes.md"), []byte("design"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		got := ExpandFileRefs(ctx, root, "see @design\\ notes.md now")
+		want := "see @design\\ notes.md now\n\n[file: design notes.md]\ndesign"
+		if got != want {
+			t.Errorf("expanded = %q, want %q", got, want)
+		}
+	})
+	t.Run("sensitive-path-refused-by-policy", func(t *testing.T) {
+		if err := os.WriteFile(filepath.Join(root, ".env"), []byte("SECRET=1"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		got := ExpandFileRefs(ctx, root, "load @.env")
+		if !strings.Contains(got, "unavailable") || !strings.Contains(got, "tool policy") {
+			t.Errorf("sensitive reference must carry a policy note, got %q", got)
+		}
+		if strings.Contains(got, "SECRET=1") {
+			t.Error("credential content must never be attached")
+		}
+	})
+}
+
+// TestFileRefTokensEscapedSpaces pins the "\\ " escape: a backslashed space
+// stays inside one token (paths with spaces survive tokenization), while an
+// unescaped space still ends the reference.
+func TestFileRefTokensEscapedSpaces(t *testing.T) {
+	toks := FileRefTokens("read @docs/design\\ notes.md now and @a.txt")
+	if len(toks) != 2 || toks[0] != "docs/design notes.md" || toks[1] != "a.txt" {
+		t.Fatalf("tokens = %v, want [docs/design notes.md a.txt]", toks)
+	}
+}
+
+// TestWorkspaceFilesSensitivePathsFiltered pins the picker-side policy gate:
+// the listing never offers a path the workspace tool policy refuses, and
+// never descends into sensitive directories.
+func TestWorkspaceFilesSensitivePathsFiltered(t *testing.T) {
+	root := t.TempDir()
+	write := func(rel string) {
+		t.Helper()
+		p := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(".env")
+	write(".env.local")
+	write("credentials.json")
+	write(".ssh/id_ed25519")
+	write(".aws/config")
+	write(".config/gcloud/credentials.db")
+	write(".config/allowed.txt") // .config itself is not sensitive
+	write("keep.txt")
+
+	files := WorkspaceFiles(context.Background(), root)
+	set := map[string]bool{}
+	for _, f := range files {
+		set[f] = true
+	}
+	for _, banned := range []string{".env", ".env.local", "credentials.json", ".ssh/id_ed25519", ".aws/config", ".config/gcloud/credentials.db"} {
+		if set[banned] {
+			t.Errorf("listing offered the sensitive path %q: %v", banned, files)
+		}
+	}
+	for _, want := range []string{"keep.txt", ".config/allowed.txt"} {
+		if !set[want] {
+			t.Errorf("missing %q in %v", want, files)
+		}
+	}
 }
