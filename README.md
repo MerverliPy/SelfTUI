@@ -11,7 +11,7 @@ terminal on Linux (or Windows Subsystem for Linux), or over SSH from a phone
 (Moshi, Blink, Termius, …) into that host, and the layout adapts to narrow
 windows. Native Windows and native macOS are **not supported** in v0.1.
 
-**Status: v0.1.1 released 2026-09-07** (signed-tag policy enforced for future
+**Status: v0.2.0 released 2026-09-07** (signed-tag policy enforced for future
 `v*` releases; see `CHANGELOG.md`). The Models tab lists live
 models from the Ollama host (`/api/tags`) with selection + an inspect pane
 (`/api/show`): key facts, parameters, template, modelfile, model info,
@@ -22,6 +22,25 @@ pulls reload the list automatically. The Agent tab supports native or
 content-embedded tool calls, explicit plain-chat fallback, and jailed
 project-aware tools. The Settings tab (huh forms) edits the whole config
 surface with in-session live apply.
+
+## Install
+
+Prebuilt static binaries ship with every release — no Go toolchain needed.
+Grab the archive for your architecture from the
+[releases page](https://github.com/MerverliPy/SelfTUI/releases/latest), verify
+it against `SHA256SUMS`, and run it:
+
+```sh
+VER=v0.2.0    # always check the releases page for the latest tag
+curl -LO "https://github.com/MerverliPy/SelfTUI/releases/download/${VER}/selftui-${VER}-linux-amd64.tar.gz"
+curl -LO "https://github.com/MerverliPy/SelfTUI/releases/download/${VER}/SHA256SUMS"
+grep linux-amd64 SHA256SUMS | sha256sum -c -
+tar -xzf "selftui-${VER}-linux-amd64.tar.gz" && ./selftui
+```
+
+For **arm64** hosts (e.g. Raspberry Pi, ARM servers) swap `amd64` for `arm64`
+in the two `curl` lines. Prefer to build from source? See
+[Build & run](#build--run) — `make build` → `bin/selftui`.
 
 ## Features
 
@@ -65,7 +84,7 @@ Agent chat turn with per-turn meta on the assistant header:
 On a 72×30 phone the same tabs stack compactly (list fills the width, detail
 toggles with enter) — see “Using SelfTUI from an iPhone (SSH)” below.
 
-## v0.1 product contract
+## Product contract
 
 - **Platform:** a single-process TUI for Linux/WSL. Native Windows and macOS
   are not supported; phone use is SSH into a supported host, nothing runs on
@@ -149,7 +168,7 @@ at the sink: the configured auth token and `Bearer`-style credentials are
 replaced with `[redacted]` before they reach the file or the ctrl+o logs
 drawer.
 
-## Release engineering (v0.1)
+## Release engineering
 
 Release binaries are static, CGO-disabled Linux builds stamped with a version
 (dev builds default to `dev`):
@@ -157,10 +176,10 @@ Release binaries are static, CGO-disabled Linux builds stamped with a version
 ```sh
 make build-linux-amd64                     # dist/selftui-linux-amd64
 make build-linux-arm64                     # dist/selftui-linux-arm64
-VERSION=v0.1.1 make release-check          # the full gate; never tags
+VERSION=v0.2.0 make release-check          # the full gate; never tags
 ```
 
-`scripts/release-check.sh` (`VERSION=v0.1.1 make release-check`) is the gate
+`scripts/release-check.sh` (`VERSION=v0.2.0 make release-check`) is the gate
 a release must pass before the owner tags it. It requires a clean worktree,
 a `VERSION` of the form `v<major>.<minor>.<patch>`, and the enforced
 toolchain pin above (fails fast, before any gate work, if go/gofmt/
@@ -171,7 +190,7 @@ verify`, the gofmt check, `go vet`, uncached tests, race tests,
 in), and writes deterministic archives plus `dist/SHA256SUMS`. The script
 **never creates or pushes a git tag** — tagging and publishing is the
 owner's step (`v0.1.0` was released this way on 2026-09-04 via `release.yml`;
-`v0.1.1` is next, from the audit-remediation branch). Since 2026-09-07 every
+`v0.2.0` followed on 2026-09-07). Since 2026-09-07 every
 `v*` tag is GPG-signed (`git tag -s`; `release.yml` verifies the signature
 before building anything — see CONTRIBUTING "Signed release tags"). Regression suite:
 `bash scripts/release-check-test.sh` (fake go/gofmt/govulncheck fixtures
@@ -382,8 +401,9 @@ that host — nothing runs on the phone itself.
 
 ### On the computer (the host)
 
-1. Install **Ollama** and SelfTUI (`make build` → `bin/selftui`, or run from
-   source with `make run`). The host must run Linux or WSL.
+1. Install **Ollama** and SelfTUI (prebuilt binary — see
+   [Install](#install) — or `make build` → `bin/selftui` / `make run` from
+   source). The host must run Linux or WSL.
 2. Make sure your SSH server is enabled and reachable from the phone
    (`systemctl status ssh` on Linux/WSL). Key-based login is easiest on a
    phone.
