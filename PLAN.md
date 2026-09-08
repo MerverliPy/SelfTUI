@@ -757,6 +757,14 @@ rotation geometry measurement, post-reconnect probe block `m6-live-1b`).
 landed the set; see LEDGER). Remaining owner click: upload the GPG public
 key at github.com/settings/keys for the green Verified badge.
 
+**PR #23 merged to main (2026-09-08):** `gh pr merge 23 --merge` → merge
+commit `63f589d` (parents `19f4b93` + `7325287`). Branch-protection check
+(`Go fmt · vet · test · race · vuln · cross-build`) PASSED on the merge
+commit; N5 debug/log drawer + the 7/7 PR #22 Codex review fixes are now on
+`origin/main`. Local `main` pulled cleanly (ort merge `7925341`); carried
+docs commits remain local to ride the next PR. Branch
+`feat/n5-pr22-review-fixes` kept (auditable history).
+
 ## 12. Next-level TUI plan — performance · usability · visibility (PROPOSAL, planning-only, 2026-09-07)
 
 Status: **proposal, not committed scope.** Owner-selected v0.2 (V2a–V2d) stays

@@ -5658,3 +5658,53 @@ owner-selected v0.2 set (V2a–V2d). DIRECT execution, zero agents.
 - Owner: merge PR #23 (merge commit), then `git pull` on local main. Next
   code-worthy item per §12 sequencing is N8 (owner device spike) or the N1
   glamour width-bucketing micro-item; N7 stays continuous.
+
+## Session — 2026-09-08 (owner merge of PR #23): PR #23 merged + local pull (orchestrator run)
+
+**Work done**
+- Owner-assigned step executed: merged PR #23 as a **merge commit**
+  (`gh pr merge 23 --merge`). GitHub created `63f589d` — parents `19f4b93`
+  (old origin/main) + `7325287` (PR head `feat/n5-pr22-review-fixes`),
+  GitHub-signed; tree **byte-identical** to the PR head that had already
+  passed CI (verified `63f589d^{tree} == 7325287^{tree}`).
+- Branch-protection check on the merge commit (`Go fmt · vet · test · race ·
+  vuln · cross-build`) ran green on `origin/main` (run 34177645477, polled
+  to completion).
+- `git pull` on local `main` (owner instruction) → ort merge `7925341`
+  (parents `fa75b71` + `63f589d`), no conflicts, working tree clean. N5
+  debug/log drawer + the 7/7 PR #22 Codex review fixes are now on
+  `origin/main`.
+- Local `main` stays ahead of `origin/main` by the carried docs commits only
+  (`fa75b71` LEDGER +40 lines; the `7925341` merge) — they ride the next
+  feature PR per repo rhythm (main is protected). Branch
+  `feat/n5-pr22-review-fixes` kept on origin (auditable history, same as
+  prior PRs).
+
+**Commands + exit codes**
+- `gh pr merge 23 --merge` → rc 0 (silent stdout; verified via REST:
+  merged=true, merge_commit_sha=`63f589d`).
+- `git pull --no-edit` → rc 0 ("Merge made by the 'ort' strategy").
+- Verification: `git cat-file -p 63f589d` → 2 parents; tree-equality check →
+  true; `git status -sb` → clean (`## main...origin/main [ahead 2]`);
+  `gh api .../commits/63f589d/check-runs` → success.
+
+**Decisions / lines to respect**
+- Merge-commit merge per owner instruction (preserves the PR's commit
+  history; same pattern as the PR #6 merge record in PLAN's tail log).
+- No `--delete-branch` (repo convention keeps merged branches for audit).
+- Triage for this step: DIRECT (git/gh operations only, zero agents).
+
+**Blockers / open decisions**
+- None for this step. N7 continuous upstream watch: nothing new (bubbletea
+  v2.0.9 still pinned; scroll-optimized flush #1725/#1761 + event-driven
+  rendering #1776 not yet shipped). N8 remains an owner-run on-device iPhone
+  SSH spike (not executable from a dev box). N1 glamour width-bucketing
+  (round width to 5 cols so resize jitter doesn't rebuild the renderer) is
+  the cheap code-worthy micro-item.
+- Standing owner click (unchanged): upload the GPG public key at
+  github.com/settings/keys for the green Verified badge.
+
+**Next action**
+- Fresh session: N8 (owner device test) or the N1 glamour width-bucketing
+  micro-item; N7 stays continuous watch. Local `main` carries 2 docs commits
+  (incl. this handoff) to ride the next feature PR.
