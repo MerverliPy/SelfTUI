@@ -5618,3 +5618,43 @@ owner-selected v0.2 set (V2a–V2d). DIRECT execution, zero agents.
 - Fresh session at `/home/calvin/SelfTUI`; per owner's plan sequencing: push
   N5 + these PR #22 review fixes via a PR branch, then N7 upstream tracking
   (no code) / owner's V2d call / N8 device spike.
+
+## Session — 2026-09-07 (push N5 + PR #22 fixes): PR #23 opened (orchestrator run)
+
+**Work done**
+- Owner-assigned next step executed: pushed local `main`'s ahead-content via a
+  PR branch (main is protected). Branch `feat/n5-pr22-review-fixes` carries all
+  4 ahead commits (N5 code `003043a`, review-fix code `842ffca`, 2 carried
+  ledger docs `e295115`/`7325287`) — matching the ledger's "push must ride a PR
+  branch" note and keeping history identical so a merge-commit merge fast-forwards
+  local main cleanly (no cherry-pick duplication/reconciliation).
+- Opened https://github.com/MerverliPy/SelfTUI/pull/23 — MERGEABLE, 4 commits,
+  body documents the 7/7 finding map + verification.
+
+**Commands + exit codes**
+- `git checkout -b feat/n5-pr22-review-fixes main` → 0; `make build` → 0;
+  `git push -u origin feat/n5-pr22-review-fixes` → 0 (new branch);
+  `gh pr create …` → https://github.com/MerverliPy/SelfTUI/pull/23 (rc 0);
+  `gh pr view 23` → OPEN / MERGEABLE / 4 commits (rc 0). Back on `main`.
+
+**Decisions / lines to respect**
+- PR carries the ledger docs commits too (repo rhythm: docs ride the push;
+  they cannot reach origin any other way while main is protected).
+- Triage for this step: DIRECT (git/gh operations only, no agents).
+
+**Blockers / open decisions**
+- PR #23 awaits the owner's merge. After a merge-commit merge, local `main`
+  fast-forwards via `git pull`.
+- **N7**: no-code continuous upstream tracking — nothing new to record (bubbletea
+  v2.0.9 still pinned; scroll-optimized flush #1725/#1761 + event-driven
+  rendering #1776 not yet shipped as of today).
+- **V2d**: already landed (PLAN §10 ✅ 2026-09-07, git-awareness + project
+  indexing) — the ledger's "owner's V2d call" phrasing is stale; no pending
+  owner decision.
+- **N8**: owner-run on-device iPhone SSH spike (Blink/Termius scrollback
+  behavior) — not executable from a dev box; awaiting owner's device test.
+
+**Next action**
+- Owner: merge PR #23 (merge commit), then `git pull` on local main. Next
+  code-worthy item per §12 sequencing is N8 (owner device spike) or the N1
+  glamour width-bucketing micro-item; N7 stays continuous.
