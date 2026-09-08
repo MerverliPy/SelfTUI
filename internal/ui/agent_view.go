@@ -109,11 +109,18 @@ type AgentView struct {
 	streamRenderDark  bool   // theme the cache was rendered under
 	streamRenderValid bool   // cache holds a rendered block at all
 
-	stopRequest  bool                  // esc asked to stop; treat stream end as a stop
-	stopArmed    bool                  // M7: first esc while running arms the interrupt (opencode-style)
-	stopCancel   func()                // cancels the in-flight chat context
-	chatCh       chan tea.Msg          // activity channel (PLAN §8), one stream owner
-	chatDone     chan struct{}         // closed by the producer when the turn's goroutine exits (M-06)
+	stopRequest bool          // esc asked to stop; treat stream end as a stop
+	stopArmed   bool          // M7: first esc while running arms the interrupt (opencode-style)
+	stopCancel  func()        // cancels the in-flight chat context
+	chatCh      chan tea.Msg  // activity channel (PLAN §8), one stream owner
+	chatDone    chan struct{} // closed by the producer when the turn's goroutine exits (M-06)
+	// chatTerminal is the one-slot lossless handoff for the turn's terminal
+	// event (agent.AgentDoneMsg). The producer parks the event here only when
+	// a saturated activity channel drops its send under cancellation
+	// (emitTerminal); waitChatCmd reads the slot strictly after the activity
+	// channel has been drained and closed, so the retained completion can
+	// never overtake queued deltas and is never delivered twice (cA).
+	chatTerminal chan tea.Msg
 	toolStatus   string                // latest agent-tool activity for the hint row
 	confirmation *agent.ToolConfirmMsg // pending mutation approval; blocks input/tab jumps
 
@@ -464,10 +471,10 @@ func (v AgentView) loadModelsCmd() tea.Cmd {
 //     forever.
 //   - Once canceled, a send never blocks again: the event is delivered only
 //     when a consumer is draining at that instant, and dropped otherwise — so
-//     a producer whose consumer has gone away still terminates. The single
-//     terminal event (AgentDoneMsg / modelsPullDoneMsg) goes through the same
-//     path last, so exactly one terminal UI state is produced whenever
-//     delivery remains possible.
+//     a producer whose consumer has gone away still terminates. Activity
+//     deltas may be dropped here; the chat turn's single terminal event
+//     (agent.AgentDoneMsg) never is — it goes through emitTerminal instead,
+//     which retains a dropped completion for post-drain pickup (cA).
 //   - The channel is owned by the producing goroutine, which closes it only
 //     after its last send — nothing here can ever send on a closed channel.
 func emitEvent(ctx context.Context, ch chan tea.Msg, msg tea.Msg) {
@@ -486,6 +493,38 @@ func emitEvent(ctx context.Context, ch chan tea.Msg, msg tea.Msg) {
 	}
 }
 
+// emitTerminal delivers the chat turn's single terminal event
+// (agent.AgentDoneMsg) under emitEvent's cancellation contract — a producer
+// must never block after cancellation — but without its drop: when the
+// saturated activity channel still refuses the event after cancellation, the
+// event is parked in the one-slot terminal channel for the consumer to pick
+// up once the activity channel has been drained and closed (waitChatCmd),
+// so the completion that ends the turn can never be lost (cA). A terminal
+// that reached the activity channel is never parked, so exactly one
+// completion reaches the view per turn; the parking write precedes the
+// producer's channel close, so a parked event is always observable by the
+// time the drain sees the channel closed.
+func emitTerminal(ctx context.Context, ch chan tea.Msg, terminal chan tea.Msg, msg tea.Msg) {
+	select {
+	case ch <- msg:
+		return
+	case <-ctx.Done():
+	}
+	select {
+	case ch <- msg: // a consumer drained concurrently: normal delivery
+		return
+	default:
+		// Full and nobody draining: retain the completion instead of losing
+		// it. The slot is written only when the channel send failed, so it
+		// can never double a delivered done; the producer emits one terminal
+		// per turn, so the one-slot buffer cannot overflow.
+		select {
+		case terminal <- msg:
+		default: // unreachable: one terminal event per turn
+		}
+	}
+}
+
 // startChat begins a streaming agent turn in a background goroutine. The
 // activity channel carries agentEventMsg-wrapped tool events, token deltas,
 // and one final agent.AgentDoneMsg (the shell unwraps before routing, so a
@@ -497,10 +536,16 @@ func emitEvent(ctx context.Context, ch chan tea.Msg, msg tea.Msg) {
 func (v AgentView) startChat() (AgentView, tea.Cmd) {
 	ch := make(chan tea.Msg, 64)
 	done := make(chan struct{})
+	// terminal is the one-slot handoff for the terminal event dropped on a
+	// full activity channel under cancellation (cA). A fresh slot per turn
+	// keeps the lifecycle self-contained: onChatDone clears it, and the next
+	// startChat allocates a new one.
+	terminal := make(chan tea.Msg, 1)
 	ctx, cancel := context.WithCancel(v.ctx)
 
 	v.chatCh = ch
 	v.chatDone = done
+	v.chatTerminal = terminal
 	v.stopCancel = cancel
 	v.streaming = true
 	v.streamText = ""
@@ -540,6 +585,14 @@ func (v AgentView) startChat() (AgentView, tea.Cmd) {
 			Model: model, Messages: msgs,
 			Temperature: v.temperature, TopP: v.topP, NumCtx: v.numCtx,
 		}, func(msg agent.Msg) {
+			// cA: activity deltas may drop on a saturated channel under
+			// cancellation, but the turn's terminal event (AgentDoneMsg) must
+			// never be lost — route it through the retaining path so onChatDone
+			// always runs once the drain reaches it.
+			if _, isDone := msg.(agent.AgentDoneMsg); isDone {
+				emitTerminal(ctx, ch, terminal, agentEventMsg{msg: msg})
+				return
+			}
 			emitEvent(ctx, ch, agentEventMsg{msg: msg})
 		})
 	}()
@@ -635,12 +688,31 @@ func (v AgentView) streamBlockRender() string {
 
 // waitChatCmd is the resubscribed activity command (PLAN §8; same pattern as
 // the Models pull): it blocks until the chat goroutine posts its next message.
+// It is also the cA completion pickup: a closed activity channel yields its
+// queued events first and only then reports ok=false (the producer closes it
+// only after its last send), so when the turn's terminal event was dropped on
+// the full channel and parked in the one-slot chatTerminal (emitTerminal) it
+// surfaces here — strictly after every queued delta, exactly once. A terminal
+// that reached the channel is never parked and onChatDone already ran, so an
+// empty slot ends the subscription (nil message) without re-arming.
 func (v AgentView) waitChatCmd() tea.Cmd {
 	ch := v.chatCh
 	if ch == nil {
 		return nil
 	}
-	return func() tea.Msg { return <-ch }
+	terminal := v.chatTerminal
+	return func() tea.Msg {
+		msg, ok := <-ch
+		if ok {
+			return msg
+		}
+		select {
+		case done := <-terminal:
+			return done
+		default:
+			return nil
+		}
+	}
 }
 
 // ModalOpen reports whether the Agent tab is showing a modal. The root App
@@ -941,6 +1013,7 @@ func (v AgentView) onChatDone(m agent.AgentDoneMsg) (AgentView, tea.Cmd) {
 	v.stopArmed = false
 	v.chatCh = nil
 	v.chatDone = nil
+	v.chatTerminal = nil // cA: the turn's retained terminal slot is consumed; next turn allocates a fresh one
 	v.toolStatus = ""
 	v.confirmation = nil
 
