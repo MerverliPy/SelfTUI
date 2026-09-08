@@ -6284,3 +6284,66 @@ this session's pre-fix probing).
 - Owner merges PR #27. Next session: **P1 — module rename to
   `github.com/MerverliPy/SelfTUI`** (before the next tag, so `go install
   …/cmd/self-tui@latest` works), or the next owner-assigned step.
+
+---
+
+## Session — 2026-09-08 (owner merge of PR #27): merge + Codex-review disposition + CI monitor (orchestrator run)
+
+**Work done**
+- Pre-merge gates: PR #27 `MERGEABLE`/`CLEAN`; required check passed on the
+  PR head (2m48s, run 34252195723).
+- **Codex review dispositioned before merging** (chatgpt-codex-connector,
+  reviewed snapshot `318a09c`):
+  - P1 "add the required LEDGER handoff entry" — **already resolved**: the
+    ledger/PLAN/AUDIT commit `01f1167` landed after the review snapshot;
+    verified `LEDGER.md` present in the PR diff.
+  - P2 "make the arm64 substitutions cover every architecture reference" —
+    **valid**: only one arch-bearing `curl` line existed and the `grep
+    linux-amd64` checksum filter + `tar` filename also needed the
+    substitution (on arm64 the checksum step would target an archive never
+    downloaded). Fixed with a single `ARCH=` variable driving download,
+    checksum filter, and extraction (`47bed78`); the trailing prose now says
+    "set ARCH=arm64". Both variants tested verbatim in clean mktemp dirs
+    against the real v0.2.0 assets: amd64 → checksum OK + `selftui v0.2.0`
+    executed; arm64 → checksum OK + genuine aarch64 static ELF extracted.
+- Fresh CI on the fixed head `47bed78` (run 34255089376) → **success**;
+  merged `--merge` → **GitHub-signed merge commit `63ca274`** (parents
+  `c3c9330` + `47bed78`; tree byte-identical to the CI-passed PR head,
+  `a97164e`). Branch `docs/p0-public-readiness` kept per convention.
+- Required check on `origin/main` (run 34255277896) polled to completion →
+  **success**. No new reviewer comments after the fix.
+- Local `main` fast-forwarded to `63ca274`, working tree clean; this handoff
+  rides local main per repo rhythm (main is protected). PLAN §12 P0 block
+  ticked with the merge sha.
+
+**Commands + exit codes**
+- `gh pr view/checks/api 27` (state, mergeable, inline diff comments) → rc 0.
+- ARCH quick-start variants → both `sha256sum -c` OK; amd64 binary ran,
+  arm64 binary identified by `file`.
+- `git commit` + `git push` (`47bed78`) → rc 0; `gh run watch 34255089376`
+  → rc 0 success (Node-20 deprecation annotation: pre-existing informational
+  GitHub notice about pinned action SHAs, not a failure).
+- `gh pr merge 27 --merge` → rc 0, state MERGED, mergeCommit `63ca274`.
+- `git cat-file -p 63ca274` → 2 parents + gpgsig; `git rev-parse <tree>`
+  equality check → identical.
+- `gh run watch 34255277896` → rc 0, conclusion success.
+- `git checkout main && git pull --no-edit` → fast-forward, clean tree.
+
+**Decisions / lines to respect**
+- Merge-commit merge, branch kept (same pattern as the PR #6/#23 records).
+- Fix-forward inside the PR without a forced Codex re-review (N1/PR #26
+  precedent); both findings dispositioned with first-party evidence rather
+  than reviewer assertion.
+- P1 finding closed as already-resolved — verified against the PR diff, not
+  re-implemented.
+
+**Blockers / open decisions**
+- None for this step. Audit residuals unchanged: F-03 module rename (P1 —
+  must land before the next tag), F-07 agent_view split (P2), F-09/F-10
+  owner-optional. Standing owner click: GPG public key upload at
+  github.com/settings/keys.
+
+**Next action**
+- Fresh session: **P1 — module rename to `github.com/MerverliPy/SelfTUI`**
+  (before the next tag so `go install …/cmd/self-tui@latest` resolves), or
+  the next owner-assigned step.
