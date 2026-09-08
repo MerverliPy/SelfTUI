@@ -863,6 +863,13 @@ from the expanded content while the transcript shows the draft; no leader key
 (palette stays the discoverable path, per spec). 13 new N6 tests
 (6 agent + 7 ui incl. jail-escape and remote-host-meter-warning pins). Toggles
 are session-scoped by design (no config.toml widening). See LEDGER 2026-09-07.
+Post-merge hardening 2026-09-07 from the PR #22 Codex review (7 findings, all
+closed): reasoning sanitized at the merge + flushed on the done path;
+attachment expansion and the picker listing now run the AuthorizePath
+sensitive-path gate; picker inserts the highlighted row (index preserved) and
+escapes spaces in paths; multi-line tool results split into one row per line;
+attachment reads moved off the update loop into a command. See LEDGER 2026-09-07
+(PR #22 review fixes).
 
 Spec detail kept for reference:
 - `@`-file fuzzy reference in the agent input (opencode pattern): pick a workspace
