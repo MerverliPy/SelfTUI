@@ -7,6 +7,15 @@ for tagged releases.
 
 ## [Unreleased]
 
+### Changed
+
+- Go module renamed from `selftui` to `github.com/MerverliPy/SelfTUI`
+  (audit finding F-03): `go.mod` module line and all internal import paths
+  updated, so `go install github.com/MerverliPy/SelfTUI/cmd/self-tui@latest`
+  resolves once the next `v*` tag is cut. Runtime data paths
+  (`~/.config/selftui/`, `$XDG_STATE_HOME/selftui/`) and the binary name are
+  unchanged.
+
 ### Security
 
 - Dependency hygiene: bumped `golang.org/x/net` v0.39.0 → v0.58.0 (and

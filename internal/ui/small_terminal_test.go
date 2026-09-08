@@ -8,7 +8,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
-	"selftui/internal/ollama"
+	"github.com/MerverliPy/SelfTUI/internal/ollama"
 )
 
 // Small-terminal geometry (phase 7): below 40 columns or 12 rows the shell

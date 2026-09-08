@@ -7,8 +7,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"selftui/internal/config"
-	"selftui/internal/ollama"
+	"github.com/MerverliPy/SelfTUI/internal/config"
+	"github.com/MerverliPy/SelfTUI/internal/ollama"
 )
 
 // D4 (PLAN §11 owner decision): measure the per-frame cost of the chat

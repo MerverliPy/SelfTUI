@@ -9,8 +9,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"selftui/internal/ollama"
-	"selftui/internal/session"
+	"github.com/MerverliPy/SelfTUI/internal/ollama"
+	"github.com/MerverliPy/SelfTUI/internal/session"
 )
 
 // seedSavedTranscript records two turns through the real writer (round-trip via

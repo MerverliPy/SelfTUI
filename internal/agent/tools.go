@@ -16,7 +16,7 @@ import (
 	"strings"
 	"time"
 
-	"selftui/internal/ollama"
+	"github.com/MerverliPy/SelfTUI/internal/ollama"
 )
 
 const (

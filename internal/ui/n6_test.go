@@ -8,7 +8,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"selftui/internal/agent"
+	"github.com/MerverliPy/SelfTUI/internal/agent"
 )
 
 // drainExpansion runs the send path's deferred attachment-expansion command

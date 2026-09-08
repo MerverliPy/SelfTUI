@@ -18,10 +18,10 @@ import (
 	"github.com/adrg/xdg"
 	"github.com/charmbracelet/log"
 
-	"selftui/internal/config"
-	"selftui/internal/logsink"
-	"selftui/internal/ollama"
-	"selftui/internal/ui"
+	"github.com/MerverliPy/SelfTUI/internal/config"
+	"github.com/MerverliPy/SelfTUI/internal/logsink"
+	"github.com/MerverliPy/SelfTUI/internal/ollama"
+	"github.com/MerverliPy/SelfTUI/internal/ui"
 )
 
 // Version identifies this build; it is printed by `selftui -version` and

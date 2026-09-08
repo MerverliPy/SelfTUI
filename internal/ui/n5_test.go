@@ -14,7 +14,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
-	"selftui/internal/logsink"
+	"github.com/MerverliPy/SelfTUI/internal/logsink"
 )
 
 // newDrawerApp builds an App whose shell carries a sink pre-loaded with the

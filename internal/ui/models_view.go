@@ -18,7 +18,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"selftui/internal/ollama"
+	"github.com/MerverliPy/SelfTUI/internal/ollama"
 )
 
 // ModelsView is the Models tab (PLAN.md §7): a selectable model list plus an

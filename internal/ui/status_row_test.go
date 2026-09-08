@@ -12,8 +12,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"selftui/internal/config"
-	"selftui/internal/ollama"
+	"github.com/MerverliPy/SelfTUI/internal/config"
+	"github.com/MerverliPy/SelfTUI/internal/ollama"
 )
 
 // testAgentCtx builds an Agent view with numCtx = 1000 (input budget

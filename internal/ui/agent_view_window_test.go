@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"selftui/internal/agent"
-	"selftui/internal/ollama"
+	"github.com/MerverliPy/SelfTUI/internal/agent"
+	"github.com/MerverliPy/SelfTUI/internal/ollama"
 )
 
 // chatLinesNaive is a frozen copy of the pre-N1 O(total) transcript assembly

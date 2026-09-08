@@ -22,9 +22,9 @@ import (
 	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
 
-	"selftui/internal/agent"
-	"selftui/internal/config"
-	"selftui/internal/ollama"
+	"github.com/MerverliPy/SelfTUI/internal/agent"
+	"github.com/MerverliPy/SelfTUI/internal/config"
+	"github.com/MerverliPy/SelfTUI/internal/ollama"
 )
 
 // pumpAgent pumps one message from the agent's activity channel through the

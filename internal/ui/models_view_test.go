@@ -15,7 +15,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
-	"selftui/internal/ollama"
+	"github.com/MerverliPy/SelfTUI/internal/ollama"
 )
 
 // fakeShowServer serves POST /api/show; showFn decides the response.

@@ -12,7 +12,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"selftui/internal/ollama"
+	"github.com/MerverliPy/SelfTUI/internal/ollama"
 )
 
 func sysMsg(content string) ollama.ChatMessage {

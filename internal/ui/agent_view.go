@@ -15,10 +15,10 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/log"
 
-	"selftui/internal/agent"
-	"selftui/internal/config"
-	"selftui/internal/ollama"
-	"selftui/internal/session"
+	"github.com/MerverliPy/SelfTUI/internal/agent"
+	"github.com/MerverliPy/SelfTUI/internal/config"
+	"github.com/MerverliPy/SelfTUI/internal/ollama"
+	"github.com/MerverliPy/SelfTUI/internal/session"
 )
 
 // AgentView is the Agent tab (PLAN.md §7): a streaming transcript rendered

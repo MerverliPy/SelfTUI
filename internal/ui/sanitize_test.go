@@ -20,8 +20,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"selftui/internal/agent"
-	"selftui/internal/ollama"
+	"github.com/MerverliPy/SelfTUI/internal/agent"
+	"github.com/MerverliPy/SelfTUI/internal/ollama"
 )
 
 // hostileMarkers are exact byte strings that must never appear in rendered
