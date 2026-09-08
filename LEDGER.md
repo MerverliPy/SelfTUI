@@ -7168,3 +7168,45 @@ Codex re-review was clean ("Didn't find any major issues. Chef's kiss." on
 **Next action**
 - Owner: review + merge PR #38, then `git pull --ff-only` on local main; the landing
   branch can be deleted on origin after merge (owner click).
+
+---
+
+## 2026-09-08 — PR #38 review round 1: Codex P1+P2 fixed (1817191, 12ee387)
+
+**Work done**
+- Monitored the PR's first Codex review (running → completed 23:43:41Z on `27cd82c`);
+  two findings, both against c2's hardening, both verified against the code before
+  planning. Owner instruction: critically plan each fix, validate, verify the mapping
+  to the reviewer's exact ask.
+- **P1 (journal escape):** `revertFileLocked` removed created files with `os.Remove`,
+  so an ancestor swapped to a symlink after the commit could pass `checkPostLocked` on
+  an outside copy carrying the recorded post content and then delete the outside file.
+  Fixed by routing the removal through `removeNoFollow` (batch rollback's primitive);
+  `1817191` + TDD regression `TestUndoRemoveCreatedFileRejectsAncestorSymlinkSwap`
+  (proven red on the old code). Entry stays on the undo stack on refusal; ENOENT stays
+  tolerated; partial-undo retry covered via the shared function. TDD surfaced a
+  platform errno note: O_NOFOLLOW|O_DIRECTORY on a symlink = ELOOP (darwin) but
+  ENOTDIR (linux) — both fail closed; test accepts either.
+- **P2 (temp leak):** `createTempInDir`'s Fchmod-failure branch returned without
+  unlinking the created temp file (name never reached the caller's cleanup). Fixed
+  best-effort in-branch (`12ee387`); not unit tested — no injectable failure without a
+  production seam a 2-line fix doesn't justify (documented in the commit).
+- Out-of-scope review notes: journal-internal `os.RemoveAll` sites (170/271/352) are
+  state-dir hygiene under `j.dir`, not workspace paths; `checkPostLocked` still reads
+  via followed paths, but the removal now fails closed so no escape is possible.
+
+**Commands + exit codes**
+- `go test ./internal/agent -run TestUndoRemoveCreatedFileRejectsAncestorSymlinkSwap`
+  → FAIL pre-fix (red: undo deleted the outside file), PASS post-fix.
+- `make check` → exit 0; `make race` → exit 0 (all 8 packages ok, real output).
+- 2 fix commits + push to `landing/audit-squad-c1-c2` → PR #38 updated.
+
+**Decisions**
+- Fixes scoped exactly to the reviewer's asks; no drive-by hardening of the guard's
+  read side or the journal state-dir cleanup.
+
+**Blockers / open decisions**
+- None. CI re-runs on the new head; owner may trigger `@codex review` for round 2.
+
+**Next action**
+- Owner: review the two fix commits on PR #38; merge when satisfied.
