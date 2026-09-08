@@ -5,7 +5,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"selftui/internal/agent"
+	"github.com/MerverliPy/SelfTUI/internal/agent"
 )
 
 // N1 micro-item (PLAN §12 N7): the chat render width is bucketed to a

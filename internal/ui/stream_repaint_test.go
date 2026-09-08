@@ -8,9 +8,9 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"selftui/internal/agent"
-	"selftui/internal/config"
-	"selftui/internal/ollama"
+	"github.com/MerverliPy/SelfTUI/internal/agent"
+	"github.com/MerverliPy/SelfTUI/internal/config"
+	"github.com/MerverliPy/SelfTUI/internal/ollama"
 )
 
 // N2 — streaming repaint discipline (PLAN §12): token deltas batch to a

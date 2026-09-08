@@ -19,7 +19,7 @@ import (
 
 	"github.com/charmbracelet/log"
 
-	"selftui/internal/ollama"
+	"github.com/MerverliPy/SelfTUI/internal/ollama"
 )
 
 func newTraceLogger() (*log.Logger, *bytes.Buffer) {

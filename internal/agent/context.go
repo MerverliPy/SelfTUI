@@ -3,7 +3,7 @@ package agent
 import (
 	"unicode/utf8"
 
-	"selftui/internal/ollama"
+	"github.com/MerverliPy/SelfTUI/internal/ollama"
 )
 
 // TruncationNotice is the deterministic marker BudgetMessages inserts when it

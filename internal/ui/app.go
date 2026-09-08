@@ -9,9 +9,9 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/log"
 
-	"selftui/internal/config"
-	"selftui/internal/logsink"
-	"selftui/internal/ollama"
+	"github.com/MerverliPy/SelfTUI/internal/config"
+	"github.com/MerverliPy/SelfTUI/internal/logsink"
+	"github.com/MerverliPy/SelfTUI/internal/ollama"
 )
 
 // App is the root Bubble Tea model: owns tab state, geometry, and the

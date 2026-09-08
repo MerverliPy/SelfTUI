@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"selftui/internal/ollama"
+	"github.com/MerverliPy/SelfTUI/internal/ollama"
 )
 
 func requireBubblewrap(t *testing.T) {

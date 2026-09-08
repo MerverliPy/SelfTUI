@@ -10,7 +10,7 @@ import (
 	huh "charm.land/huh/v2"
 	"charm.land/lipgloss/v2"
 
-	"selftui/internal/config"
+	"github.com/MerverliPy/SelfTUI/internal/config"
 )
 
 // SettingsView is the Settings tab (PLAN.md §7/§8): a huh form over the

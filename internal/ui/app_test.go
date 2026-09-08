@@ -6,8 +6,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"selftui/internal/config"
-	"selftui/internal/ollama"
+	"github.com/MerverliPy/SelfTUI/internal/config"
+	"github.com/MerverliPy/SelfTUI/internal/ollama"
 )
 
 func newTestApp(t *testing.T) App {

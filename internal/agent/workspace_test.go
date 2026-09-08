@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"selftui/internal/ollama"
+	"github.com/MerverliPy/SelfTUI/internal/ollama"
 )
 
 // gitInitRepo turns dir into a real git repository with one commit, using the

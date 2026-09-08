@@ -6,7 +6,7 @@ import (
 
 	"charm.land/lipgloss/v2"
 
-	"selftui/internal/agent"
+	"github.com/MerverliPy/SelfTUI/internal/agent"
 )
 
 // truncate helpers: cut text is visibly truncated ("…") and styled text is

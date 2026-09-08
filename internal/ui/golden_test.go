@@ -37,10 +37,10 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
-	"selftui/internal/config"
-	"selftui/internal/logsink"
-	"selftui/internal/ollama"
-	"selftui/internal/session"
+	"github.com/MerverliPy/SelfTUI/internal/config"
+	"github.com/MerverliPy/SelfTUI/internal/logsink"
+	"github.com/MerverliPy/SelfTUI/internal/ollama"
+	"github.com/MerverliPy/SelfTUI/internal/session"
 )
 
 var updateGolden = flag.Bool("update", false, "regenerate golden render fixtures")

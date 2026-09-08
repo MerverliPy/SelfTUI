@@ -9,7 +9,7 @@ import (
 	"sync"
 	"testing"
 
-	"selftui/internal/ollama"
+	"github.com/MerverliPy/SelfTUI/internal/ollama"
 )
 
 // Hardened fake-Ollama harness for the runner tests' flake-exposed httptest

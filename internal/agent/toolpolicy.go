@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"selftui/internal/ollama"
+	"github.com/MerverliPy/SelfTUI/internal/ollama"
 )
 
 // ToolPolicy is the opt-in workspace tool trust policy (v0.1 hardening).

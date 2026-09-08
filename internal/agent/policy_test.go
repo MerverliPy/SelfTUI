@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	"selftui/internal/ollama"
+	"github.com/MerverliPy/SelfTUI/internal/ollama"
 )
 
 // Phase 4 (workspace tool trust): ToolPolicy is the opt-in policy. A nil

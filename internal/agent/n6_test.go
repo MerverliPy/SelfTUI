@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"selftui/internal/ollama"
+	"github.com/MerverliPy/SelfTUI/internal/ollama"
 )
 
 // N6 (PLAN.md §12): the runner relays qwen3 thinking as opaque ThinkingMsg

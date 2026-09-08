@@ -1,4 +1,4 @@
-module selftui
+module github.com/MerverliPy/SelfTUI
 
 go 1.25.8
 

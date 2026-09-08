@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"selftui/internal/ollama"
+	"github.com/MerverliPy/SelfTUI/internal/ollama"
 )
 
 func TestAgentToolsExposeSandboxedRunCommand(t *testing.T) {
