@@ -5980,3 +5980,72 @@ branch `fix/f1-fallback-marker` kept (auditable history, repo convention).
 **Blockers / open decisions**
 - None. **Next:** N1 glamour width-bucketing micro-item (queued) or next
   owner-assigned step; N7 stays continuous watch.
+
+### 2026-09-08 — audit-squad candidates merged to local main (cA lossless chat completion + cB git option policy)
+**Milestone:** owner-assigned step — read the corrected audit-squad packet (run `as-20260907-77853d`,
+`/tmp/audit-squad-as-20260907-77853d/HUMAN-REVIEW.md`) and merge `audit-squad/cA` then `audit-squad/cB`
+into local main, per the packet's §8 merge instructions and SelfTUI one-step-per-session governance.
+· **Result:** done — both candidates merged to local `main` with standard merge commits; full canonical
+gate green at every stage (baseline, post-cA, post-cB) plus a full `make race` pass on the merged tree.
+Nothing pushed to origin (landing stays the owner's call); both branches kept (repo convention).
+
+**Work done**
+- **Packet read + verified (corrected packet):** cA (lossless terminal completion under a
+  saturated/cancelled 64-slot activity channel) → judge PASS 2/2; cB (deny-by-default git option
+  allowlist closing `--output` write + `--ext-diff`/`--textconv` external-helper-exec sinks) →
+  judge PASS on the final deterministic run (judge-b3, 7/7) after two FAIL verdicts traced to a
+  pre-existing flaky runner-test family (packet §5) — **not** candidate regressions.
+- **Independent pre-merge verification (evidence over assertion):** read both full diffs. cB's doc
+  claim that operands after `--` were already validated holds — the top-level argv loop in
+  `validateCommand` (`internal/agent/command.go`) checks every element for metacharacters
+  (`\x00\r\n;|&$`<>`) and path escapes before the git case runs. cA's exactly-one-terminal-event
+  invariant holds — `internal/agent/runner.go` is the sole production `AgentDoneMsg` producer; the
+  change is consumer-side in `agent_view.go`. Merge order cA→cB is conflict-free (disjoint files:
+  `internal/ui/agent_view.go` + `cancellation_test.go` vs `internal/agent/command.go` +
+  `command_test.go` + `docs/run-command-containment.md`).
+- **Merges:** `git merge --no-ff audit-squad/cA` → merge commit `ef7fad0` (parents `91dfde0` +
+  `3e3bd03`; +167/−10 over 2 files). `git merge --no-ff audit-squad/cB` → merge commit `934fca4`
+  (parents `ef7fad0` + `509a64a`; +339/−5 over 3 files). Both merged clean by the `ort` strategy.
+- **Verification on the merged tree:** baseline `make check` at `91dfde0` rc 0; `make check` after
+  each merge rc 0; cA regression test `TestAgentTerminalEventSurvivesCanceledFullActivityChannel`
+  passes under `-race`; cB validator tables (`TestValidateCommandRejectsGitWriteAndExecOptions`,
+  `TestValidateCommandAcceptsReadOnlyGitDiagnostics`) + the live bwrap containment test
+  (`TestRunCommandAllowsReadOnlyGit`) pass; full `make race` on merged main rc 0 — internal/agent and
+  internal/ui both green under the race detector (no flake on this run).
+
+**Commands + exit codes**
+- `make check` @ `91dfde0` (baseline) → rc 0; @ `ef7fad0` (post-cA) → rc 0; @ `934fca4` (post-cB) → rc 0.
+- `go test -race -count=1 ./internal/ui -run TestAgentTerminalEventSurvivesCanceledFullActivityChannel -v` → PASS (cA).
+- `go test -count=1 ./internal/agent -run 'TestValidateCommandRejectsGitWriteAndExecOptions|TestValidateCommandAcceptsReadOnlyGitDiagnostics|TestRunCommandAllowsReadOnlyGit' -v` → 3/3 PASS (cB).
+- `make race` on merged main → rc 0.
+- `git merge --no-ff audit-squad/cA` → rc 0 (`ef7fad0`); `git merge --no-ff audit-squad/cB` → rc 0 (`934fca4`).
+
+**Decisions / lines to respect**
+- **Local merges, not PRs:** candidates exist only locally (never pushed); the owner's instruction
+  merged them in-session. Standard merge commits (no squash) keep first-parent history readable;
+  branch commits (`3e3bd03`, `509a64a`) preserved as second parents.
+- **Nothing pushed:** local main now carries `ef7fad0` + `934fca4` ahead of `origin/main`. Origin
+  landing is the owner's next-session call (push, or PR per repo rhythm once branches are pushed).
+- **Branches kept** (`audit-squad/cA`, `audit-squad/cB`) for auditability — `feat/n5-pr22-review-fixes`
+  / `fix/f1-fallback-marker` precedent; worktrees `/tmp/audit-squad-as-20260907-77853d/{wt-cA,wt-cB}`
+  and the evidence packet kept intact. Packet §8 cleanup (worktree remove + `git branch -d`) can run
+  after origin landing.
+- **PRE-EXISTING FINDING LOGGED (future session, per task directive):** the flaky runner-test family
+  is NOT a cA/cB regression. `TestRunnerRejectsOversizedNativeToolArgument` (`internal/agent/runner_test.go`,
+  H-03) and siblings (e.g. `TestWriteConfirmExpiresWithoutResponse`, `mutation_test.go:141`) are
+  timing-sensitive under full-suite parallel load (httptest `decode request: EOF` / unexpected request
+  counts). Evidence (packet §5): passes 3/3 in isolation under `-race` on the candidate clone; fails
+  too at the untouched base commit (2/12 full `make race` runs at baseSha). Future-session candidate:
+  server-side decode hardening or bounded retry on decode-EOF/unexpected-request-count, and/or `-p 1`
+  in CI if it keeps flaking.
+- cB's new git option policy section is now part of `docs/run-command-containment.md` (extends the
+  M3b containment record with the deny-by-default per-subcommand allowlist).
+
+**Blockers / open decisions**
+- None in the work. **Open (owner):** land merged local main on origin; packet cleanup
+  (worktrees/branches) after landing; N1 glamour width-bucketing micro-item still **queued**; N7
+  continuous watch unchanged; flaky-runner hardening queued for a future session (above).
+
+**Next action**
+- Owner lands local main on origin in a fresh session (push or PR), then optional audit-squad cleanup;
+  N1 width-bucketing or the flaky-runner hardening item is the next queued step; N7 stays continuous watch.
