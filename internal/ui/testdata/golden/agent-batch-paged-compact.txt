@@ -6,19 +6,19 @@
                                                                         
                                                                         
                                                                         
+                                                                        
   ╭──────────────────────────────────────────────────────────────────╮  
   │Review write_files batch                                          │  
   │                                                                  │  
-  │note: tighten the M-06 gate and document the batch tool           │  
-  │file 1/2                                                          │  
-  │M internal/agent/runner.go  +2 −1                                 │  
-  │  // M-06 gate                                                    │  
-  │-if err := ctx.Err(); err != nil {                                │  
-  │+if err := ctx.Err(); err != nil { return err }                   │  
+  │file 4/4                                                          │  
+  │M internal/d.go  +1 −1                                            │  
+  │-old four                                                         │  
+  │+new four                                                         │  
   │                                                                  │  
   │y / enter apply all · n / esc decline · pgup/pgdn · ↑/↓ or j/k ·  │  
   │window 2m0s                                                       │  
   ╰──────────────────────────────────────────────────────────────────╯  
+                                                                        
                                                                         
                                                                         
                                                                         

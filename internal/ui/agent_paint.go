@@ -371,24 +371,50 @@ func (v AgentView) renderConfirmationOverlay(bodyH int) string {
 }
 
 // renderBatchReviewOverlay is the write_files review stage (V2e §4.2): one
-// summary row per file plus its rendered one-column unified diff, with the
-// whole payload height-capped by the shared overlay helper so the decision
-// legend stays on screen. y/enter approves the whole batch, n/esc declines.
+// summary row per file plus its rendered one-column unified diff. The batch
+// pages one file at a time (V2e residual: review-overlay density at 72×30 for
+// a 16-op batch) — an early tall diff can never push later files below the
+// fitContent cut, so approving all can never silently include files that were
+// off-screen. The page is view state (batchPage, pgup/pgdn); y/enter approves
+// the whole batch and n/esc declines from any page.
 func (v AgentView) renderBatchReviewOverlay(bodyH int) string {
 	b := v.batchReview
 	if b == nil {
 		return ""
 	}
+	if len(b.Files) == 0 {
+		// Defensive: the runner refuses empty batches at proposal
+		// (validateWriteFilesArgs), but this overlay must never index an
+		// empty Files slice if one ever arrives — render a decline-able
+		// shell instead of panicking (reviewer P1, V2e residual session).
+		lines := []string{"empty batch — nothing to apply", "",
+			"n / esc decline"}
+		return v.renderOverlayTitle(bodyH, "Review write_files batch", lines)
+	}
+	page := v.batchPage
+	if page < 0 {
+		page = 0
+	}
+	if page >= len(b.Files) {
+		page = maxInt(len(b.Files)-1, 0)
+	}
 	lines := []string{}
-	if b.Note != "" {
+	// The note names the whole change set and rides on the first page only.
+	if page == 0 && b.Note != "" {
 		lines = append(lines, "note: "+b.Note)
 	}
-	for _, f := range b.Files {
-		lines = append(lines, f.Summary)
-		lines = append(lines, f.Rows...)
-		lines = append(lines, "")
+	if len(b.Files) > 1 {
+		lines = append(lines, fmt.Sprintf("file %d/%d", page+1, len(b.Files)))
 	}
-	lines = append(lines, "y / enter apply all · n / esc decline · window "+b.Timeout.String())
+	f := b.Files[page]
+	lines = append(lines, f.Summary)
+	lines = append(lines, f.Rows...)
+	lines = append(lines, "")
+	legend := "y / enter apply all · n / esc decline"
+	if len(b.Files) > 1 {
+		legend += " · pgup/pgdn · ↑/↓ or j/k"
+	}
+	lines = append(lines, legend+" · window "+b.Timeout.String())
 	return v.renderOverlayTitle(bodyH, "Review write_files batch", lines)
 }
 

@@ -339,6 +339,40 @@ func TestUndoRedoRoundTripAndRefuseGuards(t *testing.T) {
 	}
 }
 
+func TestUndoRefusedAfterCommandLikeWriteRetainsEntry(t *testing.T) {
+	// Design §7 residual: undo after an intervening run_command that touched
+	// the same files. Commands are never journaled (V2c); the refusal must
+	// be a visible refusal naming the file (never a silent clobber), hint at
+	// the run_command cause, and retain the entry so a later /undo can retry.
+	root := t.TempDir()
+	mustWrite(t, root, "f.txt", "v1\n")
+	journal, _ := NewUndoJournal("")
+	ops := []mutationOp{{kind: "overwrite", path: "f.txt", content: []byte("v2\n"), verb: "overwrote"}}
+	if _, err := applyMutationSet(context.Background(), root, ops, nil, journal, nil); err != nil {
+		t.Fatal(err)
+	}
+	// An approved run_command writes over f.txt after the mutation was
+	// journaled (command effects are outside the journal).
+	mustWrite(t, root, "f.txt", "command output\n")
+	_, err := journal.Undo()
+	if err == nil {
+		t.Fatal("undo after a command write must be refused")
+	}
+	if !strings.Contains(err.Error(), "undo refused") || !strings.Contains(err.Error(), "f.txt") {
+		t.Fatalf("refusal must name the file: %v", err)
+	}
+	if !strings.Contains(err.Error(), "run_command") {
+		t.Errorf("refusal should hint the run_command cause: %v", err)
+	}
+	// The file keeps the command's output and the entry stays for a retry.
+	if got := readFile(t, root, "f.txt"); got != "command output\n" {
+		t.Errorf("refused undo modified the command's output: %q", got)
+	}
+	if u, _ := journal.Counts(); u != 1 {
+		t.Errorf("undo count = %d, want 1 (refused undo must not pop)", u)
+	}
+}
+
 func TestJournalRedoRefusedWhenFileChangedAfterUndo(t *testing.T) {
 	root := t.TempDir()
 	mustWrite(t, root, "f.txt", "one\n")

@@ -108,6 +108,16 @@ and is capped again by the agent result bound.
 
 ## Residual risk and alternatives
 
+**Command effects are never journaled.** `run_command` is outside the undo
+journal (`/undo` / `/redo` in the Agent tab): a sandboxed command can touch
+anything the allowlist permits, so its file effects are not tracked and
+cannot be reverted by the journal. This is the same documented-gap pattern
+Claude Code uses for bash mutations. The journal's refuse-guards still
+protect the files it *does* track — if an approved command changes a file a
+later mutation recorded, `/undo` of that mutation refuses loudly instead of
+clobbering the command's result (the refusal names the file and suggests an
+approved `run_command` or the user's own edit as the cause).
+
 Bubblewrap does not provide CPU or memory limits. A hostile allowlisted Go test
 can consume host memory until the timeout fires, creating possible host-wide
 OOM pressure on WSL2. The 30-second default / 60-second maximum timeout,

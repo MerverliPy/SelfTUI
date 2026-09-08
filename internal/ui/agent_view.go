@@ -157,6 +157,13 @@ type AgentView struct {
 	// nothing (y/enter vs n/esc, mirroring the single-file confirm).
 	batchReview *agent.BatchReviewMsg
 
+	// batchPage is the file the review overlay shows (V2e residual: review-
+	// overlay density at 72×30 for a 16-op batch). The overlay pages one
+	// file at a time so an early tall diff can never push later files of a
+	// big batch below the fitContent cut; pgup/pgdn moves between pages
+	// while the review is open (0-based, clamped in batchKey).
+	batchPage int
+
 	// undoConfirm / redoConfirm are the y/esc confirm guards for the /undo
 	// and /redo commands (design §4.3: each guarded by the standard confirm;
 	// result surfaces as a status-bar notice). Only one is set at a time.
@@ -916,6 +923,7 @@ func (v AgentView) Update(msg tea.Msg) (AgentView, tea.Cmd) {
 			}
 		}
 		v.batchReview = &msg
+		v.batchPage = 0 // V2e residual: a fresh review opens on file 1 of N
 		return v, v.waitChatCmd()
 
 	case undoDoneMsg:

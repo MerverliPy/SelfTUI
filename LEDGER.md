@@ -6802,3 +6802,119 @@ this session's pre-fix probing).
 
 **Next action**
 - Fresh session, owner picks the next step from the backlog (§10/§12 menu).
+
+## Session — 2026-09-08 (hardening): V2e residual risks resolved — shipped green (orchestrator run, SINGLE_AGENT + targeted review)
+
+**Work done**
+- Owner-selected step (fresh session, §10/§12 menu): resolve the V2e design §7
+  carried residuals — batch-review overlay density, batch-JSON reliability,
+  run_command undo gap (documented-gap posture per design).
+- Triage: SINGLE_AGENT — one writer (`worker`, fork, 60-min cap, changes left
+  uncommitted for the parent) plus one targeted read-only `reviewer` pass
+  (bounded: toolBudget soft 10 / hard 18, 10-min cap). No parallel lanes (all
+  items touch the same packages).
+- Overlay density: batch review now pages one file per page (`batchPage`,
+  pgup/pgdn clamped, page resets per new review, note on page 1 only, legend
+  gains "pgup/pgdn" only when >1 file) — a tall early diff can no longer push
+  later files below the fitContent cut, so approve-all never applies files
+  that were invisible. Goldens: `agent-batch-compact/wide` regenerated
+  (mandated indicator/legend rows), new `agent-batch-paged-compact/wide`
+  (4-file batch parked on last page 4/4) at 72×30/120×40; all other frames
+  byte-identical.
+- Batch-JSON reliability: regression tests pin actionable per-op errors
+  through the write_files path (unknown field via DisallowUnknownFields,
+  empty ops, wrong kind, missing per-kind fields, oversized content/old/new,
+  .git + sensitive-path refusal at proposal).
+- run_command undo gap (documented gap, design §7): journal refuse-guard
+  message now hints "(an approved run_command or your own change?)";
+  `docs/run-command-containment.md` records "command effects are never
+  journaled"; README documents `/undo` `/redo` + the never-journaled
+  contract; refusal-path test pins the named-file refusal with the entry
+  retained.
+- Reviewer verdict: **BLOCK — 1 P1**: empty-`Files` render panic (clamp to
+  page 0 then `b.Files[0]`). Parent-verified by direct read, fixed
+  parent-side (defensive decline shell in `renderBatchReviewOverlay` +
+  `TestBatchReviewEmptyFilesRendersDeclineShell`), re-verified green.
+  Non-blocking suggestion (assert transcript scroll unchanged over modal
+  pgup/pgdn) noted — covered by the dispatch-order proof in
+  `handleKey`/`ModalOpen` (reviewer-verified).
+- Run-meta honesty: receipts reported mission completion only; the model
+  identity did not surface in the receipt text this session. No
+  opencode-go-premium lanes were relied on — launch defaults/cost-router
+  chains only, no channel preflight required.
+
+**Commands + exit codes**
+- `make check` → exit 0 (pre-review); `go test -race ./... -count=1` → exit 0
+  (7/7 packages); `gofmt -l internal cmd` → clean (no output).
+- Reviewer P1 fix: `go test ./internal/ui -run 'TestBatchReviewEmptyFiles|TestBatchReview' -count=1` → ok;
+  then `make check` → exit 0 and `go test -race ./... -count=1` → exit 0
+  post-fix.
+- Golden verification (parent): `git status` shows only the 4 batch-review
+  fixture paths changed/added; all other frames untouched.
+
+**Decisions / lines to respect**
+- run_command undo gap stays a documented gap (design §7 posture) — command
+  effects are never journaled; refuse-guards are the protection. No new undo
+  machinery.
+- Overlay paging keeps approve-all semantics (no per-file accept/reject —
+  design §4.2 cut preserved).
+- One review layer only; reviewer P1 fixed parent-side, parent-verified
+  (V2e implementation-session precedent).
+
+**Blockers / open decisions**
+- None for this step. Landing = PR (branch protection on `main`); owner
+  merges.
+
+**Next action**
+- Owner: merge the residual-hardening PR. Then fresh session — owner picks
+  the next step from the §10/§12 backlog (remaining candidates: release cut
+  for the post-v0.3.0 work, F-11 low-severity cmd coverage, §11 risk #5
+  serialization decision).
+
+## Session — 2026-09-08 (PR #36 review fix): Codex P1 — mobile-safe batch page aliases (orchestrator run, DIRECT)
+
+**Work done**
+- Owner-assigned task: monitor PR #36 reviewer comments and fix each with a
+  critically planned, validated solution. CI passed at open; the Codex review
+  landed one **P1** on `internal/ui/agent_composer.go` (batchKey): on the
+  supported iPhone/SSH path, keyboards without PageUp/PageDown cannot reach
+  files 2..N — the modal owns all input, arrows/j/k were swallowed, while `y`
+  still applies the whole batch. Claim parent-verified against HEAD before
+  planning (batchKey had exactly y/n/esc + pgup/pgdn cases).
+- Fix (reviewer's stated intent, followed exactly): accept **the same aliases
+  the repo's other paged views accept** — `k.Text == "k" || k.Code == tea.KeyUp`
+  (prev) and `k.Text == "j" || k.Code == tea.KeyDown` (next), the byte-identical
+  comparison pattern of agent_menu.go:260/265 and agent_session.go:203/207. No
+  invented aliases (no h/l, no Left/Right — accepted by no paged view here).
+  Legend now advertises `↑/↓ or j/k` (repo-wide phrasing: palette.go:181,
+  agent_paint.go:492/587, agent_menu.go:365); pgup/pgdn stay accepted.
+- Validation: `TestBatchReviewAliasPagingWalksAllFiles` proves `j` alone walks
+  page 1→4/4 with clamps (files 2..N reachable without paging keys — the
+  reviewer's requirement); `TestBatchReviewOverlayRendersAndApproves` covers
+  k/Down movement + legend; `TestBatchReviewSingleFileAliasesHarmless` keeps
+  one-file batches legend-free and key-immune; empty-batch shell ignores
+  aliases; routing regression proves Up/j page inside the modal without
+  leaking to tabs/composer; y/n/esc flow unchanged.
+- Goldens: only the 4 batch-review frames regenerated (legend row gained
+  `· ↑/↓ or j/k`, wrapping to 2 rows at 72 cols); all other frames untouched.
+
+**Commands + exit codes**
+- `go test ./internal/ui -run 'TestBatchReview' -count=1` → ok (8/8 batch tests).
+- `go test ./internal/ui -run TestGoldenRender -update` → ok (4 batch frames only).
+- `make check` → exit 0; `go test -race ./... -count=1` → exit 0; `gofmt -l` → clean.
+
+**Decisions / lines to respect**
+- Aliases are exactly the other paged views' set — do not add more key
+  families to the batch modal without a repo-convention change.
+- The fix rides PR #36's branch (PR #22 precedent: Codex review fixes land as
+  commits on the PR branch).
+
+**Blockers / open decisions**
+- None.
+
+**Next action**
+- Owner merges PR #36 once CI + Codex re-review are green.
+- **PR #36 re-clearance (2026-09-08, same session):** `@codex review` run on
+  the fix commit — Codex: "Didn't find any major issues. Chef's kiss."
+  (reviewed `dd3a4d6`; 👍 on the PR, evidence comment id 5592562543). CI pass
+  (58s) on the same commit; PR MERGEABLE. Ready for the owner to merge.

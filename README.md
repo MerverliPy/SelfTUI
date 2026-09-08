@@ -301,7 +301,8 @@ prompt (up to four rows), and below the box a statusline that shows the
 running state with an **armed interrupt** (`esc` arms, `esc` again cancels —
 a stray esc can't kill a run) or the key legend. A **`/`** in the prompt opens
 the command menu — `/clear` (asks first), `/model`, `/resume` (reload a
-saved transcript), `/theme` (session toggle; save in Settings to keep it),
+saved transcript), `/undo` / `/redo` (revert a confirmed file change),
+`/theme` (session toggle; save in Settings to keep it),
 `/help` (command reference), `/refresh`, and
 `/export` (flush the Markdown transcript and show its path) —
 filtered as you type; arrows move and `enter` runs. Idle `esc` clears a
@@ -328,10 +329,14 @@ turns recording off (chat then stays in-memory only, and `/resume` reports
 
 Tool-capable models may use jailed `read_file`, `list_dir`, `grep`,
 `write_file`, and `edit_file`; every mutation opens a `y`/`enter` approve or
-`n`/`esc` decline dialog. V2c also exposes `run_command`, which accepts only
+`n`/`esc` decline dialog. Confirmed file mutations are journaled per session
+and revertible with the `/undo` and `/redo` commands. V2c also exposes `run_command`, which accepts only
 allowlisted `go` and read-only `git` argv and runs it inside bubblewrap with
 network disabled, a scrubbed environment, bounded timeout/output, and process
--group cancellation; it uses the same explicit approval dialog. These tools
+-group cancellation; it uses the same explicit approval dialog. **`run_command`
+effects are never journaled and cannot be undone** — only file mutations
+carry pre-images; a command's writes are protected from a later `/undo`
+clobber by the journal's refuse-guards, never reverted. These tools
 exist only when **workspace tools are enabled** (Settings → *Enable workspace
 tools*, `tools_enabled`, or `SELFTUI_TOOLS_ENABLED`) with a project workspace
 root; otherwise the agent is plain chat and the Ollama request carries no
