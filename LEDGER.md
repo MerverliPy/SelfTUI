@@ -6347,3 +6347,61 @@ this session's pre-fix probing).
 - Fresh session: **P1 — module rename to `github.com/MerverliPy/SelfTUI`**
   (before the next tag so `go install …/cmd/self-tui@latest` resolves), or
   the next owner-assigned step.
+
+## Session — 2026-09-08 (P1): F-03 module rename to github.com/MerverliPy/SelfTUI (orchestrator run, DIRECT)
+
+**Work done**
+- Triage: **DIRECT** (zero agents) — mechanical rename, canonical verification
+  is local; delegation overhead exceeds benefit.
+- Renamed Go module `selftui` → `github.com/MerverliPy/SelfTUI` (audit finding
+  F-03): `go.mod` module line + all 42 internal import paths rewritten
+  (43 files changed), `gofmt -w`, `go mod tidy` (no dep changes).
+- **One regression caught and fixed in-session:** the first gate run failed
+  `TestSessionDirForRun` because the bulk sed also rewrote the test's
+  assertion string literal `"selftui/sessions"` (the XDG **data-dir** suffix,
+  not a module path) into the new module path. Restored the literal — runtime
+  behavior was always correct (`/home/calvin/.local/state/selftui/sessions`).
+  Lesson: `"selftui/` over-matches string literals; only import specs should
+  have been rewritten (all other 41 files were clean).
+- CHANGELOG `[Unreleased]` gained a **Changed** entry (module rename, F-03;
+  data paths and binary name unchanged).
+- PR #28 opened from `fix/f03-module-rename`; required check **pass** (1m3s,
+  run 34256437126); merged (merge commit) as **`b5df1ae`**; branch kept;
+  local main fast-forwarded. The prior session's ledger handoff `18e14f7`
+  rode the PR per repo rhythm.
+- Scope respected: F-03 is module-path only. `$XDG_STATE_HOME/selftui/`,
+  `~/.config/selftui/`, binary name `selftui`, Makefile `-X main.Version`
+  ldflags all unchanged. **No tag cut here** — the rename lands *before* the
+  next tag so `go install github.com/MerverliPy/SelfTUI/cmd/self-tui@latest`
+  resolves at that tag.
+
+**Commands + exit codes**
+- `go mod edit -module github.com/MerverliPy/SelfTUI` + sed import rewrite +
+  `gofmt -w` + `go mod tidy` → rc 0; `rg '"selftui/|module selftui'` sweep →
+  clean (rc 1 = no matches).
+- `make check` → first run **Error 1** (TestSessionDirForRun, sed over-match);
+  after the one-line literal fix → **exit 0**.
+- `go test -race ./...` → **exit 0**, all packages ok (agent 8.9s, ui 14.1s).
+- `go list -m` → `github.com/MerverliPy/SelfTUI`.
+- `git commit` `3316155` + `git push -u` → rc 0; `gh pr create` → PR #28;
+  `gh pr checks 28 --watch` → pass; `gh pr merge 28 --merge` → rc 0, state
+  MERGED, mergeCommit `b5df1ae`; `git pull --no-edit` on main → fast-forward,
+  clean tree.
+
+**Decisions / lines to respect**
+- Merge-commit merge, branch kept (PR #1/#6/#27 convention).
+- `go install …@latest` end-to-end verification is only possible **at the
+  next tag** (per F-03 verification note) — deferred to the release session;
+  locally verified via `go list -m` + full gate instead.
+- F-03 strictly = module path; XDG data dirs and binary name deliberately
+  untouched (would break existing installs; not in the finding).
+
+**Blockers / open decisions**
+- None for this step. Audit residuals: F-07 agent_view split (P2),
+  F-09/F-10 owner-optional. Standing owner click: GPG public key upload at
+  github.com/settings/keys.
+
+**Next action**
+- Fresh session: next owner step — the next `v*` tag can now carry a working
+  `go install` (add the README quick-start line at release time), or F-07
+  (P2) if the owner prefers. Owner's call per the one-step rule.
