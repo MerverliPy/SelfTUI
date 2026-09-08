@@ -6927,3 +6927,55 @@ LEDGER docs). Branch-protection required check PASSED on the merge commit
 Codex re-review was clean ("Didn't find any major issues. Chef's kiss." on
 `dd3a4d6`). This LEDGER entry is a local docs commit riding the next PR
 (branch protection: no direct main pushes).
+
+## Session — 2026-09-08 (release cut): v0.4.0 — post-v0.3.0 V2e work (orchestrator run, DIRECT)
+
+**Work done**
+- Owner-selected step (fresh session, backlog menu): release cut for the
+  post-v0.3.0 work. Alternatives offered (F-11 cmd coverage, §11 risk #5
+  serialization) were declined via the pick.
+- Triage: DIRECT — the repo ships a deterministic release gate
+  (`scripts/release-check.sh`) + a documented signed-tag runbook; delegation
+  adds no quality over a gate that verifies everything. Zero agents.
+- Content of the cut (v0.3.0..main): PR #34 (V2e design-gate docs), PR #35
+  (feat: multi-file `write_files` batches + `/undo`//`redo` journal), PR #36
+  (residual hardening — paged batch review, batch-JSON reliability tests,
+  run_command undo-gap docs) + Codex P1 mobile-safe paging aliases fix
+  (`dd3a4d6`), plus LEDGER docs commits. Semver: new features → minor →
+  **v0.4.0** (owner accepted the recommended pick).
+- CHANGELOG `## [0.4.0] - 2026-09-08` written (Added: write_files batch tool
+  with all-or-nothing diff review + `.git`/sensitive-path refusal + write-ahead
+  journal + compensating rollback; undo/redo journal bounds 25/32 MiB/8 MiB,
+  run_command never-journaled documented gap; batch-JSON reliability tests.
+  Fixed: batch review paging on mobile — `↑/↓`/`j`/`k` aliases per PR #36).
+- Local release gate run on the branch (toolchain pin enforced by identity:
+  pinned go1.27.1 gofmt dir + `~/go/bin` first on PATH).
+
+**Commands + exit codes**
+- `git log --oneline v0.3.0..HEAD` → full cut enumerated (PRs #34–#36).
+- `VERSION=v0.4.0 make release-check` (with pinned toolchain PATH) →
+  **release gate PASSED for v0.4.0**: go mod verify, gofmt, vet, uncached
+  tests, race, govulncheck (0 vulnerabilities), both CGO_ENABLED=0 Linux
+  builds (go1.27.1), stamps `selftui v0.4.0` (amd64 executed / arm64 embedded
+  strings), deterministic archives + `dist/SHA256SUMS`
+  (amd64 `f92eb404…`, arm64 `853eec62…`).
+- First two gate attempts failed fast as designed (unpinned gofmt identity;
+  govulncheck not on the prepended PATH) — fixed by PATH order, no repo
+  changes.
+
+**Decisions / lines to respect**
+- Version v0.4.0 (semver minor for new features; v0.1.1-style patch numbers
+  are for hardening-only cuts).
+- Tag practice per CONTRIBUTING: `git tag -s v0.4.0 -m "SelfTUI v0.4.0"` +
+  `git verify-tag` before push; `release.yml` verifies the signature and
+  re-runs the full gate at the tag.
+- Branch protection holds: release PR carries CHANGELOG + this LEDGER entry;
+  no direct main pushes.
+
+**Blockers / open decisions**
+- None.
+
+**Next action**
+- Open release PR → CI green → merge → pull main → signed tag `v0.4.0` →
+  push → verify `release.yml` SUCCESS + assets (hashes, stamps). Post-tag
+  LEDGER addendum + PLAN §12 tick ride the next PR.
