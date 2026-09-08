@@ -5840,3 +5840,74 @@ owner-selected v0.2 set (V2a–V2d). DIRECT execution, zero agents.
 - Fresh session: F1 marker fix or the README V2a docs correction or the N1
   glamour width-bucketing micro-item; N7 stays continuous watch. The device
   acceptance next-action (from the N8 session) is now **closed**.
+
+### 2026-09-07 — F1 fallback-marker fix + README V2a staleness correction (device-acceptance follow-up, owner-assigned)
+**Milestone:** owner-assigned step — the two queued micro-items from the device
+acceptance pass, executed together in one session per the owner's message — on branch
+`fix/f1-fallback-marker` off local `main` (`5dee61a`, 6 commits ahead of origin/main;
+carried docs commits ride this branch per repo rhythm). · **Result:** done — both fixes
+implemented, tested, and parent-verified green (implementer + orchestrator pass). No §10
+roadmap row to tick (owner-assigned micro-step); the PLAN §10 acceptance note is
+annotated with the resolution. **No push / PR created — the landing (PR vs main) is the
+owner's call** (see Next action).
+
+**Work done**
+- **F1 fallback-claim fidelity (code + tests):** a plain-chat-fallback turn (runner
+  `agent.FallbackMsg`, only ever emitted at iteration 0 of a tool-armed loop — no tool
+  can have executed in that turn) now commits its assistant content with a persistent
+  inline caveat — `> ⚠ **plain chat** — no tool ran this turn: <reason>` — so the note
+  renders in the conversation, survives the committed-turn render cache, and rides the
+  same content into the `/export` transcript and a later `/resume` reload. The transient
+  statusline notice is preserved. Marker is a markdown blockquote on the content body:
+  no `internal/session` format/parser change. Reason is sanitized (`sanitizeTerminalText`)
+  before it joins the content. Flag lifecycle: set on `FallbackMsg`, consumed at commit,
+  cleared at every `startChat` (no cross-turn leak). Implemented in
+  `internal/ui/agent_view.go` (`plainChatReason` field + `plainChatFallbackNote` helper);
+  +4 tests: `agent_view_test.go` (commit marker + inline render; stale flag cleared at
+  next turn start), `sanitize_test.go` (hostile-reason sanitization), `session_ui_test.go`
+  (end-to-end round trip — real runner fallback over a fake NDJSON stream → in-memory
+  turn → transcript file → `session.Load` reparse; reproduces the `count_to_300.txt`
+  claim).
+- **README V2a staleness correction (docs):** all four "not resumable / no import-reload
+  path" passages corrected to the landed V2a `/resume` flow, honestly v0.1-vs-v0.2
+  scoped (v0.1 shipped no reload path; V2a/v0.2 added `/resume`); `/resume` added to the
+  two slash-command inventories; the plain-SSH drop section now points at `/resume` to
+  reload the dead process's transcript. Every new prose claim (newest-first picker,
+  asks-first on non-empty history, sends refused while loading, fresh per-process
+  transcript, exact "session recording is off — nothing to resume" notice) was verified
+  against code (`agent_view.go` openResume/resumeKey/importSession/applySessionLoaded,
+  `session.ListSessions` ordering) before it landed.
+
+**Commands + exit codes** (final tree, `fix/f1-fallback-marker`; baseline at `5dee61a`
+also green — attribution clean)
+- Baseline: `make check` → rc 0; `go test -race -count=1 ./...` → rc 0.
+- `make check` → rc 0 (build + uncached full suite + vet + gofmt).
+- `go test -race -count=1 ./...` → rc 0.
+- Targeted: `go test ./internal/ui -count=1 -run 'TestAgentFallbackMarker|TestAgentViewFallbackMarkerTranscriptRoundTrip' -v` → 4/4 PASS; `go test ./internal/agent -count=1 -run Fallback -v` → 2/2 PASS.
+- Golden fixtures: **no regeneration needed** — no fallback turn is seeded in goldens;
+  no `internal/ui/testdata/` diffs on the branch.
+
+**Decisions / lines to respect**
+- Marker rides the turn's content body (blockquote), not the header meta — content is
+  what renders, exports, and round-trips through the reader; this avoided any
+  session-format or parser churn.
+- The marker is truthful by construction: both runner `FallbackMsg` sites are guarded by
+  `iteration == 0` (tool-unsupported downgrade; or zero tool calls before any
+  `executeTool`), so "no tool ran this turn" is never emitted for a turn that ran a
+  tool. Tools-off plain chat (no policy) never emits `FallbackMsg` → no fabricated
+  markers on ordinary chats.
+- Fix-forward only: pre-existing transcripts on disk are not retroactively marked
+  (append-only model). A resumed conversation feeds the marker text back to the model as
+  ordinary history — truthful context, accepted (a few tokens).
+- Both queued items shipped in one session per the owner's message; the N1 glamour
+  width-bucketing micro-item stays queued (out of this session's scope).
+
+**Blockers / open decisions**
+- None in the work itself. **Landing is the owner's call:** push `fix/f1-fallback-marker`
+  and open a PR (repo rhythm for code: feature branch → PR, owner merges; the 6 carried
+  docs commits on local main will ride with it) vs commit/push to local main directly.
+- N7 continuous watch unchanged; N1 width-bucketing remains the next queued micro-item.
+
+**Next action**
+- Owner lands the branch (PR recommended per repo rhythm), then: N1 glamour
+  width-bucketing micro-item or the next owner-assigned step; N7 stays continuous watch.

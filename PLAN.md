@@ -927,6 +927,12 @@ stay in altscreen; N8 is optional.
 > notice only and the export records the claim uncaveated → candidate micro-fix
 > (persist/inline the fallback marker). README's "not resumable" prose is stale
 > vs landed V2a `/resume` (docs fix queued).
+> **Follow-up (2026-09-07, done):** both queued items fixed on
+> `fix/f1-fallback-marker` — F1's persistent fallback marker (content blockquote on
+> plain-chat-fallback turns, round-trips export → `/resume`) and the README V2a
+> `/resume` corrections (4 stale passages + command inventories). Implementer + parent
+> gates green (`make check`, `go test -race -count=1 ./...`). Landing (PR vs main) is
+> the owner's call; LEDGER handoff records the detail.
 
 ### Explicitly rejected / deferred
 - Leader-key two-stroke chords (discoverability at 72×30; palette wins).
