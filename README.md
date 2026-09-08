@@ -32,14 +32,14 @@ it against `SHA256SUMS`, and run it:
 
 ```sh
 VER=v0.2.0    # always check the releases page for the latest tag
-curl -LO "https://github.com/MerverliPy/SelfTUI/releases/download/${VER}/selftui-${VER}-linux-amd64.tar.gz"
+ARCH=amd64    # arm64 hosts (e.g. Raspberry Pi): ARCH=arm64
+curl -LO "https://github.com/MerverliPy/SelfTUI/releases/download/${VER}/selftui-${VER}-linux-${ARCH}.tar.gz"
 curl -LO "https://github.com/MerverliPy/SelfTUI/releases/download/${VER}/SHA256SUMS"
-grep linux-amd64 SHA256SUMS | sha256sum -c -
-tar -xzf "selftui-${VER}-linux-amd64.tar.gz" && ./selftui
+grep "linux-${ARCH}" SHA256SUMS | sha256sum -c -
+tar -xzf "selftui-${VER}-linux-${ARCH}.tar.gz" && ./selftui
 ```
 
-For **arm64** hosts (e.g. Raspberry Pi, ARM servers) swap `amd64` for `arm64`
-in the two `curl` lines. Prefer to build from source? See
+Prefer to build from source? See
 [Build & run](#build--run) — `make build` → `bin/selftui`.
 
 ## Features
