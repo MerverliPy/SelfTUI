@@ -51,12 +51,28 @@ type Client struct {
 // a different origin that must not receive the bearer token or downgrade the
 // scheme, and the initial non-loopback https/token validation in
 // internal/config cannot see either case.
+// privateTransport clones the default transport so every Client owns its
+// connection pool. Sharing the process-global pool let a pooled keep-alive
+// connection from one (closed) httptest server be re-dialed against the next
+// server that recycled the same ephemeral port — cross-test request leakage
+// that flaked runner tests under full-suite load with decode-EOF artifacts
+// and impossible request counts (audit-squad packet §5, pre-existing finding
+// 2026-09-08). Per-client pools remove that class; production is unaffected
+// (one Client per host in practice, and transports pool per origin anyway).
+func privateTransport() *http.Transport {
+	if t, ok := http.DefaultTransport.(*http.Transport); ok {
+		return t.Clone()
+	}
+	return &http.Transport{}
+}
+
 func New(host, token string) *Client {
+	tr := privateTransport()
 	return &Client{
 		baseURL:    strings.TrimRight(host, "/"),
 		token:      token,
-		http:       &http.Client{Timeout: requestTimeout, CheckRedirect: redirectPolicy},
-		stream:     &http.Client{CheckRedirect: redirectPolicy},
+		http:       &http.Client{Timeout: requestTimeout, CheckRedirect: redirectPolicy, Transport: tr},
+		stream:     &http.Client{CheckRedirect: redirectPolicy, Transport: tr},
 		streamIdle: streamIdleTimeout,
 	}
 }

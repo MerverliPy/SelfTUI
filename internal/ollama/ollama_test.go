@@ -21,6 +21,37 @@ func testServer(t *testing.T, h http.Handler) (*Client, *httptest.Server) {
 	return New(srv.URL, ""), srv
 }
 
+// TestNewUsesPrivateTransports pins the flaky-runner hardening (2026-09-08,
+// audit-squad packet §5 pre-existing finding): every Client owns a private
+// connection pool instead of sharing http.DefaultTransport, so a pooled
+// keep-alive from one closed httptest server can never be re-dialed against
+// another test's server on a recycled ephemeral port. The clone must
+// preserve the default transport's behavior (proxy policy), and a Client's
+// two endpoints share its own pool.
+func TestNewUsesPrivateTransports(t *testing.T) {
+	deflt, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		t.Skip("DefaultTransport was replaced; nothing to pin")
+	}
+	a := New("http://localhost:1", "")
+	b := New("http://localhost:2", "")
+	for _, c := range []*http.Client{a.http, a.stream, b.http, b.stream} {
+		tr, ok := c.Transport.(*http.Transport)
+		if !ok || tr == deflt {
+			t.Fatalf("client transport is not a private clone: %T", c.Transport)
+		}
+		if tr.Proxy == nil {
+			t.Error("cloned transport lost the default proxy policy")
+		}
+	}
+	if a.http.Transport == b.http.Transport {
+		t.Error("two Clients share one pool")
+	}
+	if a.stream.Transport != a.http.Transport {
+		t.Error("a Client's two endpoints should share its own pool")
+	}
+}
+
 const tagsBody = `{
   "models": [
     {
