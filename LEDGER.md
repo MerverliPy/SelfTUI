@@ -5708,3 +5708,63 @@ owner-selected v0.2 set (V2a–V2d). DIRECT execution, zero agents.
 - Fresh session: N8 (owner device test) or the N1 glamour width-bucketing
   micro-item; N7 stays continuous watch. Local `main` carries 2 docs commits
   (incl. this handoff) to ride the next feature PR.
+
+## Session — 2026-09-07 (N8 device spike, owner-run): tea.Println native-scrollback verdict = DECLINE
+
+**Work done**
+- N8 (PLAN §12) executed as an owner-run on-device spike, per the plan's
+  spike-first rule. Built a throwaway instrument `cmd/n8-scrollback-probe`
+  (branch `spike/n8-scrollback`, commit `4fe788e`): it stages the Charm
+  chat-history pattern (bubbletea discussion #1482) — finalized turns printed
+  via `tea.Println` into the terminal's native scrollback with a slim owned
+  live frame — on the pinned bubbletea v2.0.9 with the same no-altscreen
+  posture as `cmd/self-tui/main.go`. Local pty sanity run: boots, 3 turns
+  emitted through the real Println/insertAbove path, clean `q` exit (rc 0).
+- `docs/n8-device-test.md` carries the on-device procedure + 6-row
+  observation sheet (same spike branch).
+- Owner ran the probe on device: **Moshi** client, plain SSH session (no
+  tmux). Observations: **scroll was dead** (the native scroll gesture did
+  nothing — no usable history to pan) and the **live frame repainted
+  repeatedly/rapidly** through the session. The repaint signature matches
+  the raw stream captured during the local run: `tea.Println` (renderer
+  `insertAbove`) scrolls the buffer and then the frame re-renders with
+  erase bursts (dozens of `ESC[J` per frame) — over SSH to a phone that is
+  a visible full-region flash on every turn-land.
+- **Verdict: N8 declined.** The naive `tea.Println` native-scrollback pattern
+  does not hold up on the owner's client. SelfTUI stays in its current
+  renderer; the plan's cheap alternative holds — N1 windowing (landed) already
+  bounds per-frame cost. The probe stays throwaway on `spike/n8-scrollback`
+  and never merges to `main` as-is. Recorded as a positive negative: the
+  spike answered the pre-commitment question at near-zero cost.
+
+**Commands + exit codes**
+- `git checkout -b spike/n8-scrollback` → 0; probe commit `4fe788e` → 0;
+  `gofmt -l` clean; `go vet ./cmd/n8-scrollback-probe` → 0;
+  `go build ./...` → 0.
+- Local pty smoke: `(sleep 15; printf q) | timeout 22 script -qec '…go run
+  ./cmd/n8-scrollback-probe…'` → rc 0, 3 `── turn` separators captured.
+- Device run: owner-executed `/tmp/n8-probe` on Moshi (plain SSH); verdict
+  from the owner's in-person observations, not host tooling.
+
+**Decisions / lines to respect**
+- N8 = declined (owner device evidence). This handoff + the PLAN §12 tick land
+  on local `main` per repo rhythm (they ride the next feature PR); the probe
+  code stays quarantined on `spike/n8-scrollback`.
+- Date note: this entry is stamped 2026-09-07 (host clock, matching git
+  stamps); the earlier "2026-09-08" header on the PR #23-merge entry is
+  prose-ahead of git and is left uncorrected (history is append-only).
+
+**Blockers / open decisions**
+- Fate of `spike/n8-scrollback`: kept for audit per repo convention; safe to
+  delete once N8 is closed out — owner's call.
+- N7 continuous watch: unchanged (bubbletea v2.0.9 pinned; #1725/#1761/#1776
+  not yet shipped).
+- Standing owner click (unchanged): upload the GPG public key at
+  github.com/settings/keys for the green Verified badge.
+
+**Next action**
+- N8 row ticked in PLAN §12. Next code-worthy step: the **N1 glamour
+  width-bucketing micro-item** (round width to 5 cols so resize jitter
+  doesn't rebuild the renderer) in a fresh session; N7 stays continuous
+  watch. Local `main` now carries 3 docs commits (incl. this handoff) to
+  ride the next feature PR.

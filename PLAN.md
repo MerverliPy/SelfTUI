@@ -905,6 +905,15 @@ TUI owns only input + streaming area. Biggest open trade-off: iPhone SSH clients
 **on-device spike before any commitment**. Cheap alternative if N1 windowing lands:
 stay in altscreen; N8 is optional.
 
+> **SPIKED 2026-09-07 (owner device test on Moshi) — DECLINED.** The naive
+> `tea.Println` native-scrollback pattern does not hold up on the owner's client:
+> the native scroll gesture was **dead** (no usable history to pan) and the frame
+> **repainted in visible bursts** on every turn-land (`insertAbove` buffer scroll
+> + per-tick erase/redraw over SSH). SelfTUI stays in its current renderer; N1
+> windowing (landed) is the plan's cheap alternative and already bounds frame
+> cost. Evidence: throwaway probe `cmd/n8-scrollback-probe` + `docs/n8-device-test.md`
+> on branch `spike/n8-scrollback`; LEDGER 2026-09-07.
+
 ### Explicitly rejected / deferred
 - Leader-key two-stroke chords (discoverability at 72×30; palette wins).
 - Mouse capture (keep off; preserve native selection/scroll).
