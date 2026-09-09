@@ -7504,3 +7504,41 @@ Codex re-review was clean ("Didn't find any major issues. Chef's kiss." on
 - Owner picks the next conclave item: P1 (OSC 52 copy-to-phone, spike-gated
   opt-in) or P2 (owner-run device measurement session gating height work).
   Next task opens in a fresh session per the binding session rule.
+
+## 2026-09-09 — next-item pick: owner selected P1 (OSC 52 spike) (orchestrator run, DIRECT)
+
+**Work done**
+- Decision-only step (no agents; zero code/docs beyond this entry). Owner
+  consulted in-session via a structured question presenting the two conclave
+  items with their tradeoffs (P1 feature-delivery path with unproven Moshi
+  capture vs P2 measurement session gating height stacking + density taste).
+- **Owner's call: P1 — OSC 52 copy-to-phone, spike-gated opt-in.** P2 (owner-
+  run device measurement session) remains queued immediately after P1.
+
+**Commands + exit codes**
+- `git status --short` clean at `c59fa36` (PR #41 merge) before append; LEDGER
+  append via edit tool.
+- `make check` → rc=0 (docs-only change; canonical check run anyway per
+  evidence-over-assertion).
+- Branch `docs/ledger-p1-pick` → commit → push → PR → required checks watched
+  → merge per protected-main workflow (see final state in next entry, if any).
+
+**Decisions**
+- P1 selected over P2 for the next session; sequencing decision recorded here,
+  not a PLAN.md §11 row (conclave plan lives in LEDGER, advisory record).
+- Spike gate binding: OSC 52 ships only as opt-in, and only if the spike first
+  proves Moshi capture; a failed spike resolves the question with no feature.
+- Unchanged owner decisions still open: compact-density taste call and
+  height-stacking (both gated on the P2 measurement session, still queued);
+  MOSHI_CLIENT=1 manual-profile-only vs alter-defaults; formal confirmation of
+  the wish decline.
+
+**Blockers / open decisions**
+- None new.
+
+**Next action**
+- Fresh session: execute P1 — OSC 52 capture spike (prove/disprove Moshi OSC
+  52 capture; `go-osc52/v2` already indirect). If the spike passes, implement
+  copy-to-phone as spike-gated opt-in; if it fails, record the negative result
+  and close the item. Next task opens in a fresh session per the binding
+  session rule.
