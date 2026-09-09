@@ -176,11 +176,16 @@ func atomicWrite(path string, content []byte, mode os.FileMode, tool, requested 
 // creation, rename, unlink) keep hitting that directory even if its path is
 // renamed or swapped afterwards. Any symlink or missing component — a tree
 // that changed since the canonical path was validated — fails the open.
+// The traversal descriptors are O_PATH (search-only): creating or replacing
+// a known child needs write+search, not directory read, so a wx-only
+// directory (mode e.g. 0300) still traverses — matching the previous
+// os.CreateTemp behavior. The descriptor is used solely as a location for
+// *at() operations, never for I/O, so O_PATH grants everything it needs.
 func openDirChain(dir string) (int, error) {
 	if !filepath.IsAbs(dir) {
 		return -1, fmt.Errorf("directory %q is not absolute (internal error)", dir)
 	}
-	fd, err := unix.Open("/", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	fd, err := unix.Open("/", unix.O_PATH|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 	if err != nil {
 		return -1, fmt.Errorf("open filesystem root: %w", err)
 	}
@@ -192,7 +197,7 @@ func openDirChain(dir string) (int, error) {
 			unix.Close(fd)
 			return -1, errors.New("path contains .. (internal error)")
 		}
-		next, err := unix.Openat(fd, comp, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+		next, err := unix.Openat(fd, comp, unix.O_PATH|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 		unix.Close(fd)
 		if err != nil {
 			if errors.Is(err, unix.ELOOP) {

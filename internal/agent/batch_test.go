@@ -739,3 +739,28 @@ func TestUndoRemoveCreatedFileRejectsAncestorSymlinkSwap(t *testing.T) {
 		t.Errorf("validated created file changed through the swap: %q", got)
 	}
 }
+
+// TestAtomicWriteSucceedsInSearchOnlyDirectory: a workspace directory with
+// write+search but no read permission (mode 0300) allows creating a known
+// child — the previous os.CreateTemp commit path worked there — so the
+// no-follow directory traversal must not impose an additional read
+// requirement. The traversal descriptors are opened search-only (O_PATH),
+// and this pins that a 0300 directory stays writable end to end.
+func TestAtomicWriteSucceedsInSearchOnlyDirectory(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, root, "sub/f", "original\n")
+	sub := filepath.Join(root, "sub")
+	if err := os.Chmod(sub, 0o300); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { // TempDir removal needs read; restore before cleanup
+		_ = os.Chmod(sub, 0o700)
+	})
+
+	if err := atomicWrite(filepath.Join(sub, "f"), []byte("updated\n"), 0o600, "write_file", "sub/f"); err != nil {
+		t.Fatalf("atomicWrite in a search-only directory = %v, want success", err)
+	}
+	if got := readFile(t, root, "sub/f"); got != "updated\n" {
+		t.Errorf("atomicWrite in a search-only directory wrote %q", got)
+	}
+}
