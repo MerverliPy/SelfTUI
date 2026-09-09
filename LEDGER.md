@@ -7324,3 +7324,44 @@ Codex re-review was clean ("Didn't find any major issues. Chef's kiss." on
 **Next action**
 - Nothing queued. main + one unpushed ledger docs commit (this entry) rides the next
   PR. Next task opens in a fresh session.
+
+---
+
+## 2026-09-09 — main↔origin sync: 2 unpushed ledger commits landed via PR #39
+
+**Work done**
+- Owner instruction: "merge with remote origin main". `git fetch origin` showed
+  origin/main had NO new commits (merge = no-op, "Already up to date"); local main was
+  instead ahead by 2 doc-only commits (3b4760e PR #38 ledger entry, 3b07233 branch
+  clean-out entry — the backlog this entry's predecessor predicted).
+- Direct `git push origin main` was rejected by the protected-branch hook (GH006:
+  "Changes must be made through a pull request" + required status check
+  "Go fmt · vet · test · race · vuln · cross-build").
+- Followed the repo PR workflow: branched `docs/ledger-sync` from main, pushed it,
+  opened PR #39 (doc-only: LEDGER.md +73 lines, no code changes).
+- Required check passed (1m6s, Actions run 34302228446). Merged PR #39 with a merge
+  commit, pulled main (fast-forward 3b07233..2ded562), deleted `docs/ledger-sync`
+  locally and on origin.
+- Final verified state: `git status` → "up to date with 'origin/main'", working tree
+  clean; HEAD = 2ded562 ("Merge pull request #39").
+
+**Commands + exit codes**
+- `git fetch origin && git merge origin/main` → "Already up to date" (exit 0).
+- `git push origin main` → remote rejected, GH006 (exit 1).
+- `git checkout -b docs/ledger-sync && git push -u origin docs/ledger-sync` → exit 0.
+- `gh pr create --base main --head docs/ledger-sync …` → https://github.com/MerverliPy/SelfTUI/pull/39 (exit 0).
+- `gh pr checks 39 --watch` → "Go fmt · vet · test · race · vuln · cross-build" pass (1m6s).
+- `gh pr merge 39 --merge` → exit 0; `git pull origin main` → fast-forward to 2ded562.
+- `git branch -d docs/ledger-sync` → exit 0; `git push origin --delete docs/ledger-sync` → exit 0.
+
+**Decisions**
+- Merged with a merge commit (not squash/rebase) to match repo history (PR #38 was
+  merged as a merge commit, 9fb640c).
+- Did not attempt to bypass branch protection; PR route is the mandated path.
+
+**Blockers / open decisions**
+- None.
+
+**Next action**
+- Nothing queued. main + this unpushed ledger docs commit rides the next PR. Next
+  task opens in a fresh session.
