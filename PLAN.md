@@ -6,16 +6,16 @@
 > identically on PC (native terminal) and iPhone 16 Pro (SSH into the host, responsive to
 > narrow screens).
 
-> **Status (2026-09-06):** **v0.1.0 released 2026-09-04** (tag `v0.1.0`);
-> **v0.1.1 audit-remediation hardening in progress** on
-> `fix/v0.1.1-audit-remediation` (§12 has the current next action).
+> **Status (2026-09-09):** **v0.4.0 released 2026-09-08** (latest tag;
+> release history: v0.1.0 2026-09-04, v0.1.1, v0.2.0 2026-09-07,
+> v0.3.0/v0.4.0 2026-09-08 — see `CHANGELOG.md`).
 >
 > **Release-hardening correction (2026-09-04, owner task — phase 7 of the v0.1
 > hardening plan).** The public **v0.1 product contract** is: a **single-process
 > Linux/WSL TUI for Ollama** (native Windows/macOS not supported); **chat is
 > in-memory per process** — the per-process Markdown transcript under the XDG
 > state dir survives exit as an append-only export but **cannot be resumed**
-> (no reload/import path in v0.1); **workspace tools are off by default** and
+> (no reload/import path in v0.1; superseded by V2a `/resume` in v0.2); **workspace tools are off by default** and
 > require an explicitly trusted project workspace root; **command execution is
 > not shipped**; a bearer token on a **non-loopback host requires `https://`**.
 > Planning-era prose above and milestone rows below predate this note: they

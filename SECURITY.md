@@ -2,20 +2,22 @@
 
 ## Supported scope
 
-SelfTUI **v0.1.x** is a single-process Linux/WSL TUI for Ollama — **v0.1.0
-released 2026-09-04**, with **v0.1.1 hardening in progress** (see
-`CHANGELOG.md`). The security-relevant
-boundaries of that release:
+SelfTUI is a single-process Linux/WSL TUI for Ollama — current release
+**v0.4.0** (released 2026-09-08; release history in `CHANGELOG.md`). The
+security-relevant boundaries of the current release:
 
-- chat sessions are **in-memory**; the Markdown transcript export is an
-  append-only file that survives exit but **cannot be resumed**;
+- chat sessions are **in-memory**; every committed turn is mirrored to an
+  append-only Markdown transcript export that survives exit and, since
+  **V2a (v0.2)**, can be **reloaded** in a fresh process with `/resume`
+  (transcript files are written `0600`);
 - workspace tools are **disabled by default** and require an explicitly
   configured project workspace root (`/` and the home directory are rejected
   as roots);
-- v0.1.x has no command execution; v0.2 V2c adds only the sandboxed,
-  allowlisted `run_command` tool when workspace tools are explicitly enabled;
+- command execution exists only as the sandboxed, allowlisted `run_command`
+  tool (added in v0.2 V2c) and only when workspace tools are explicitly
+  enabled; v0.1.x shipped no command execution at all;
 - a bearer token for a **non-loopback host requires `https://`**;
-- native Windows and macOS are **not supported** in v0.1.x.
+- native Windows and macOS are **not supported**.
 
 ## Reporting a vulnerability
 

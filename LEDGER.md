@@ -7439,3 +7439,68 @@ Codex re-review was clean ("Didn't find any major issues. Chef's kiss." on
   SECURITY.md:5-11, docs/reconnect.md:40, PLAN.md header status) + release-
   gate assertion (README status line must equal the latest tag) with
   `make check` green. Next task opens in a fresh session.
+
+## 2026-09-09 — P0 executed: doc-truth sweep + release-gate check (conclave plan item)
+
+**Work done**
+- Executed the P0 step adopted from the conclave entry above, with `make check`
+  green. Documentation truth sweep across the four named targets:
+  - README.md: `**Status:**` line corrected v0.2.0 → **v0.4.0 released
+    2026-09-08** (the LEDGER's "README.md:13" ref was off by one; actual line
+    14); install example `VER=v0.2.0` → `v0.4.0`; two `VERSION=v0.2.0 make
+    release-check` gate examples → `v0.4.0`; release-engineering prose now
+    documents the new README-status requirement.
+  - SECURITY.md supported-scope block rewritten to current truth: current
+    release v0.4.0 (2026-09-08); "transcript cannot be resumed" replaced with
+    the V2a (v0.2) reality — `/resume` reloads a committed transcript in a
+    fresh process, files `0600`; command-execution bullet states the current
+    sandboxed/allowlisted boundary (v0.1.x shipped none).
+  - docs/reconnect.md: "session resume is out of v1 scope" replaced with V2a
+    semantics (committed transcript reloadable via `/resume`; live in-memory
+    state still does not survive).
+  - PLAN.md: header status updated to v0.4.0 (dated 2026-09-09) with the
+    release history; the v0.1 contract block's resume clause notes V2a
+    supersession. PLAN.md:516 "cannot be resumed" left as-is — explicitly a
+    dated historical record, immediately followed by the V2a entry.
+- Release-gate assertion: new `scripts/check-readme-status.sh <VERSION>`
+  (exit 0 match / 1 stale / 2 cannot-check), wired into `scripts/release-
+  check.sh` as step 0b — fails fast after the toolchain pin, before any slow
+  gate and before dist/ is touched. Header invariants + step list updated.
+- Regression coverage: `scripts/release-check-test.sh` fixture README now
+  carries a matching Status line; new cases 1l (stale status → exit 1, dist/
+  never created) and 1m (missing status → exit 2); script existence/syntax
+  check added. Suite grew 52 → 60 checks.
+
+**Commands + exit codes**
+- `scripts/check-readme-status.sh v0.4.0` → ok (rc=0); `v9.9.9` → FAIL
+  naming the drift (rc=1); malformed `0.4.0` → usage error (rc=2).
+- `bash -n` on check-readme-status.sh / release-check.sh /
+  release-check-test.sh → all clean (rc=0).
+- `bash scripts/release-check-test.sh` → "60 checks, 0 failures — PASS".
+- `make check` (build · uncached tests · vet · fmt) → rc=0, all packages ok.
+- Branch `docs/p0-doc-truth` → push → PR → required checks watched → merged
+  per protected-main workflow (see final state below).
+
+**Decisions**
+- Sweep limited to the four conclave-named targets plus directly adjacent
+  versioned examples; historical records (PLAN.md:516, AUDIT.md, CHANGELOG,
+  LEDGER) untouched per consult-and-append discipline.
+- Gate wired into release-check.sh, NOT `make check`: on a release-prep
+  branch the README intentionally announces the not-yet-tagged version, so a
+  latest-tag assertion at `make check` level would false-fail; release-check
+  runs with explicit VERSION on a clean worktree — exactly where the
+  "README status == released version" invariant must hold.
+- Owner decisions from the conclave entry remain open (below); none were
+  resolved here — P0 was doc truth + the gate only.
+
+**Blockers / open decisions**
+- Carried, unchanged: compact-density taste call (after device A/B);
+  MOSHI_CLIENT=1 manual-profile-only vs alter-defaults; formal confirmation
+  of the wish decline; height-stacking only if P2 measurement shows breakage.
+- Unmeasured: Moshi OSC 52 capture, landscape geometry, keyboard-open resize
+  behavior, light-theme contrast parity.
+
+**Next action**
+- Owner picks the next conclave item: P1 (OSC 52 copy-to-phone, spike-gated
+  opt-in) or P2 (owner-run device measurement session gating height work).
+  Next task opens in a fresh session per the binding session rule.

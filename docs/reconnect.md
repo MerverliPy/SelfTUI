@@ -37,7 +37,8 @@ Two reconnect shapes exist, and SelfTUI must be correct under both:
    dies with it and **Ollama aborts the job and frees the slot**. Reconnect =
    relaunch; the config file (`theme`, host, token, agent params) is
    re-applied; chat/scroll state is per-process and does not survive (accepted
-   semantics; session resume is out of v1 scope).
+   semantics; since V2a (v0.2) a committed transcript can be reloaded in the
+   fresh process with `/resume`, though live in-memory state does not survive).
 
 The smoke suite covers **shape 2 deterministically on the host**
 (`make smoke-reconnect`, which simulates the pty-master close → SIGHUP path)
