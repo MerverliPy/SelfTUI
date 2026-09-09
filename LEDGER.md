@@ -7251,3 +7251,38 @@ Codex re-review was clean ("Didn't find any major issues. Chef's kiss." on
 
 **Next action**
 - Owner: optionally trigger `@codex review` for a confirming round 3, then merge.
+
+---
+
+## 2026-09-09 — PR #38 MERGED (9fb640c); local main synced — audit-squad c1+c2 landed
+
+**Work done**
+- Owner instruction: merge the PR. Pre-merge verification: state OPEN,
+  mergeStateStatus CLEAN (no protection block), head `ab45592`, CI PASS on the final
+  head (run 34293732103). Merged with a merge commit — deliberately not squash/rebase
+  so the two audit-squad merge commits (`64b82d3`, `4fa7636`) stay in history and local
+  main can fast-forward.
+- `gh pr merge 38 --merge` → **9fb640c**, state MERGED (exit 0). Landing branch kept on
+  origin per repo convention (precedent: `landing/audit-squad-ca-cb` persists post-#25).
+- `git checkout main && git pull --ff-only` → 27cd82c..9fb640c fast-forward, verified
+  27cd82c is an ancestor; local main == origin/main, working tree clean.
+- Landed content: c1 perf (incremental token accounting) + c2 security (fail-closed
+  symlink-swap writes) + review rounds 1–2 fixes (removeNoFollow undo, temp unlink,
+  O_PATH search-only traversal) + ledger entries, all gate-verified at every step.
+
+**Commands + exit codes**
+- `gh pr view 38 …` pre-check → MERGEABLE/CLEAN (exit 0); `gh pr checks 38` → pass.
+- `gh pr merge 38 --merge` → 9fb640c (exit 0); `git pull --ff-only` → clean ff (exit 0).
+- This ledger commit is local-only (origin/main advances via PRs — no direct push).
+
+**Decisions**
+- Merge commit method; no origin branch deletion (convention).
+- Local main now carries one unpushed docs commit (this entry) riding the next PR.
+
+**Blockers / open decisions**
+- None. Packet caveats (c1 not formally benchmarked; c2 irreducible FS-race edges)
+  remain attached to the landed code, now also recorded in PR #38's description.
+
+**Next action**
+- Nothing queued. Optional owner cleanup: delete `landing/audit-squad-c1-c2` on origin
+  (or keep per convention). Next task opens in a fresh session.
