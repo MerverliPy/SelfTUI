@@ -472,10 +472,13 @@ func (j *UndoJournal) checkPostLocked(e *undoEntry) error {
 }
 
 // revertFileLocked restores one file to its pre-image, or removes a file the
-// mutation created.
+// mutation created. The removal goes through removeNoFollow (the batch
+// rollback primitive): an ancestor swapped to a symlink since the journal
+// commit fails the undo closed instead of deleting through the redirected
+// path (final-component ENOENT stays tolerated — the removal is idempotent).
 func (j *UndoJournal) revertFileLocked(f *FileRecord) error {
 	if !f.Existed {
-		err := os.Remove(f.Path)
+		err := removeNoFollow(f.Path)
 		if err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("undo: remove %s: %w", f.Requested, err)
 		}

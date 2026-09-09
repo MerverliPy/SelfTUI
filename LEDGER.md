@@ -6979,3 +6979,275 @@ Codex re-review was clean ("Didn't find any major issues. Chef's kiss." on
 - Open release PR → CI green → merge → pull main → signed tag `v0.4.0` →
   push → verify `release.yml` SUCCESS + assets (hashes, stamps). Post-tag
   LEDGER addendum + PLAN §12 tick ride the next PR.
+
+**v0.4.0 tagged + published (2026-09-08, same session — post-tag addendum):**
+- `git tag -s v0.4.0 -m "SelfTUI v0.4.0"` on PR #37's merge commit `d11ed63`
+  (tag.gpgsign local config + `user.signingkey 5F74A36F7B5C1670`);
+  `git verify-tag v0.4.0` → **Good signature** (EDDSA); tag pushed.
+- `release.yml` run `34286416628` → **success** (GPG signature verified at the
+  tag, full release gate re-run, version-stamp cross-check tag↔binaries).
+- Release **SelfTUI v0.4.0** published (non-draft, 2026-09-08T22:33:26Z) with
+  `selftui-v0.4.0-linux-amd64.tar.gz`, `selftui-v0.4.0-linux-arm64.tar.gz`,
+  `SHA256SUMS`.
+- Parent verification (fresh download to `/tmp/v040-verify`):
+  `sha256sum -c SHA256SUMS` → both **OK**; extracted amd64 binary
+  `./selftui -version` → `selftui v0.4.0`; release notes body extracted from
+  the CHANGELOG `[0.4.0]` section (release.yml awk extractor).
+- CI on PR #37: required check PASSED (53s). Branch `release/v0.4.0` kept
+  (auditable history, #35/#36 precedent).
+- This PLAN/LEDGER docs commit rides the next PR (branch protection: no direct
+  main pushes).
+- **Next session backlog (owner picks, fresh session):** F-11 cmd coverage
+  (low, optional per AUDIT.md) · §11 risk #5 Ollama job serialization decision
+  · post-release N-series sequencing if the owner prefers feature work.
+
+---
+
+## 2026-09-08 — audit-squad run `as-20260908-175037` (deterministic multi-agent audit)
+
+**Work done**
+- Executed the audit-squad skill end-to-end against main @ `81273ed`: preflight (9/9
+  canonical checks green at baseline) → 2 independent discovery lanes → adversarial
+  critique (2 major anchored critiques, both parent-verified, both dispositioned fixed)
+  → 2 engineering lanes in isolated clones → deterministic sandbox judge.
+- Judge verdicts: **PASS | PASS** (18/18 checks, 0 discipline findings). Candidate
+  branches fetched into this repo as refs — **nothing merged, nothing pushed**:
+  - `audit-squad/c1` @ `4afeaf7` — perf: incremental token accounting in
+    `BudgetMessages` (+366/−33, differential reference tests + benchmark).
+  - `audit-squad/c2` @ `8527d23` — security: fail-closed writes under symlink swaps
+    in `atomicWrite` (openat/no-follow; ancestor+final swap regression tests;
+    stash-verified test teeth) (+215/−13).
+
+**Commands + exit codes**
+- Baseline + judge runs: `make fmt/vet/test/race/vuln`, `go mod verify`, release
+  builds, `secret-scan`, `actionlint` — all exit 0 at base and on both candidates
+  (evidence: `/tmp/audit-squad-as-20260908-175037/judge-*.json`, `logs/`).
+- Parent validation after engineering: schema validators, `HEAD^ == 81273ed`,
+  diff ⊆ scope, protected-path + test-deletion scans — all clean;
+  `git -C /home/calvin/SelfTUI status --porcelain` → empty (0 dirty paths).
+
+**Decisions / lines to respect**
+- Infra adaptation (recorded in preflight `isolation.notes`): baseline/candidate dirs
+  are self-contained **full clones**, not linked worktrees — the bwrap-sandboxed
+  `TestRunCommandAllowsReadOnlyGit` cannot resolve worktree `.git` files or shared
+  alternates (exit 128). Adaptation restored behavioral gating; no rule weakened.
+- Discovery Lane A's runner status was `failed` (missing `structured_output` protocol
+  call) but its complete artifact was recovered and passed all deterministic gates —
+  provenance flagged in the packet and manifest.
+- LEDGER/PLAN/AGENTS/COUNCIL-MEMO were enforced as protected paths throughout.
+
+**Blockers / open decisions**
+- Owner decisions pending (OD1/OD3/OD4 — human merges, value is the human's call):
+  review `/tmp/audit-squad-as-20260908-175037/HUMAN-REVIEW.md`, then
+  `git merge audit-squad/c1` and/or `git merge audit-squad/c2`, or discard.
+
+**Next action**
+- Owner: review the packet and merge or discard the two candidate branches. This
+  docs commit rides the next PR (branch protection: no direct main pushes).
+
+---
+
+## 2026-09-08 — owner decision on packet `as-20260908-175037` (merge c1 + c2, keep local)
+
+**Work done**
+- Orchestrator session (DIRECT triage, zero agents): read the canonical human-review
+  packet `/tmp/audit-squad-as-20260908-175037/HUMAN-REVIEW.md` (located via ledger
+  cross-reference; no repo-local copy exists; two older packets superseded), and
+  verified its branch claims against the repo before the decision was taken.
+- Interactive owner questionnaire on the packet's pending decisions
+  (c1 merge/discard, c2 merge/discard, landing, execution mode).
+
+**Commands + exit codes**
+- `fd -H -I 'HUMAN-REVIEW'` (repo: none; /tmp + ~/.pi + ~/.agents: 3 audit-squad
+  packets) → located; `diff -q` newest vs older packets → differ (exit 1,
+  informational — confirmed newest is canonical via ledger tail).
+- `git branch -v --list 'audit-squad/*'` → `audit-squad/c1 4afeaf7`,
+  `audit-squad/c2 8527d23` (exit 0; SHAs match the packet exactly).
+- `git status --porcelain` → empty before append (exit 0).
+
+**Decisions (owner, 2026-09-08, via questionnaire)**
+- c1 perf (`audit-squad/c1` @ `4afeaf7`): **MERGE**.
+- c2 security (`audit-squad/c2` @ `8527d23`): **MERGE**.
+- Landing: **keep local** — nothing pushed to origin (repo convention; owner pushes later).
+- Execution: **fresh session** per one-step-per-session governance — the merges +
+  canonical gates run in a new session; this LEDGER append stays uncommitted and
+  rides the next PR (branch protection: no direct main pushes).
+
+**Blockers / open decisions**
+- None from this session. Packet caveats remain attached to the candidates: c1's
+  speedup is not formally benchmarked (differential tests pin semantics only);
+  c2's FS-race hardening has irreducible edge cases (mount points, multi-actor swaps).
+
+**Next action**
+- Fresh session (cwd = repo root): `git merge audit-squad/c1` then
+  `git merge audit-squad/c2` (disjoint diffs — order not load-bearing), run the full
+  canonical gate from real output, keep both branches per convention, do not push,
+  and record the merged SHAs in the handoff.
+
+---
+
+## 2026-09-08 — merges executed: audit-squad/c1 + c2 → main; gate PASSED (owner task)
+
+**Work done**
+- Orchestrator session (DIRECT triage, zero agents — merges + canonical gate are
+  parent-local sequential work with one writer). Read both candidate diffs in full
+  before merging: c1 = incremental token accounting in `BudgetMessages`/`boundToLimit`
+  (running totals replace rescan-sums; internal signatures only; +297 lines of
+  differential tests); c2 = descriptor-relative write hardening (`openDirChain`
+  O_NOFOLLOW walk, fd-relative `renameat`, final-component `fstatat(AT_SYMLINK_NOFOLLOW)`
+  re-check, `removeNoFollow` for rollback; imports `golang.org/x/sys/unix` — verified
+  already a direct requirement in go.mod, no dependency drift).
+- Pre-merge overlap check: zero files shared between the two diffs → conflict-free.
+- Merged c1 then c2 into main (ort strategy, no conflicts); kept both branches at
+  their original SHAs; nothing pushed to origin (owner pushes later per convention).
+
+**Commands + exit codes**
+- `git diff --stat main...audit-squad/c{1,2}` + `comm -12` overlap check → disjoint (exit 0).
+- `git show audit-squad/c2:go.mod | rg x/sys` → `golang.org/x/sys v0.47.0` present (exit 0).
+- `git merge --no-edit audit-squad/c1` → merge commit `64b82d3` (exit 0).
+- `git merge --no-edit audit-squad/c2` → merge commit `4fa7636` (exit 0).
+- `make check` (build + test -count=1 + vet + fmt) → exit 0; all pkgs `ok`,
+  internal/agent 8.744s (new c1/c2 tests included), internal/ui 7.770s.
+- `make race` (`go test -race -count=1 ./...`) → exit 0; all pkgs `ok`.
+- `git branch -v --list 'audit-squad/*'` → c1 @ `4afeaf7`, c2 @ `8527d23` unchanged (exit 0).
+- Final state: main ahead of origin/main by 6 commits (2 prior docs + 2 branch heads
+  + 2 merge commits); working tree clean after this entry's commit.
+
+**Decisions**
+- Merge order as instructed: c1 then c2 (diffs disjoint, order not load-bearing).
+- This LEDGER commit lands on local main (precedent `59b897c`): local commits are not
+  pushes, branch protection bars only direct origin/main pushes, and the prior session's
+  uncommitted append (2026-09-08 questionnaire entry) is preserved verbatim by sweeping
+  it into this docs commit rather than left dangling on a dirty tree.
+
+**Blockers / open decisions**
+- None. Packet caveats carry forward unchanged: c1 speedup not formally benchmarked
+  (differential tests pin semantics); c2 FS-race hardening keeps irreducible edge cases
+  (mount points, multi-actor swaps).
+
+**Next action**
+- Owner: push the 6 local main commits via the next PR (no direct origin/main push),
+  then delete the audit-squad/c1 + c2 branches once origin confirms; nothing further
+  queued from this session.
+
+---
+
+## 2026-09-08 — landing PR #38 opened: c1+c2 → origin/main via landing/audit-squad-c1-c2
+
+**Work done**
+- Same-session continuation on explicit owner instruction (confirmed via questionnaire:
+  landing branch + PR via gh; delete candidate branches now; leave PR open for owner
+  review). Pushed `landing/audit-squad-c1-c2` (7 commits: 2 prior docs + 2 branch
+  heads + 2 merges + 1 docs) — no direct origin/main push at any point.
+- Opened **PR #38** (https://github.com/MerverliPy/SelfTUI/pull/38): perf(agent) c1
+  incremental token accounting + fix(agent) c2 symlink-swap fail-closed writes, with
+  gate evidence and packet caveats in the body.
+- Safe-deleted both candidate branches (`git branch -d` — verified merged):
+  `audit-squad/c1` (was `4afeaf7`) and `audit-squad/c2` (was `8527d23`); commits stay
+  reachable via merge commits `64b82d3` / `4fa7636` and via this PR branch.
+- This LEDGER entry is committed on the PR branch, per the convention that ledger
+  appends ride the next PR.
+
+**Commands + exit codes**
+- `gh auth status` → logged in as MerverliPy, repo scope (exit 0).
+- `git fetch origin` + `git rev-list --left-right --count origin/main...main` → 0/7
+  (origin unmoved; clean PR).
+- `git checkout -b landing/audit-squad-c1-c2 main` + `git push -u origin …` → exit 0.
+- `gh pr create --base main --head landing/audit-squad-c1-c2 …` → PR #38 (exit 0).
+- `git branch -d audit-squad/c1 audit-squad/c2` → both deleted (exit 0).
+
+**Decisions**
+- PR left open for owner review/merge (repo convention; no auto-merge).
+- Local `main` remains at `27cd82c`; after #38 merges, fast-forward local main from
+  origin — do not re-merge or squash (history includes the two audit-squad merge
+  commits).
+
+**Blockers / open decisions**
+- None.
+
+**Next action**
+- Owner: review + merge PR #38, then `git pull --ff-only` on local main; the landing
+  branch can be deleted on origin after merge (owner click).
+
+---
+
+## 2026-09-08 — PR #38 review round 1: Codex P1+P2 fixed (1817191, 12ee387)
+
+**Work done**
+- Monitored the PR's first Codex review (running → completed 23:43:41Z on `27cd82c`);
+  two findings, both against c2's hardening, both verified against the code before
+  planning. Owner instruction: critically plan each fix, validate, verify the mapping
+  to the reviewer's exact ask.
+- **P1 (journal escape):** `revertFileLocked` removed created files with `os.Remove`,
+  so an ancestor swapped to a symlink after the commit could pass `checkPostLocked` on
+  an outside copy carrying the recorded post content and then delete the outside file.
+  Fixed by routing the removal through `removeNoFollow` (batch rollback's primitive);
+  `1817191` + TDD regression `TestUndoRemoveCreatedFileRejectsAncestorSymlinkSwap`
+  (proven red on the old code). Entry stays on the undo stack on refusal; ENOENT stays
+  tolerated; partial-undo retry covered via the shared function. TDD surfaced a
+  platform errno note: O_NOFOLLOW|O_DIRECTORY on a symlink = ELOOP (darwin) but
+  ENOTDIR (linux) — both fail closed; test accepts either.
+- **P2 (temp leak):** `createTempInDir`'s Fchmod-failure branch returned without
+  unlinking the created temp file (name never reached the caller's cleanup). Fixed
+  best-effort in-branch (`12ee387`); not unit tested — no injectable failure without a
+  production seam a 2-line fix doesn't justify (documented in the commit).
+- Out-of-scope review notes: journal-internal `os.RemoveAll` sites (170/271/352) are
+  state-dir hygiene under `j.dir`, not workspace paths; `checkPostLocked` still reads
+  via followed paths, but the removal now fails closed so no escape is possible.
+
+**Commands + exit codes**
+- `go test ./internal/agent -run TestUndoRemoveCreatedFileRejectsAncestorSymlinkSwap`
+  → FAIL pre-fix (red: undo deleted the outside file), PASS post-fix.
+- `make check` → exit 0; `make race` → exit 0 (all 8 packages ok, real output).
+- 2 fix commits + push to `landing/audit-squad-c1-c2` → PR #38 updated.
+
+**Decisions**
+- Fixes scoped exactly to the reviewer's asks; no drive-by hardening of the guard's
+  read side or the journal state-dir cleanup.
+
+**Blockers / open decisions**
+- None. CI re-runs on the new head; owner may trigger `@codex review` for round 2.
+
+**Next action**
+- Owner: review the two fix commits on PR #38; merge when satisfied.
+
+---
+
+## 2026-09-09 — PR #38 review round 2: Codex O_PATH finding fixed (b1095d6)
+
+**Work done**
+- Independent fresh-context `reviewer` pass over the round-1 fix commits (a140ecb..
+  12ee387): clean on all four axes (correctness, regressions, test adequacy, P2 unlink
+  hazards) — merge verdict OK; claims cross-checked against the parent's own mapping.
+- Triggered `@codex review` (round 2) per owner instruction; monitored to completion
+  (~2.5 min on `f716f81`). One new finding:
+- **Round-2 P2 (search-only traversal):** `openDirChain` opened components with
+  O_RDONLY|O_DIRECTORY — requiring directory READ — so a workspace dir granting
+  write+search only (mode 0300) rejected every mutation as "path changed since
+  validation", where the old os.CreateTemp path succeeded. Verified the premise
+  (securePath/secureWritePath resolve via EvalSymlinks/Lstat = search-only, so
+  validation passed and the regression was real). Fixed with O_PATH|O_DIRECTORY|
+  O_NOFOLLOW on both traversal opens (`b1095d6`): audited every downstream dirfd use
+  (fstatat / openat O_CREAT / renameat / unlinkat — all name-based, no fd I/O), so
+  pinning + no-follow semantics are unchanged. TDD red (EACCES reproduced verbatim)
+  → green; mode restored in test cleanup; noted O_PATH is Linux-specific (repo
+  targets are Linux-only).
+- Round-1 mapping and gate re-verified: `make check` exit 0, `make race` exit 0; P1
+  regression test still green.
+
+**Commands + exit codes**
+- `gh pr comment 38 --body "@codex review"` → round-2 trigger (exit 0).
+- Bounded poll loop → reviews 1→2, inline 2→3, summary updated at poll 3.
+- `go test ./internal/agent -run TestAtomicWriteSucceedsInSearchOnlyDirectory` →
+  FAIL pre-fix (EACCES), PASS post-fix; full `make check` + `make race` exit 0.
+- Commit `b1095d6` + this docs commit pushed → PR #38 (10 commits).
+
+**Decisions**
+- No round-3 auto-trigger: each Codex round costs owner quota; fix is TDD-pinned and
+  gate-verified, so the owner decides whether to run a confirming re-review.
+
+**Blockers / open decisions**
+- None.
+
+**Next action**
+- Owner: optionally trigger `@codex review` for a confirming round 3, then merge.
