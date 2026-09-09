@@ -7210,3 +7210,44 @@ Codex re-review was clean ("Didn't find any major issues. Chef's kiss." on
 
 **Next action**
 - Owner: review the two fix commits on PR #38; merge when satisfied.
+
+---
+
+## 2026-09-09 — PR #38 review round 2: Codex O_PATH finding fixed (b1095d6)
+
+**Work done**
+- Independent fresh-context `reviewer` pass over the round-1 fix commits (a140ecb..
+  12ee387): clean on all four axes (correctness, regressions, test adequacy, P2 unlink
+  hazards) — merge verdict OK; claims cross-checked against the parent's own mapping.
+- Triggered `@codex review` (round 2) per owner instruction; monitored to completion
+  (~2.5 min on `f716f81`). One new finding:
+- **Round-2 P2 (search-only traversal):** `openDirChain` opened components with
+  O_RDONLY|O_DIRECTORY — requiring directory READ — so a workspace dir granting
+  write+search only (mode 0300) rejected every mutation as "path changed since
+  validation", where the old os.CreateTemp path succeeded. Verified the premise
+  (securePath/secureWritePath resolve via EvalSymlinks/Lstat = search-only, so
+  validation passed and the regression was real). Fixed with O_PATH|O_DIRECTORY|
+  O_NOFOLLOW on both traversal opens (`b1095d6`): audited every downstream dirfd use
+  (fstatat / openat O_CREAT / renameat / unlinkat — all name-based, no fd I/O), so
+  pinning + no-follow semantics are unchanged. TDD red (EACCES reproduced verbatim)
+  → green; mode restored in test cleanup; noted O_PATH is Linux-specific (repo
+  targets are Linux-only).
+- Round-1 mapping and gate re-verified: `make check` exit 0, `make race` exit 0; P1
+  regression test still green.
+
+**Commands + exit codes**
+- `gh pr comment 38 --body "@codex review"` → round-2 trigger (exit 0).
+- Bounded poll loop → reviews 1→2, inline 2→3, summary updated at poll 3.
+- `go test ./internal/agent -run TestAtomicWriteSucceedsInSearchOnlyDirectory` →
+  FAIL pre-fix (EACCES), PASS post-fix; full `make check` + `make race` exit 0.
+- Commit `b1095d6` + this docs commit pushed → PR #38 (10 commits).
+
+**Decisions**
+- No round-3 auto-trigger: each Codex round costs owner quota; fix is TDD-pinned and
+  gate-verified, so the owner decides whether to run a confirming re-review.
+
+**Blockers / open decisions**
+- None.
+
+**Next action**
+- Owner: optionally trigger `@codex review` for a confirming round 3, then merge.
