@@ -7251,3 +7251,76 @@ Codex re-review was clean ("Didn't find any major issues. Chef's kiss." on
 
 **Next action**
 - Owner: optionally trigger `@codex review` for a confirming round 3, then merge.
+
+---
+
+## 2026-09-09 — PR #38 MERGED (9fb640c); local main synced — audit-squad c1+c2 landed
+
+**Work done**
+- Owner instruction: merge the PR. Pre-merge verification: state OPEN,
+  mergeStateStatus CLEAN (no protection block), head `ab45592`, CI PASS on the final
+  head (run 34293732103). Merged with a merge commit — deliberately not squash/rebase
+  so the two audit-squad merge commits (`64b82d3`, `4fa7636`) stay in history and local
+  main can fast-forward.
+- `gh pr merge 38 --merge` → **9fb640c**, state MERGED (exit 0). Landing branch kept on
+  origin per repo convention (precedent: `landing/audit-squad-ca-cb` persists post-#25).
+- `git checkout main && git pull --ff-only` → 27cd82c..9fb640c fast-forward, verified
+  27cd82c is an ancestor; local main == origin/main, working tree clean.
+- Landed content: c1 perf (incremental token accounting) + c2 security (fail-closed
+  symlink-swap writes) + review rounds 1–2 fixes (removeNoFollow undo, temp unlink,
+  O_PATH search-only traversal) + ledger entries, all gate-verified at every step.
+
+**Commands + exit codes**
+- `gh pr view 38 …` pre-check → MERGEABLE/CLEAN (exit 0); `gh pr checks 38` → pass.
+- `gh pr merge 38 --merge` → 9fb640c (exit 0); `git pull --ff-only` → clean ff (exit 0).
+- This ledger commit is local-only (origin/main advances via PRs — no direct push).
+
+**Decisions**
+- Merge commit method; no origin branch deletion (convention).
+- Local main now carries one unpushed docs commit (this entry) riding the next PR.
+
+**Blockers / open decisions**
+- None. Packet caveats (c1 not formally benchmarked; c2 irreducible FS-race edges)
+  remain attached to the landed code, now also recorded in PR #38's description.
+
+**Next action**
+- Nothing queued. Optional owner cleanup: delete `landing/audit-squad-c1-c2` on origin
+  (or keep per convention). Next task opens in a fresh session.
+
+---
+
+## 2026-09-09 — branch clean-out: 31 remote + 7 local merged branches deleted
+
+**Work done**
+- Owner instruction: branch clean-out. Evidence-first: classified every branch against
+  `origin/main` — ALL 31 remote and ALL 7 local (non-main) branches fully merged; zero
+  unmerged branches anywhere (`--no-merged` empty on both sides). Cross-checks: no open
+  PRs, GitHub-side branch list == tracking refs (32 = main + 31, no drift), and the
+  five release tags (v0.1.0–v0.4.0) pin release points independently of branches.
+- Owner confirmed scope via questionnaire: all 31 remote + all 7 local.
+- Deleted local set with `git branch -d` (safe-delete refuses if unmerged — none
+  refused): docs/f07-stale-line-closeout, docs/ledger-audit-residue-closeout,
+  docs/v2e-design-gate, feat/v2e-batch-undo, fix/v2e-residual-hardening,
+  landing/audit-squad-c1-c2, release/v0.4.0.
+- Deleted the 31 remote branches in one `git push origin --delete` (list generated
+  programmatically from `git branch -r --merged origin/main`, excluding main/HEAD — no
+  hand-typed names), then `git fetch --prune`.
+- Final verified state: local `git branch -a` → `main` + `origin/main` only; GitHub API
+  branch list → `main` only. All deleted commits remain reachable via origin/main
+  history (every branch was an ancestor).
+
+**Commands + exit codes**
+- `git branch -d <7>` → all deleted (exit 0); `git push origin --delete <31>` → exit 0.
+- `git fetch --prune` → clean; `gh api …/branches` → `["main"]`.
+
+**Decisions**
+- Release branches (v0.2.0, v0.4.0) deleted too — owner-confirmed; tags pin the
+  releases. Landing branches deleted (also owner-confirmed; supersedes the older
+  "keep per convention" note — convention updated by owner decision).
+
+**Blockers / open decisions**
+- None.
+
+**Next action**
+- Nothing queued. main + one unpushed ledger docs commit (this entry) rides the next
+  PR. Next task opens in a fresh session.
