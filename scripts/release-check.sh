@@ -9,6 +9,9 @@
 #
 # Invariants:
 #   * VERSION must match v<major>.<minor>.<patch> (no prerelease/build suffix).
+#   * README.md's bold `Status:` line must announce exactly $VERSION - the
+#     README must never ship announcing a stale release (P0 doc-truth gate,
+#     2026-09-09; enforced via scripts/check-readme-status.sh).
 #   * The git worktree must be clean - nothing staged, unstaged, or
 #     untracked. Ignored build artifacts (bin/, dist/) don't count, so the
 #     gate runs on exactly the commit that would be tagged.
@@ -29,6 +32,9 @@
 # Steps, in order:
 #   0. toolchain pin               go 1.27.1 + same-distribution gofmt +
 #                                  govulncheck v1.7.0 all on PATH
+#   0b. README status gate         README.md's `Status:` line must announce
+#                                  exactly $VERSION (doc truth; instant, so
+#                                  it still fails fast before any slow gate)
 #   1. go mod verify                 module graph + go.sum integrity
 #   2. gofmt check                   no file needs formatting
 #   3. go vet ./...                  static analysis
@@ -123,6 +129,13 @@ if ! command -v strings >/dev/null 2>&1; then
   exit 2
 fi
 echo "== toolchain pin: go ${want_go} + same-distribution gofmt + govulncheck ${want_govuln} =="
+
+# --- 0b. README status gate (P0 doc truth, 2026-09-09) ----------------------
+# The README must never ship announcing a stale release: its bold Status:
+# line has to name exactly the version being tagged. Instant check, so it
+# still fails fast before any slow gate and before dist/ is touched.
+echo "== README status gate =="
+scripts/check-readme-status.sh "$VERSION"
 
 # dist/ is owned by this gate: start from a fresh, empty artifact dir so no
 # stale file can leak into the archives or the checksum manifest.

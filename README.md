@@ -11,7 +11,7 @@ terminal on Linux (or Windows Subsystem for Linux), or over SSH from a phone
 (Moshi, Blink, Termius, …) into that host, and the layout adapts to narrow
 windows. Native Windows and native macOS are **not supported** in v0.1.
 
-**Status: v0.2.0 released 2026-09-07** (signed-tag policy enforced for future
+**Status: v0.4.0 released 2026-09-08** (signed-tag policy enforced for future
 `v*` releases; see `CHANGELOG.md`). The Models tab lists live
 models from the Ollama host (`/api/tags`) with selection + an inspect pane
 (`/api/show`): key facts, parameters, template, modelfile, model info,
@@ -31,7 +31,7 @@ Grab the archive for your architecture from the
 it against `SHA256SUMS`, and run it:
 
 ```sh
-VER=v0.2.0    # always check the releases page for the latest tag
+VER=v0.4.0    # always check the releases page for the latest tag
 ARCH=amd64    # arm64 hosts (e.g. Raspberry Pi): ARCH=arm64
 curl -LO "https://github.com/MerverliPy/SelfTUI/releases/download/${VER}/selftui-${VER}-linux-${ARCH}.tar.gz"
 curl -LO "https://github.com/MerverliPy/SelfTUI/releases/download/${VER}/SHA256SUMS"
@@ -182,12 +182,14 @@ Release binaries are static, CGO-disabled Linux builds stamped with a version
 ```sh
 make build-linux-amd64                     # dist/selftui-linux-amd64
 make build-linux-arm64                     # dist/selftui-linux-arm64
-VERSION=v0.2.0 make release-check          # the full gate; never tags
+VERSION=v0.4.0 make release-check          # the full gate; never tags
 ```
 
-`scripts/release-check.sh` (`VERSION=v0.2.0 make release-check`) is the gate
+`scripts/release-check.sh` (`VERSION=v0.4.0 make release-check`) is the gate
 a release must pass before the owner tags it. It requires a clean worktree,
-a `VERSION` of the form `v<major>.<minor>.<patch>`, and the enforced
+a `VERSION` of the form `v<major>.<minor>.<patch>`, README.md's `Status:`
+line to announce exactly `VERSION` (doc-truth gate, 2026-09-09: the README
+must never ship announcing a stale release), and the enforced
 toolchain pin above (fails fast, before any gate work, if go/gofmt/
 govulncheck do not match the documented versions). It then runs `go mod
 verify`, the gofmt check, `go vet`, uncached tests, race tests,

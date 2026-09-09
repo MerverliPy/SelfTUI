@@ -144,9 +144,10 @@ make_repo() {
   mkdir -p "$d/scripts"
   cp scripts/release-check.sh "$d/scripts/release-check.sh"
   cp scripts/verify-binary-version.sh "$d/scripts/verify-binary-version.sh"
+  cp scripts/check-readme-status.sh "$d/scripts/check-readme-status.sh"
   cp Makefile "$d/Makefile"
   printf 'SelfTUI fixture license text\n' > "$d/LICENSE"
-  printf '# Fixture README\n\nfixture content for the deterministic archive\n' > "$d/README.md"
+  printf '# Fixture README\n\n**Status: v0.1.1 released 2026-09-09**\n\nfixture content for the deterministic archive\n' > "$d/README.md"
   printf 'module fixture\n\ngo 1.25.8\n\ntoolchain go1.27.1\n' > "$d/go.mod"
   printf '/dist/\n/bin/\n' > "$d/.gitignore"
   git -C "$d" init -q
@@ -204,6 +205,13 @@ if [[ -f "$script" ]] && [[ -x "$script" ]] && bash -n "$script"; then
   pass "release-check.sh exists, is executable, and bash -n is clean"
 else
   fail "release-check.sh missing / not executable / syntax error"
+fi
+
+status_script="scripts/check-readme-status.sh"
+if [[ -f "$status_script" ]] && [[ -x "$status_script" ]] && bash -n "$status_script"; then
+  pass "check-readme-status.sh exists, is executable, and bash -n is clean"
+else
+  fail "check-readme-status.sh missing / not executable / syntax error"
 fi
 
 # The canonical good toolchain and fixture repo, shared by the fail-fast cases.
@@ -303,6 +311,29 @@ expect_grep "govulncheck v1.7.1: rejected" "$r_out" "release gates need exactly 
 run_gate "$repo" "$full_path" 0022 GOVULN_VER_LINE="govulncheck: unknown flag; usage: govulncheck [flags] ./..."
 if [[ $r_rc -eq 2 ]]; then pass "govulncheck no version token: exits 2"; else fail "govulncheck no version token: rc=$r_rc (want 2)"; fi
 expect_grep "govulncheck no version token: output echoed" "$r_out" "govulncheck -version' output was"
+
+# 1l. stale README status fails fast, before slow gates (P0 doc-truth gate).
+repo="$base/r-stale-status"
+make_repo "$repo"
+printf '# Fixture README\n\n**Status: v0.1.0 released 2026-09-01**\n\nstale fixture content\n' > "$repo/README.md"
+git -C "$repo" add -A
+git -C "$repo" -c user.name=release-test -c user.email=release-test@example.invalid commit -qm "stale status"
+run_gate "$repo" "$full_path" 0022
+if [[ $r_rc -eq 1 ]]; then pass "stale README status: exits 1"; else fail "stale README status: rc=$r_rc (want 1)"; fi
+expect_grep "stale README status: names the drift" "$r_out" "status announces 'v0.1.0', want 'v0.1.1'"
+expect_grep "stale README status: update hint" "$r_out" "update the Status line"
+if [[ ! -e "$repo/dist" ]]; then pass "stale README status: dist/ never created"; else fail "stale README status: dist/ was created before the doc gate"; fi
+
+# 1m. README with no Status line cannot pass the doc gate.
+repo="$base/r-no-status"
+make_repo "$repo"
+printf '# Fixture README\n\nfixture content without a status line\n' > "$repo/README.md"
+git -C "$repo" add -A
+git -C "$repo" -c user.name=release-test -c user.email=release-test@example.invalid commit -qm "no status"
+run_gate "$repo" "$full_path" 0022
+if [[ $r_rc -eq 2 ]]; then pass "missing README status: exits 2"; else fail "missing README status: rc=$r_rc (want 2)"; fi
+expect_grep "missing README status: explains" "$r_out" "expected exactly one"
+if [[ ! -e "$repo/dist" ]]; then pass "missing README status: dist/ never created"; else fail "missing README status: dist/ was created before the doc gate"; fi
 
 # --- 2. correct toolchain: the gate runs to a stubbed PASS in the fixture ---
 repo="$base/r-good"
