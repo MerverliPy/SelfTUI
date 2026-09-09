@@ -7365,3 +7365,77 @@ Codex re-review was clean ("Didn't find any major issues. Chef's kiss." on
 **Next action**
 - Nothing queued. main + this unpushed ledger docs commit rides the next PR. Next
   task opens in a fresh session.
+
+## 2026-09-09 — conclave council: repo critique + next-level plan (owner-invoked)
+
+**Work done**
+- Same session earlier: owner-requested 3-lane research report on the
+  Moshi/iPhone 16 Pro remote-hosted TUI (research-only, no repo edits; artifacts
+  under session subagent-artifacts outputs `0f5709d8`/`f83e05fb`).
+- Owner invoked the conclave skill (`~/.agents/skills/conclave/SKILL.md`):
+  critically analyze SelfTUI (strengths/weaknesses/visual) + brainstorm the
+  next-level plan. Roster: `council-architect`, `council-operator`,
+  `council-skeptic` (all fresh, read-only). Pass cap 2. No blind lane (subject
+  is repo-level, not a diff). Per-lane budget soft 10 / hard 18 tools, 600 s.
+- Pass 1 (independent): 3/3 completed. Parent claim matrix + hand-checks
+  (tests-for-verifications) verified: `README.md:13` status "v0.2.0" vs tags
+  v0.1.0..v0.4.0; `SECURITY.md:6` "v0.1.1 hardening in progress" + `:11`
+  transcripts "cannot be resumed" (false since V2a); `docs/reconnect.md:40`
+  "resume out of v1 scope"; `go.mod:24` go-osc52/v2 indirect;
+  `internal/ui/agent_view.go` measured 999 lines/20 funcs — AUDIT F-07's
+  3,483/132 figure is STALE (split landed 2026-09-08: agent_
+  composer/menu/paint/session/tools_display/transcript/undo all <1k);
+  `styles.go` palette 63/245/214/57/88 confirmed; `layout.go`
+  BreakpointFor/ForModels width-only confirmed.
+- Pass 2 (cross-exam): architect + skeptic resumed by key, both changed their
+  recommendations. Operator resume FAILED at launch validation (read-only
+  allowlist vs implementation-class task classification) → fresh-context
+  fallback re-run with its Pass 1 report + packet (labeled fallback, not true
+  cross-exam); completed.
+- CONVERGED at pass cap. Conclave memo delivered in-session (advisory record,
+  not a repo file). Converged plan: **P0** doc-truth sweep + release-gate
+  check (README/SECURITY/reconnect/PLAN header; README status == latest tag);
+  **P1** OSC 52 copy-to-phone, spike-gated opt-in (go-osc52 already indirect;
+  Moshi capture unproven); **P2** one owner-run device measurement session
+  (landscape, keyboard-open heights, light-theme contrast, density A/B) which
+  gates any height-driven stacking; **P3** cheap: MOSHI_CLIENT=1 recipe
+  decision, Tailscale recipe doc, one-line run_command non-undoability label
+  on the approval overlay (+1 test). DECLINED (unanimous): wish/embedded SSH
+  (reverses the research report's medium-term suggestion), further tool
+  breadth, multi-model eval matrix (watch-item until a 2nd supported model),
+  height stacking absent measured breakage, web terminal, native Win/macOS.
+
+**Commands + exit codes**
+- Pass 1 workflow `a8de5edf` — 3/3 lanes completed (exit 0). Lane status:
+  operator deepseek-v4-pro:high, skeptic gpt-5.6-sol:high ran as requested;
+  architect FELL BACK to gpt-5.6-terra:high (profile grok-4.6 not used) —
+  reported, not relaunched (lane completed with usable output).
+- Pass 2 workflow `d58f0a93` — architect + skeptic resumes completed (exit 0);
+  operator resume rejected at validation (exit ≠ 0) → fresh fallback
+  `a2bed1ad` completed (deepseek-v4-pro:high).
+- Hand-checks: rg/sed/wc/git-tag/ls over README.md, SECURITY.md,
+  docs/reconnect.md, PLAN.md, go.mod, styles.go, layout.go, AUDIT.md:71-77,
+  internal/ui/agent_*.go — all exit 0.
+- LEDGER append (this entry) via edit tool; then commit + PR per repo
+  protected-main workflow.
+
+**Decisions**
+- Conclave is advisory: no code or docs changed in this session beyond this
+  LEDGER entry.
+- P0 (doc truth + release gate) adopted as the next session's step, per owner
+  approval in-session.
+- Architect lane model fallback accepted rather than relaunched (skill rule:
+  never re-run healthy siblings; fallback reported in memo).
+
+**Blockers / open decisions**
+- Owner decisions open: compact-density taste call (after device A/B);
+  MOSHI_CLIENT=1 manual-profile-only vs alter-defaults; formally confirm the
+  wish decline; height-stacking only if P2 measurement shows breakage.
+- Unmeasured: Moshi OSC 52 capture, landscape geometry, keyboard-open resize
+  behavior, light-theme contrast parity.
+
+**Next action**
+- Fresh session: execute P0 — documentation truth sweep (README.md:13,
+  SECURITY.md:5-11, docs/reconnect.md:40, PLAN.md header status) + release-
+  gate assertion (README status line must equal the latest tag) with
+  `make check` green. Next task opens in a fresh session.
