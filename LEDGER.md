@@ -7286,3 +7286,41 @@ Codex re-review was clean ("Didn't find any major issues. Chef's kiss." on
 **Next action**
 - Nothing queued. Optional owner cleanup: delete `landing/audit-squad-c1-c2` on origin
   (or keep per convention). Next task opens in a fresh session.
+
+---
+
+## 2026-09-09 — branch clean-out: 31 remote + 7 local merged branches deleted
+
+**Work done**
+- Owner instruction: branch clean-out. Evidence-first: classified every branch against
+  `origin/main` — ALL 31 remote and ALL 7 local (non-main) branches fully merged; zero
+  unmerged branches anywhere (`--no-merged` empty on both sides). Cross-checks: no open
+  PRs, GitHub-side branch list == tracking refs (32 = main + 31, no drift), and the
+  five release tags (v0.1.0–v0.4.0) pin release points independently of branches.
+- Owner confirmed scope via questionnaire: all 31 remote + all 7 local.
+- Deleted local set with `git branch -d` (safe-delete refuses if unmerged — none
+  refused): docs/f07-stale-line-closeout, docs/ledger-audit-residue-closeout,
+  docs/v2e-design-gate, feat/v2e-batch-undo, fix/v2e-residual-hardening,
+  landing/audit-squad-c1-c2, release/v0.4.0.
+- Deleted the 31 remote branches in one `git push origin --delete` (list generated
+  programmatically from `git branch -r --merged origin/main`, excluding main/HEAD — no
+  hand-typed names), then `git fetch --prune`.
+- Final verified state: local `git branch -a` → `main` + `origin/main` only; GitHub API
+  branch list → `main` only. All deleted commits remain reachable via origin/main
+  history (every branch was an ancestor).
+
+**Commands + exit codes**
+- `git branch -d <7>` → all deleted (exit 0); `git push origin --delete <31>` → exit 0.
+- `git fetch --prune` → clean; `gh api …/branches` → `["main"]`.
+
+**Decisions**
+- Release branches (v0.2.0, v0.4.0) deleted too — owner-confirmed; tags pin the
+  releases. Landing branches deleted (also owner-confirmed; supersedes the older
+  "keep per convention" note — convention updated by owner decision).
+
+**Blockers / open decisions**
+- None.
+
+**Next action**
+- Nothing queued. main + one unpushed ledger docs commit (this entry) rides the next
+  PR. Next task opens in a fresh session.
