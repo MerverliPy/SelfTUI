@@ -603,7 +603,7 @@ green.*
 | 2 | **Markdown rendering** ✅ *decided* | Use `glamour` for GitHub-flavored markdown. |
 | 3 | **Agent tool breadth** | "Full coding agent" is large. v1 tool set is bounded by the read-only (M3a) then mutation (M3b) split. Confirm whether git-awareness/project-indexing/multi-file apply belong in v1 or later. |
 | 4 | **Coding model + dispatch** | *OD3 resolved:* default agent model = **`qwen3:8b`** (native tool PASS). Dual dispatch (native `tool_calls` + content-embedded tool-JSON) stays required for pick-any-model (`qwen2.5-coder` content-JSON; `gemma3` → 400 → explicit non-agent fallback). Agent loop must handle qwen3 `thinking` phase. |
-| 5 | **Remote host auth + job serialization** | Basic/bearer depends on what the remote exposes — verify the concrete setup. *Owner decision:* serialize Ollama jobs (no pull during agent) vs allow overlap on one GPU. |
+| 5 | **Remote host auth + job serialization** | Basic/bearer depends on what the remote exposes — verify the concrete setup. ✅ *decided 2026-09-09 (grill): serialize by default — mutual queue between any generation (plain chat / armed agent) and pulls; tags/show/delete exempt (cheap metadata); visible cancellable "queued" state. Implementation queued for v0.5 (post docs-truth II); shape recorded in the LEDGER 2026-09-09 grill entry.* |
 | 6 | **iPhone terminal width** | **Measure**, don't assume 88-col. Confirm actual cols/rows + key behavior + reconnect **per Moshi (owner's client; Blink/Termius/iSH similar)** during M0a, and drive breakpoint ranges from that measurement. *M0a update:* measurement instrument = `cmd/size-probe` (+ `make probe-local` harness); owner device run records into `$XDG_STATE_HOME/selftui/probe.txt`.
 | 7 | **Charm version set** | *Owner decision:* pick **v1 or v2 as one aligned set** (bubbletea/lipgloss/huh/bubbles/glamour) after a compile spike; never mix majors. |
 | 8 | **Concurrency + model structure** | *Owner decision:* activity channel (resubscribed `tea.Cmd`) vs `tea.Program.Send`; token coalescing + context cancel; nested per-view `tea.Models` vs god `Update`. Ordered events + nonblocking `Update` required; race/teardown tests. |
@@ -838,6 +838,24 @@ tag); release **SelfTUI v0.4.0** published with both archives + `SHA256SUMS` —
 independently downloaded, hashes OK, `selftui v0.4.0` stamp executed. Release
 notes extracted from the CHANGELOG section. Remaining backlog: F-11 (low,
 optional per AUDIT.md) and §11 risk #5 (Ollama job serialization decision).
+
+**Full-repo grill (2026-09-09, owner-approved 16-decision record):** the open
+questions were put to the owner as a structured questionnaire; all 16 decisions
+are recorded in the LEDGER 2026-09-09 grill entry. Highlights: **public
+visibility = after P1 + P2 land** (supersedes the open 2026-09-07 "owner's
+call" notes above by this pointer; history preserved; the GPG public-key
+upload rides with the flip); **§11 risk #5 decided** — serialize by default
+(mutual queue, metadata exempt, cancellable queued state; implementation
+queued for v0.5); **num_ctx re-baseline 4096 → 16384** decided (one live
+qwen3:8b @16K RAM check first; the §5 table row updates with the code
+change); **run_command undo gap accepted permanently** until a real incident;
+standing declines to be codified as a dated §1 non-goals table in the upcoming
+docs-truth II session (together with script-generated LEDGER-INDEX.md, the
+PLAN-header → README contract pointer, and the SECURITY.md gate check). Work
+order (binding one-step rule intact): **P1 spike → docs-truth II → num_ctx →
+serialization → P2 → v0.5 + public flip.** v0.5 cuts when serialization lands
+and contains P1's result + num_ctx + serialization + docs-truth II; P2
+outcomes land v0.5.x/v0.6; the public flip follows P2 independent of version.
 
 ## 12. Next-level TUI plan — performance · usability · visibility (PROPOSAL, planning-only, 2026-09-07)
 

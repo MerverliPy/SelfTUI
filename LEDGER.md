@@ -7542,3 +7542,81 @@ Codex re-review was clean ("Didn't find any major issues. Chef's kiss." on
   copy-to-phone as spike-gated opt-in; if it fails, record the negative result
   and close the item. Next task opens in a fresh session per the binding
   session rule.
+
+## 2026-09-09 — full-repo grill: 16-decision record (owner-approved)
+
+**Work done**
+- Owner-requested grill over the entire repo ("grill-with-docs"), grounded in
+  `AGENTS.md`, `PLAN.md` §1–§14, `COUNCIL-MEMO.md`, and the LEDGER tail; facts
+  verified live before asking (main `ce79dc2`, tag `v0.4.0`, `config.go:56`
+  num_ctx default still 4096, `go-osc52/v2 v2.0.1` still indirect, README
+  status v0.4.0, LEDGER 7,544 lines / 508 KB).
+- 16 decisions across 3 questionnaire rounds (identity/visibility, next-step
+  ordering, agent defaults, safety debts, standing declines, process/doc
+  architecture, design shapes, sequencing). Owner approved the consolidated
+  record in-session ("I approve").
+- `PLAN.md` status-level updates: §11 risk #5 marked decided; §12 gained the
+  grill paragraph (supersedes the open 2026-09-07 public-visibility notes by
+  pointer; history preserved).
+- This entry is the **pre-registration of the P1 exits** required before any
+  spike coding.
+
+**Commands + exit codes**
+- rg anchors + `git status --short` (clean at `ce79dc2`) → rc=0.
+- `make check` → rc=0 (docs-only change; canonical check run per
+  evidence-over-assertion).
+- `PLAN.md` edits via edit tool (2 targeted, non-overlapping edits); LEDGER
+  append via heredoc.
+- Branch `docs/grill-record` → commit → push → PR → required checks watched →
+  merge per protected-main workflow.
+
+**Decisions (the record — owner-approved 2026-09-09)**
+1. **Public visibility: public, but later** — trigger = P1 + P2 both landed;
+   GPG public-key upload rides with the flip. Supersedes the open 2026-09-07
+   notes (history preserved in PLAN).
+2. **Next step confirmed: P1 OSC 52 spike**, with both exits pre-registered
+   HERE before coding — spike passes → opt-in feature; fails → negative result
+   recorded, item closed, P2 promoted. No limbo state.
+3. P1 pass → opt-in surface: **config key default-OFF + Settings toggle**
+   (`tools_enabled` precedent).
+4. P1 pass → payload: palette action **"Copy last reply"** — full markdown of
+   the most recent assistant turn (code-block extraction deferred unless
+   needed).
+5. **num_ctx 4096 → 16384**: after one live check that qwen3:8b @16K fits host
+   RAM; meter tiers already scale; the PLAN §5 row updates with the code
+   change (its own step).
+6. **§11 risk #5 — serialize by default**: mutual queue between any generation
+   (plain chat or armed agent) and pulls; tags/show/delete exempt (cheap
+   metadata); visible "queued" state, cancellable while queued.
+7. **run_command undo gap**: accepted permanently until a real incident
+   (refusal hint + workspace `git` are the mitigation; pre-image capture of
+   sandboxed writes is a research project, not a feature).
+8. **Standing declines codified**: dated non-goals table in PLAN §1 —
+   wish/embedded SSH, web terminal, native Win/macOS, further tool breadth,
+   leader key, mouse capture — each citing its deciding entry; F-11 pinned
+   optional-low; multi-model matrix trigger pinned.
+9. **LEDGER growth**: `docs/LEDGER-INDEX.md`, script-generated from LEDGER
+   `##` headings (date → topic), regenerated each release, listed in the
+   release checklist.
+10. **Living contract home**: README's "Product contract" section; PLAN header
+    becomes a dated historical block + pointer; the release gate gains a
+    SECURITY.md supported-scope version-line check (same pattern as
+    `check-readme-status.sh`).
+11. **docs-truth II**: ONE clearly-scoped session lands #8 + #9 + #10
+    (non-goals table, index, pointer + gate).
+12. **Work order** (binding one-step-per-session rule intact): P1 spike →
+    docs-truth II → num_ctx 16384 → serialization lock → P2 device
+    measurement → v0.5 cut + public flip.
+13. **v0.5**: cut when serialization lands; contains P1's result + num_ctx +
+    serialization + docs-truth II. P2 measurement outcomes land v0.5.x/v0.6;
+    the public flip follows P2 independent of version.
+
+**Blockers / open decisions**
+- None new. P2 checklist remains as the conclave scoped it (landscape,
+  keyboard-open heights, light-theme contrast, density A/B) — reopened at P2
+  execution.
+
+**Next action**
+- Fresh session: execute **P1 — OSC 52 capture spike** under the
+  pre-registered exits in decision #2 (surface #3 and payload #4 apply only on
+  pass). Next task opens in a fresh session per the binding session rule.
