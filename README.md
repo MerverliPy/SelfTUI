@@ -263,8 +263,8 @@ Resolution order: **flags > env > config file > defaults**.
 | Source | Examples |
 |--------|----------|
 | Flags | `selftui -host http://192.168.1.50:11434 -theme light -default-model qwen3:8b -temperature 0.4 -top-p 0.95 -num-ctx 8192 -max-tool-iterations 20 -workspace-root ~/proj -system-prompt "…" -verbose -log-file /tmp/selftui.log` |
-| Env | `SELFTUI_HOST`, `SELFTUI_THEME`, `SELFTUI_DEFAULT_MODEL`, `SELFTUI_WORKSPACE_ROOT`, `SELFTUI_AUTH_TOKEN`, `SELFTUI_TOOLS_ENABLED`, `SELFTUI_AGENT_TEMPERATURE`, `SELFTUI_AGENT_TOP_P`, `SELFTUI_AGENT_NUM_CTX`, `SELFTUI_AGENT_SYSTEM_PROMPT`, `SELFTUI_AGENT_MAX_TOOL_ITERATIONS`, `SELFTUI_SESSION_DIR`, `SELFTUI_NO_SESSION` |
-| File | `~/.config/selftui/config.toml` (`host`, `theme`, `default_model`, `auth_token`, `workspace_root`, `tools_enabled`, `[agent]` table) |
+| Env | `SELFTUI_HOST`, `SELFTUI_THEME`, `SELFTUI_DEFAULT_MODEL`, `SELFTUI_WORKSPACE_ROOT`, `SELFTUI_AUTH_TOKEN`, `SELFTUI_TOOLS_ENABLED`, `SELFTUI_OSC52_COPY`, `SELFTUI_AGENT_TEMPERATURE`, `SELFTUI_AGENT_TOP_P`, `SELFTUI_AGENT_NUM_CTX`, `SELFTUI_AGENT_SYSTEM_PROMPT`, `SELFTUI_AGENT_MAX_TOOL_ITERATIONS`, `SELFTUI_SESSION_DIR`, `SELFTUI_NO_SESSION` |
+| File | `~/.config/selftui/config.toml` (`host`, `theme`, `default_model`, `auth_token`, `workspace_root`, `tools_enabled`, `osc52_copy`, `[agent]` table) |
 
 **Secrets (auth token):** set the token via `SELFTUI_AUTH_TOKEN` or put
 `auth_token` in the config file (written 0600, directory 0700) — the Settings →

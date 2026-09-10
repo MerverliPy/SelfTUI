@@ -6,10 +6,13 @@ package ui
 // own keys are handled by paletteKey and rendering by renderPaletteOverlay.
 
 import (
+	"fmt"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+
+	"github.com/MerverliPy/SelfTUI/internal/ollama"
 )
 
 // paletteItem is one command in the palette.
@@ -27,6 +30,7 @@ func paletteItemList() []paletteItem {
 		{"tab-settings", "Settings", "go to the Settings tab"},
 		{"model", "Change model", "open the Agent model picker"},
 		{"clear", "Clear conversation", "wipe the Agent transcript (asks first)"},
+		{"copy-last", "Copy last reply", "copy the latest agent reply via OSC 52 (enable in Settings)"},
 		{"undo", "Undo last change", "revert the agent's last file change (asks first)"},
 		{"redo", "Redo last undo", "reapply the last undone change (asks first)"},
 		{"theme", "Toggle theme", "switch dark ↔ light for this session"},
@@ -110,6 +114,19 @@ func (a *App) runPaletteItem(it paletteItem) (App, tea.Cmd) {
 		} else {
 			a.agent.clearConfirm = true
 		}
+	case "copy-last":
+		a.switchTab(1)
+		if !a.cfg.OSC52Copy {
+			a.agent.notice = "copy-to-phone is off — enable “Copy last reply (OSC 52)” in Settings"
+			return *a, nil
+		}
+		md, ok := lastAssistantMarkdown(a.agent.turns)
+		if !ok {
+			a.agent.notice = "no reply to copy yet"
+			return *a, nil
+		}
+		a.agent.notice = fmt.Sprintf("copied %d chars via OSC 52", len(md))
+		return *a, tea.SetClipboard(md)
 	case "undo":
 		a.switchTab(1)
 		a.agent, _ = a.agent.beginUndoConfirm(false)
@@ -136,6 +153,18 @@ func (a *App) runPaletteItem(it paletteItem) (App, tea.Cmd) {
 		a.agent.helpOpen = true
 	}
 	return *a, nil
+}
+
+// lastAssistantMarkdown returns the raw markdown of the most recent
+// assistant turn in the transcript — grill decision #4: full markdown, no
+// code-block extraction. ok is false when no assistant turn exists yet.
+func lastAssistantMarkdown(turns []turn) (string, bool) {
+	for i := len(turns) - 1; i >= 0; i-- {
+		if turns[i].msg.Role == ollama.RoleAssistant {
+			return turns[i].msg.Content, true
+		}
+	}
+	return "", false
 }
 
 // renderPaletteOverlay draws the centered command list over the body band.

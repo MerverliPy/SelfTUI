@@ -43,6 +43,7 @@ type settingsValues struct {
 	numCtx            string
 	maxToolIterations string
 	toolsEnabled      bool
+	osc52Copy         bool
 }
 
 type SettingsView struct {
@@ -128,6 +129,7 @@ func (s SettingsView) Begin() SettingsView {
 		numCtx:            strconv.Itoa(c.Agent.NumCtx),
 		maxToolIterations: strconv.Itoa(c.Agent.MaxToolIterations),
 		toolsEnabled:      c.ToolsEnabled,
+		osc52Copy:         c.OSC52Copy,
 	}
 	s.state = settingsEditing
 	s.errMsg = ""
@@ -327,12 +329,22 @@ func (s SettingsView) buildForm() *huh.Form {
 			Value(&v.toolsEnabled),
 	).Title("Agent").Description("Applied to the next agent run on save.")
 
+	groupClipboard := huh.NewGroup(
+		huh.NewConfirm().
+			Title("Copy last reply (OSC 52)").
+			Description("Let the palette action “Copy last reply” write the latest agent reply to the system clipboard via OSC 52 — how a phone SSH client (e.g. Moshi) can receive it. Defaults off; the terminal must support OSC 52 (verified per client with cmd/osc52-probe).").
+			Affirmative("Enable").
+			Negative("Disable").
+			Validate(s.policyValidatorBool("config: osc52_copy:")).
+			Value(&v.osc52Copy),
+	).Title("Clipboard")
+
 	km := huh.NewDefaultKeyMap()
 	// Esc discards instead of the default ctrl+c, which the root App keeps
 	// as quit-app. WithKeyMap also re-distributes field positions.
 	km.Quit = key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "discard"))
 
-	form := huh.NewForm(groupConnection, groupModelDefaults, groupTheme, groupAgent).
+	form := huh.NewForm(groupConnection, groupModelDefaults, groupTheme, groupAgent, groupClipboard).
 		WithKeyMap(km).
 		WithTheme(formTheme(v.theme != "light"))
 
@@ -482,6 +494,7 @@ func (s SettingsView) snapshot() config.Config {
 	}
 	c.Agent = a
 	c.ToolsEnabled = s.val.toolsEnabled
+	c.OSC52Copy = s.val.osc52Copy
 	return c
 }
 
@@ -491,7 +504,7 @@ func (s SettingsView) View() string {
 	switch s.state {
 	case settingsIdle:
 		return s.renderPanel("Settings", "press enter to edit", []string{
-			"host · auth token · model defaults · theme · agent",
+			"host · auth token · model defaults · theme · agent · clipboard",
 			"enter edit · ctrl+c quit",
 		})
 	case settingsEditing:

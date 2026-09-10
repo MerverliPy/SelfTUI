@@ -28,6 +28,7 @@ type fileConfig struct {
 	Theme         *string          `toml:"theme"`
 	WorkspaceRoot *string          `toml:"workspace_root"`
 	ToolsEnabled  *bool            `toml:"tools_enabled"`
+	OSC52Copy     *bool            `toml:"osc52_copy"`
 	Agent         *fileAgentConfig `toml:"agent"`
 }
 
@@ -137,6 +138,9 @@ func applyFile(c *Config, f fileConfig) {
 	if f.ToolsEnabled != nil {
 		c.ToolsEnabled = *f.ToolsEnabled
 	}
+	if f.OSC52Copy != nil {
+		c.OSC52Copy = *f.OSC52Copy
+	}
 	if f.Agent == nil {
 		return
 	}
@@ -179,6 +183,13 @@ func applyEnv(c *Config) error {
 			return fmt.Errorf("parse %sTOOLS_ENABLED=%q: %w", envPrefix, v, err)
 		}
 		c.ToolsEnabled = parsed
+	}
+	if v := os.Getenv(envPrefix + "OSC52_COPY"); v != "" {
+		parsed, err := strconv.ParseBool(v)
+		if err != nil {
+			return fmt.Errorf("parse %sOSC52_COPY=%q: %w", envPrefix, v, err)
+		}
+		c.OSC52Copy = parsed
 	}
 	if v := os.Getenv(envPrefix + "AGENT_TEMPERATURE"); v != "" {
 		parsed, err := strconv.ParseFloat(v, 64)
@@ -272,6 +283,7 @@ func Save(c Config) error {
 		Theme:         ptr(c.Theme),
 		WorkspaceRoot: ptr(c.WorkspaceRoot),
 		ToolsEnabled:  ptr(c.ToolsEnabled),
+		OSC52Copy:     ptr(c.OSC52Copy),
 		Agent: &fileAgentConfig{
 			Temperature:       &c.Agent.Temperature,
 			TopP:              &c.Agent.TopP,

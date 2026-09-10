@@ -193,8 +193,9 @@ func TestThemePreviewEmitsLiveThemeMsg(t *testing.T) {
 	}
 }
 
-// TestSettingsSubmitPersistsAndApplies walks the whole form (11 fields across
-// 4 groups — the Agent group gained the workspace-tools toggle) and submits
+// TestSettingsSubmitPersistsAndApplies walks the whole form (12 fields across
+// 5 groups — the Agent group gained the workspace-tools toggle, the Clipboard
+// group the OSC 52 confirm) and submits
 // unchanged values: the config file is written and the
 // saved panel shows (persist path of the M4 exit). Value-change/apply is
 // covered by TestSettingsApplyConfigLive.
@@ -207,7 +208,7 @@ func TestSettingsSaveErrorSurfacedAndRetry(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
 
 	m = openSettings(t, m)
-	keys := make([]tea.Msg, 11)
+	keys := make([]tea.Msg, 12)
 	for i := range keys {
 		keys[i] = tea.KeyPressMsg{Code: tea.KeyEnter}
 	}
@@ -233,7 +234,7 @@ func TestSettingsSaveErrorSurfacedAndRetry(t *testing.T) {
 	if !app.settings.Editing() {
 		t.Fatalf("enter on the error panel should reopen the editing form, got:\n%s", view(t, app))
 	}
-	keys = make([]tea.Msg, 11)
+	keys = make([]tea.Msg, 12)
 	for i := range keys {
 		keys[i] = tea.KeyPressMsg{Code: tea.KeyEnter}
 	}
@@ -248,7 +249,7 @@ func TestSettingsSubmitPersistsAndApplies(t *testing.T) {
 	path := cfg.ConfigPath()
 	m = openSettings(t, m)
 
-	keys := make([]tea.Msg, 11)
+	keys := make([]tea.Msg, 12)
 	for i := range keys {
 		keys[i] = tea.KeyPressMsg{Code: tea.KeyEnter}
 	}
@@ -347,9 +348,10 @@ func TestThemePreviewRollsBackOnSaveFailure(t *testing.T) {
 			app.curTheme, app.settings.val.theme)
 	}
 
-	// Submit the remaining fields (Theme select, then Agent group). The save
-	// to the read-only dir must fail and surface the error panel.
-	keys = make([]tea.Msg, 5)
+	// Submit the remaining fields (Theme select, Agent group, Clipboard
+	// group). The save to the read-only dir must fail and surface the error
+	// panel.
+	keys = make([]tea.Msg, 6)
 	for i := range keys {
 		keys[i] = tea.KeyPressMsg{Code: tea.KeyEnter}
 	}

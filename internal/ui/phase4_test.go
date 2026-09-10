@@ -161,9 +161,11 @@ func TestSettingsToolsToggleSaves(t *testing.T) {
 		t.Fatalf("tools toggle field missing:\n%s", got)
 	}
 
-	// 'y' accepts the confirm (sets true) and submits the form; the form's
-	// internal next-field/submit hops are re-fed like the runtime would.
-	app := drive(t, m, tea.KeyPressMsg{Text: "y"}).(App)
+	// 'y' accepts the confirm (sets true) and advances; the Clipboard group's
+	// OSC 52 confirm follows, declined with 'n' (copy-to-phone is opt-in and
+	// must stay off here). The form's internal next-field/submit hops are
+	// re-fed like the runtime would.
+	app := drive(t, m, tea.KeyPressMsg{Text: "y"}, tea.KeyPressMsg{Text: "n"}).(App)
 	if app.settings.state != settingsSaved {
 		t.Fatalf("state = %v, want saved after enabling tools\n%s", app.settings.state, view(t, app))
 	}
@@ -173,6 +175,9 @@ func TestSettingsToolsToggleSaves(t *testing.T) {
 	}
 	if !reloaded.ToolsEnabled || reloaded.WorkspaceRoot != ws {
 		t.Errorf("reloaded = %+v, want tools enabled + %q", reloaded, ws)
+	}
+	if reloaded.OSC52Copy {
+		t.Error("reloaded.OSC52Copy = true, want false (declined during the walk)")
 	}
 	if !app.agent.toolsEnabled {
 		t.Error("live Agent view did not switch to tools enabled after the save")

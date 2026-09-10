@@ -26,6 +26,14 @@ type Config struct {
 	// whole filesystem or the home directory).
 	ToolsEnabled bool
 
+	// OSC52Copy enables the copy-to-phone surface: the "Copy last reply"
+	// palette action writes the most recent assistant turn to the system
+	// clipboard via OSC 52. It defaults to false — the cmd/osc52-probe spike
+	// proved client-side capture (LEDGER 2026-09-09, grill decisions #2–#4),
+	// and this flag is the spike-gated opt-in: nothing is emitted until the
+	// user explicitly turns it on.
+	OSC52Copy bool
+
 	// Agent parameters.
 	Agent AgentConfig
 
