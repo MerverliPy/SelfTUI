@@ -18,6 +18,7 @@
   │  Settings  go to the Settings tab                                                                                │  
   │  Change model  open the Agent model picker                                                                       │  
   │  Clear conversation  wipe the Agent transcript (asks first)                                                      │  
+  │  Copy last reply  copy the latest agent reply via OSC 52 (enable in Settings)                                    │  
   │  Undo last change  revert the agent's last file change (asks first)                                              │  
   │  Redo last undo  reapply the last undone change (asks first)                                                     │  
   │  Toggle theme  switch dark ↔ light for this session                                                              │  
@@ -26,7 +27,6 @@
   │  Command list  open the slash-command reference                                                                  │  
   │type to filter · ↑/↓ or j/k move · enter run · esc close                                                          │  
   ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯  
-                                                                                                                        
                                                                                                                         
                                                                                                                         
                                                                                                                         

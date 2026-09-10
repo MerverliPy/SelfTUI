@@ -7662,3 +7662,72 @@ Codex re-review was clean ("Didn't find any major issues. Chef's kiss." on
 - Nothing required. `docs/agents/*.md` are editable in place; re-run the setup skill
   only to switch trackers or restart. P1 (OSC 52 spike) remains the next roadmap step
   in a fresh session, per the prior entry.
+
+## 2026-09-10 — P1 executed: OSC 52 spike PASS → copy-to-phone opt-in landed (option-2 sync first)
+
+**Work done**
+- Sync first (owner's option 2): the skills-setup commit `4460960` landed via
+  PR #44 (branch `docs/agent-skills-config`, checks watched, merge, ff main).
+- P1 spike (conclave item, grill decision #2): implemented
+  `cmd/osc52-probe` — emits `ESC]52;c;<base64>BEL` (`-st` variant), reads one
+  pasted line, prints PASS/FAIL/INCONCLUSIVE (exit 0/1/2), appends evidence to
+  `$XDG_STATE_HOME/selftui/osc52-probe.txt`; strips bracketed-paste markers +
+  trailing CR so capture never scores FAIL; prints TERM/SSH/tmux diagnostics
+  (tmux `set-clipboard` hint). 4 unit tests. Makefile targets
+  `osc52-probe`/`osc52-probe-build` (size-probe precedent). Landed via PR #45.
+- **Owner ran the probe from Moshi over SSH → VERDICT: PASS** (paste matched
+  payload). Per pre-registered exits, the same session implemented the
+  spike-gated opt-in — grill #3 (surface) + #4 (payload):
+  - config: `OSC52Copy bool` default-OFF; TOML `osc52_copy`; env
+    `SELFTUI_OSC52_COPY` (ParseBool); Save/Load round-trip.
+  - Settings: new Clipboard group — confirm "Copy last reply (OSC 52)".
+  - Palette: "Copy last reply" → walks `a.agent.turns` backwards for the most
+    recent assistant turn, emits its full markdown via bubbletea v2
+    `tea.SetClipboard` (OSC 52 through x/ansi); refuses with a Settings
+    pointer when OFF; "no reply to copy yet" on an empty transcript; status
+    notice reports copied char count.
+  - Tests: 4 config (`internal/config/osc52_test.go`) + 4 ui
+    (`internal/ui/palette_copy_test.go`); settings form drivers extended for
+    the new group (+1 field/enter, 12 across 5 groups); palette golden
+    fixtures (compact+wide) reconciled for the mandated new row.
+  - Docs: PLAN §5 `osc52_copy` row; README env/file key tables.
+
+**Commands + exit codes**
+- `gh pr checks 44 --watch` → pass; `gh pr merge 44 --merge` → rc=0; main ff
+  `4460960..da64a16`.
+- `make check` → rc=0 (three times: probe, feature, post-docs).
+- `go test -race -count=1 ./...` → all ok (probe + feature).
+- `go test ./internal/ui -run TestGoldenRender -update` → 2 fixtures
+  reconciled; diff verified to be exactly the new palette row.
+- `gh pr checks 45 --watch` → pass; `gh pr merge 45 --merge` → rc=0; main ff
+  to `6256af4`.
+- Probe evidence (owner device run): `$XDG_STATE_HOME/selftui/
+  osc52-probe.txt` — verdict=PASS from Moshi.
+
+**Decisions**
+1. Spike shape = standalone probe (cmd/osc52-probe), not an in-app action:
+   the gate is client-side capture; isolation keeps the measurement honest
+   and matches the cmd/size-probe instrument precedent.
+2. Feature emission uses bubbletea v2's `tea.SetClipboard` (x/ansi OSC 52),
+   not a hand-rolled sequence or go-osc52; go.mod untouched (dep stays
+   indirect).
+3. Payload = raw `msg.Content` (full markdown, no extraction) per grill #4.
+4. Config name `osc52_copy` (mechanism-precise, tools_enabled-style boolean
+   family) over `copy_to_phone`; Settings row title keeps the user-facing
+   "Copy last reply" wording.
+5. Palette action always visible, refuses when OFF (matches "clear" asking
+   first — discoverability over hiding).
+6. In-app emission path not re-verified on device this session (probe proved
+   client capture; tea.SetClipboard path exercised by unit test). If a device
+   check of the real action is wanted, it rides the next owner device session
+   (P2).
+
+**Blockers / open decisions**
+- None new. Work order resumes at docs-truth II (grill #11: non-goals table +
+  LEDGER-INDEX + README product-contract pointer + release-gate SECURITY
+  version check), then num_ctx 16384 → serialization → P2 → v0.5.
+
+**Next action**
+- Fresh session: execute **docs-truth II** (grill decisions #8 + #9 + #10 in
+  one clearly-scoped step). v0.5 cut still gated on serialization landing
+  (#13); public flip still gated on P1+P2 (#1 — P1 done, P2 pending).

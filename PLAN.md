@@ -163,6 +163,7 @@ Resolved in priority order: **flags > env vars > config file (`~/.config/selftui
 | `agent.max_tool_iterations` | `12` | upper bound on tool calls per run |
 | `agent.workspace_root` | cwd at launch | project root the agent operates on |
 | `tools_enabled` | `false` | **Phase 4 (workspace tool trust):** arms the jailed workspace tools. Off = plain chat (the Ollama request carries no tools). Enabling requires `workspace_root` to be a real project directory — empty, `/` or the user's home directory is rejected. Sources: config file, `SELFTUI_TOOLS_ENABLED` (strconv.ParseBool), Settings → Agent → *Enable workspace tools*. |
+| `osc52_copy` | `false` | **Copy-to-phone (P1, spike-gated opt-in — grill #3/#4, LEDGER 2026-09-09):** lets the palette action *Copy last reply* write the most recent assistant turn to the system clipboard via OSC 52 (how a phone SSH client receives it; client support verified per terminal with `cmd/osc52-probe`). Sources: config file, `SELFTUI_OSC52_COPY` (strconv.ParseBool), Settings → Clipboard → *Copy last reply (OSC 52)*. |
 
 ### Ollama client (`internal/ollama`)
 Thin typed wrapper over the REST API:
