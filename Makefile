@@ -7,6 +7,7 @@ BIN     := bin/selftui
 VERSION ?= dev
 
 .PHONY: build test race vuln lint vet fmt run check clean probe probe-build probe-raw probe-local \
+	osc52-probe osc52-probe-build \
 	release-check build-linux-amd64 build-linux-arm64 smoke smoke-model smoke-reconnect audit-pack \
 	secret-scan actionlint gitleaks
 
@@ -55,6 +56,12 @@ probe-raw: probe-build ## size probe as CSV lines (harness/script friendly)
 probe-local: probe-build ## local pty-based measurement at several sizes + mid-run resize
 	bash scripts/probe-local.sh
 
+osc52-probe-build: ## compile the OSC 52 capture probe (P1 spike)
+	$(GO) build -o bin/osc52-probe ./cmd/osc52-probe
+
+osc52-probe: osc52-probe-build ## interactive OSC 52 clipboard capture spike: emit, paste, verdict
+	./bin/osc52-probe
+
 check: build test lint ## canonical pre-commit gate
 
 # --- supply-chain security (P0) ---
@@ -95,4 +102,4 @@ audit-pack: ## manifest-complete deterministic source snapshot for external audi
 	scripts/create-audit-pack.sh
 
 clean:
-	rm -rf $(BIN) bin/size-probe dist
+	rm -rf $(BIN) bin/size-probe bin/osc52-probe dist
