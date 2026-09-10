@@ -7620,3 +7620,45 @@ Codex re-review was clean ("Didn't find any major issues. Chef's kiss." on
 - Fresh session: execute **P1 — OSC 52 capture spike** under the
   pre-registered exits in decision #2 (surface #3 and payload #4 apply only on
   pass). Next task opens in a fresh session per the binding session rule.
+
+## 2026-09-09 — skills setup: agent-skills config scaffolded (owner-invoked setup-matt-pocock-skills)
+
+**Work done**
+- Ran the `setup-matt-pocock-skills` skill end-to-end (explore → ask → confirm → write).
+- Explored: GitHub remote (MerverliPy/SelfTUI), AGENTS.md present (no Agent skills
+  section), no CLAUDE.md/CONTEXT.md/CONTEXT-MAP.md/docs/adr/docs/agents/.scratch,
+  no monorepo signals (Go repo, single-context), `triage` skill installed.
+- Owner chose: **GitHub Issues** as the issue tracker; **default triage labels**
+  (needs-triage, needs-info, ready-for-agent, ready-for-human, wontfix); domain docs
+  settled at **single-context** by exploration (no question needed).
+- Appended `## Agent skills` block to `AGENTS.md` (after "Where the truth lives";
+  no existing sections touched).
+- Created `docs/agents/issue-tracker.md` (stock GitHub template; PRs-as-request-surface: no),
+  `docs/agents/triage-labels.md` (stock defaults mapping), `docs/agents/domain.md`
+  (stock consumer rules, verbatim via cp from the skill folder).
+- Appended this handoff entry.
+
+**Commands + exit codes**
+- `git remote -v` / exploration batch (ctx_batch_execute, 2 sub-commands hit a
+  ctx-mode shell wrapper quirk; re-run directly) → rc=0.
+- edit tool: 1 targeted edit to AGENTS.md → success.
+- `cp` × 3 skill templates into `docs/agents/` → rc=0.
+- `git status --short` before commit: ` M AGENTS.md`, `?? docs/agents/` (clean
+  otherwise at `ad62152`).
+
+**Decisions**
+1. Issue tracker = GitHub Issues via `gh` CLI (matches existing remote; recommended default accepted).
+2. Triage labels = the five canonical defaults, no overrides.
+3. Domain docs = single-context (`CONTEXT.md` + `docs/adr/` at root, created lazily by
+   `/domain-modeling` — nothing scaffolded beyond the consumer-rules doc).
+4. Edited `AGENTS.md` (not CLAUDE.md) per the skill's selection rule.
+
+**Blockers / open decisions**
+- None. Skills that consume these files: `triage` (labels + tracker, installed);
+  `to-tickets` / `to-spec` / wayfinder will read `issue-tracker.md` when used;
+  codebase-exploration skills read `domain.md` before exploring.
+
+**Next action**
+- Nothing required. `docs/agents/*.md` are editable in place; re-run the setup skill
+  only to switch trackers or restart. P1 (OSC 52 spike) remains the next roadmap step
+  in a fresh session, per the prior entry.

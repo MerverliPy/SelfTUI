@@ -38,3 +38,21 @@ M3a, M3b, M4, M5, M6) **or** one clearly-scoped task the owner assigns in a mess
 - `PLAN.md` — future: architecture, roadmap (§10), risks/owner decisions (§11).
 - `LEDGER.md` — past: chronological handoff log per session.
 - `COUNCIL-MEMO.md` — the advisory verdict that re-cut the roadmap.
+
+## Agent skills
+
+### Issue tracker
+
+Issues live in this repo's GitHub Issues (github.com/MerverliPy/SelfTUI), used via the
+`gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five canonical triage roles use their default label strings: `needs-triage`,
+`needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See
+`docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context layout: one `CONTEXT.md` at the repo root plus `docs/adr/`. See
+`docs/agents/domain.md`.
